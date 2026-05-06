@@ -13,7 +13,7 @@ from typing import Dict, List, Optional
 
 import requests
 from flask import Blueprint, jsonify, request
-from flask_caching import Cache
+# from flask_caching import Cache  # Temporarily disabled to fix circular import
 
 try:
     import certifi
@@ -27,7 +27,7 @@ from ..realtime.scheduler import is_popup_simulation_active
 logger = logging.getLogger(__name__)
 
 question_bp = Blueprint("questions", __name__, url_prefix="/api/questions")
-cache = Cache(config={"CACHE_TYPE": "simple"})
+# cache = Cache(config={"CACHE_TYPE": "simple"})  # Temporarily disabled
 
 # Paths and API config ------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parents[2]
@@ -167,15 +167,53 @@ def _local_fallback_questions(count: int = 7) -> List[Dict]:
             "solution_images": [],
             "metadata": {"fallback": True},
         },
+        {
+            "question_id": "fallback-6",
+            "question_type": "integer",
+            "subject": "Physics",
+            "chapter": "Rotational Mechanics",
+            "difficulty": "Hard",
+            "level": "HARD",
+            "question_html": "<p>A solid sphere rolls down an incline of height h without slipping. What is the ratio of its translational kinetic energy to total kinetic energy? (Answer as integer * 7)</p>",
+            "question_images": [],
+            "integer_answer": 5,
+            "solution_html": "<p>Ratio is 5/7. 5/7 * 7 = 5.</p>",
+            "solution_images": [],
+            "metadata": {"fallback": True},
+        },
+        {
+            "question_id": "fallback-7",
+            "question_type": "scq",
+            "subject": "Chemistry",
+            "chapter": "Thermodynamics",
+            "difficulty": "Hard",
+            "level": "HARD",
+            "question_html": "<p>Which of the following is true for an adiabatic free expansion of an ideal gas?</p>",
+            "question_images": [],
+            "options": [
+                {"label": "A", "text": "Q = W = deltaU = 0"},
+                {"label": "B", "text": "Q > 0, W < 0"},
+                {"label": "C", "text": "deltaT < 0"},
+                {"label": "D", "text": "deltaS = 0"},
+            ],
+            "correct_answer": "A",
+            "solution_html": "<p>For adiabatic free expansion, Q=0, W=0, so deltaU=0.</p>",
+            "solution_images": [],
+            "metadata": {"fallback": True},
+        },
     ]
 
-    if count <= len(bank):
-        picked = bank[:count]
-    else:
-        picked = []
+    # Pick 2 hard and 5 easy/medium
+    hard_pool = [q for q in bank if q["difficulty"].lower() == "hard"]
+    easy_pool = [q for q in bank if q["difficulty"].lower() != "hard"]
+    
+    selected_hard = hard_pool[:min(2, len(hard_pool))]
+    selected_easy = easy_pool[:min(5, len(easy_pool))]
+    picked = selected_hard + selected_easy
+    
+    if len(picked) < count:
         while len(picked) < count:
-            picked.extend(bank)
-        picked = picked[:count]
+            picked.append(random.choice(easy_pool))
 
     out: List[Dict] = []
     for idx, q in enumerate(picked):
@@ -187,14 +225,29 @@ def _local_fallback_questions(count: int = 7) -> List[Dict]:
 
 # CSV loader ---------------------------------------------------------------
 class QuestionIDLoader:
-    """Manages loading and random selection of question IDs from CSV."""
+    """Manages loading and selection of question IDs from CSV."""
 
     def __init__(self, csv_path: str):
         self.csv_path = csv_path
+        self.enriched_csv_path = csv_path.replace(".csv", "_enriched.csv")
         self.question_ids: list[str] = []
+        self.enriched_data: list[dict] = []
         self.load_ids()
 
     def load_ids(self) -> None:
+        # Load enriched data if available
+        if os.path.exists(self.enriched_csv_path):
+            try:
+                with open(self.enriched_csv_path, "r", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    self.enriched_data = list(reader)
+                self.question_ids = [r["question_id"] for r in self.enriched_data if r.get("question_id")]
+                logger.info("Loaded %s enriched question IDs from %s", len(self.question_ids), self.enriched_csv_path)
+                return
+            except Exception as exc:
+                logger.error("Error loading enriched CSV %s: %s", self.enriched_csv_path, exc)
+
+        # Fallback to normal CSV
         try:
             with open(self.csv_path, "r", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
@@ -219,9 +272,72 @@ class QuestionIDLoader:
             return list(self.question_ids)
         return random.sample(self.question_ids, count)
 
+    def get_test_ids(self, subject: str = None, topics: list = None) -> List[str]:
+        """Get 7 unique test IDs filtered by subject/topics with graceful fallback.
+        
+        Priority: topic-matching → same-subject fill → all questions fill.
+        Aims for 2 hard + 5 easy/medium but adapts when pools are small.
+        """
+        TARGET = 7
+        if not self.enriched_data:
+            return self.get_random_ids(TARGET)
+
+        # ---- Build pools ----
+        subject_pool = self.enriched_data  # all questions
+        topic_pool: list[dict] = []
+
+        if subject:
+            subject_pool = [
+                q for q in self.enriched_data
+                if (q.get("subject") or "").lower() == subject.lower()
+            ]
+
+        if topics and subject_pool:
+            topic_lower = [t.lower() for t in topics]
+            for q in subject_pool:
+                q_topics: set[str] = set()
+                if q.get("chapter"):
+                    q_topics.add(q["chapter"].lower())
+                if q.get("concepts"):
+                    q_topics.update(c.lower() for c in q["concepts"].split("|"))
+                if q.get("sub_concepts"):
+                    q_topics.update(c.lower() for c in q["sub_concepts"].split("|"))
+                if any(t in q_topics for t in topic_lower):
+                    topic_pool.append(q)
+
+        # ---- Select with dedup ----
+        selected: list[dict] = []
+        seen_ids: set[str] = set()
+
+        def _add(items: list[dict], count: int) -> None:
+            """Add up to `count` unique items from `items` into selected."""
+            available = [q for q in items if q["question_id"] not in seen_ids]
+            pick = random.sample(available, min(count, len(available)))
+            for q in pick:
+                selected.append(q)
+                seen_ids.add(q["question_id"])
+
+        # Step 1: grab all topic-matching questions (up to TARGET)
+        if topic_pool:
+            _add(topic_pool, TARGET)
+            logger.info("Topic pool gave %d questions", len(selected))
+
+        # Step 2: fill remaining from subject pool
+        if len(selected) < TARGET and subject_pool:
+            _add(subject_pool, TARGET - len(selected))
+            logger.info("Subject pool filled to %d questions", len(selected))
+
+        # Step 3: fill from everything if still short
+        if len(selected) < TARGET:
+            _add(self.enriched_data, TARGET - len(selected))
+            logger.info("Global pool filled to %d questions", len(selected))
+
+        # Shuffle and return IDs
+        random.shuffle(selected)
+        return [q["question_id"] for q in selected]
+
     def get_all_ids(self) -> List[str]:
         return self.question_ids
-
 
 question_loader = QuestionIDLoader(QUESTIONS_CSV_PATH)
 
@@ -253,8 +369,16 @@ class AcadzaQuestionFetcher:
             )
 
             if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, dict) and data.get("status") == "error":
+                    logger.warning("Acadza API error for %s: %s", question_id, data.get("message"))
+                    return None
+                if isinstance(data, dict) and data.get("message") == "Auth failed":
+                    logger.warning("Acadza API Auth failed for %s", question_id)
+                    return None
+                
                 logger.info("Fetched question: %s", question_id)
-                return response.json()
+                return data
 
             logger.warning("API returned %s for %s body=%s", response.status_code, question_id, response.text)
             return None
@@ -274,13 +398,11 @@ class AcadzaQuestionFetcher:
         if not question_ids:
             return questions
 
-        max_workers = min(6, len(question_ids))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_qid = {executor.submit(self.fetch_question, qid): qid for qid in question_ids}
-            for future in as_completed(future_to_qid):
-                data = future.result()
-                if data:
-                    questions.append(data)
+        for qid in question_ids:
+            data = self.fetch_question(qid)
+            if data:
+                questions.append(data)
+                
         logger.info("Fetched %s/%s questions", len(questions), len(question_ids))
         return questions
 
@@ -304,8 +426,8 @@ class QuestionFormatter:
     @staticmethod
     def _format_scq(raw_data: Dict, idx: int) -> Dict:
         scq_data = raw_data.get("scq", {})
-        question_html = scq_data.get("question", "<p>Question not available</p>")
-        options = QuestionFormatter._extract_options_from_html(question_html)
+        full_html = scq_data.get("question", "<p>Question not available</p>")
+        stem_html, options = QuestionFormatter._split_question_and_options(full_html)
         return {
             "question_id": raw_data.get("_id", "unknown"),
             "question_index": idx + 1,
@@ -314,7 +436,9 @@ class QuestionFormatter:
             "chapter": raw_data.get("chapter", "Unknown"),
             "difficulty": raw_data.get("difficulty", "Medium"),
             "level": raw_data.get("level", "MEDIUM"),
-            "question_html": question_html,
+            # Return stem-only HTML. Options are supplied separately in "options".
+            # Sending full_html here causes duplicate option rendering in clients.
+            "question_html": stem_html,
             "question_images": scq_data.get("quesImages", []),
             "options": options,
             "correct_answer": scq_data.get("answer", "A"),
@@ -383,15 +507,43 @@ class QuestionFormatter:
         }
 
     @staticmethod
-    def _extract_options_from_html(html: str) -> List[Dict]:
+    def _split_question_and_options(html: str):
+        """Split Acadza SCQ HTML into question stem and option list.
+
+        Acadza packs the stem and all four options into one HTML blob, e.g.:
+          <h3>Question text...</h3><h3>(A) ... (B) ... (C) ... (D) ...</h3>
+
+        Returns (stem_html, options) where each option keeps its raw HTML
+        (MathML, images, etc.) so the frontend can render it properly.
+        """
         import re
 
+        if not html:
+            return "<p>Question not available</p>", []
+
+        # Find the first (A) marker — everything before it is the stem.
+        first_a = re.search(r"\(A\)", html)
+        if not first_a:
+            # No options embedded — return full HTML as stem
+            return html, [
+                {"label": "A", "text": "Option A"},
+                {"label": "B", "text": "Option B"},
+                {"label": "C", "text": "Option C"},
+                {"label": "D", "text": "Option D"},
+            ]
+
+        stem = html[: first_a.start()].strip()
+        options_part = html[first_a.start() :]
+
+        # Split at (A), (B), (C), (D) markers — keep full HTML in each chunk.
+        pattern = r"\(([A-D])\)\s*(.*?)(?=\([A-D]\)|$)"
+        matches = re.findall(pattern, options_part, re.DOTALL)
+
         options: list[dict] = []
-        pattern = r"\(([A-D])\)\s*(.+?)(?=\(|$)"
-        matches = re.findall(pattern, html or "", re.DOTALL)
         for label, content in matches:
-            clean = re.sub(r"<[^>]+>", "", content).strip()
-            options.append({"label": label, "text": clean[:200]})
+            text = content.strip()
+            if text:
+                options.append({"label": label, "text": text})
 
         if len(options) < 4:
             options = [
@@ -400,7 +552,12 @@ class QuestionFormatter:
                 {"label": "C", "text": "Option C"},
                 {"label": "D", "text": "Option D"},
             ]
-        return options
+
+        # Clean up dangling closing tags in the stem (e.g. unclosed <h3>)
+        if stem and not stem.rstrip().endswith(">"):
+            stem += "</h3>"
+
+        return stem, options
 
     @staticmethod
     def _extract_subconcepts(raw_data: Dict) -> List[str]:
@@ -412,10 +569,18 @@ class QuestionFormatter:
 
 
 # Routes -------------------------------------------------------------------
-@question_bp.route("/load-test-questions", methods=["GET"])
+@question_bp.route("/load-test-questions", methods=["GET", "POST"])
 def load_test_questions():
     # Do not cache this route: fallback responses should not persist across retries.
-    question_ids = question_loader.get_random_ids(count=20)
+    subject = None
+    topics = []
+    
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        subject = data.get("subject")
+        topics = data.get("topics") or []
+
+    question_ids = question_loader.get_test_ids(subject=subject, topics=topics)
     if not question_ids:
         fallback = _local_fallback_questions(count=7)
         return jsonify(
@@ -456,7 +621,7 @@ def load_test_questions():
 
 
 @question_bp.route("/get-question/<question_id>", methods=["GET"])
-@cache.cached(timeout=CACHE_TIMEOUT, query_string=True)
+# @cache.cached(timeout=CACHE_TIMEOUT, query_string=True)  # Temporarily disabled
 def get_single_question(question_id: str):
     raw_question = acadza_fetcher.fetch_question(question_id)
     if not raw_question:
@@ -539,7 +704,7 @@ def mutate(question_id: str):
 
 # Integration --------------------------------------------------------------
 def init_question_service(app) -> None:
-    cache.init_app(app)
+    # cache.init_app(app)  # Temporarily disabled to fix import issues
     app.register_blueprint(question_bp)
     logger.info("Question service initialized")
 

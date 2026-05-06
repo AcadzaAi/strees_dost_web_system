@@ -9,22 +9,24 @@
 <body>
   <div class="app-shell">
     <header class="top-bar">
-      <div>
-        <p class="eyebrow">Stress Dost</p>
-        <h1>Neon Calm Studio</h1>
-        <p class="sub">Share your story, watch the interface breathe with you.</p>
+      <button class="back-btn" type="button" aria-label="Back">‹</button>
+      <div class="app-brand">
+        <div class="brand-mark" aria-hidden="true">☯</div>
+        <div>
+          <h1>FOCUS DOST <span>(v1.0)</span></h1>
+        </div>
       </div>
-      <button id="hudToggle" class="icon-btn" title="Show control room">
-        <span></span><span></span><span></span>
-      </button>
+      <button id="hudToggle" class="live-pill" title="Show control room" type="button"><span></span>Live</button>
     </header>
 
     <main class="viewport">
       <section class="stage active" id="stageName">
-        <div class="glass intro-card">
-          <h2>Welcome to Stress Dost. Before we begin, what should I call you?</h2>
-          <p>This helps us personalize your experience.</p>
-          <input id="userName" type="text" placeholder="Type your name here..." />
+        <div class="glass intro-card name-card">
+          <p class="eyebrow">Get started</p>
+          <h2>What should we call you?</h2>
+          <p>Enter your name to personalize the session.</p>
+          <label for="userName" class="label">Name</label>
+          <input id="userName" type="text" placeholder="Enter your name" />
           <div class="row" id="nameStepRow">
             <button id="btnNameNext" class="btn primary" type="button">Continue</button>
           </div>
@@ -34,113 +36,297 @@
       </section>
 
       <section class="stage" id="stageIntro">
-        <div class="glass intro-card">
-          <h2 id="storyPrompt">What's on your mind today?</h2>
-          <label for="initialText" class="label">What's on your mind today?</label>
-          <textarea id="initialText" rows="7" placeholder="Exams, friends, distractions, parental pressure, anything..."></textarea>
-          <div class="row">
-            <button id="btnRecord" class="btn ghost" type="button">Record Voice</button>
+        <div class="intro-card story-card focus-screen">
+          <div class="focus-shell" id="focusShell">
+            <div class="focus-hero-card">
+              <div class="story-card-head">
+                <h2 id="storyPrompt">Hey there! 👋</h2>
+                <p>Let's find your focus</p>
+              </div>
+              <div class="focus-divider"></div>
+              <h3>What's pulling you away?</h3>
+              <p class="focus-copy">Tell me what's breaking your focus today. Phone, noise, thoughts, tiredness — name it, and we'll train around it.</p>
+            </div>
+
+            <div class="focus-content">
+              <div class="focus-composer">
+                <div class="focus-input">
+                  <textarea id="initialText" rows="4" placeholder="Phone, noise, sleepy, wandering thoughts..."></textarea>
+                  <button id="btnRecord" class="mic-btn" type="button" aria-label="Record voice">🎙</button>
+                </div>
+                <div class="story-actions">
+                  <button id="btnStart" class="btn primary" type="button">Start Focus Session</button>
+                </div>
+                <div class="stage-hint" id="introHint"></div>
+              </div>
+
+              <aside class="suggestion-wrap" id="suggestionWrap" hidden>
+                <div class="suggestion-label">Suggestions</div>
+                <div class="suggestion-list" id="suggestionList"></div>
+              </aside>
+            </div>
           </div>
-          <div class="suggestion-wrap" id="suggestionWrap" hidden>
-            <div class="suggestion-label">Suggestions</div>
-            <div class="suggestion-list" id="suggestionList"></div>
-          </div>
-          <button id="btnStart" class="btn primary">Launch Session</button>
-          <div class="stage-hint" id="introHint"></div>
         </div>
       </section>
 
       <section class="stage" id="stageLoading">
-        <div class="loader-card">
-          <div class="gear gear-main"></div>
-          <div class="gear gear-shadow"></div>
-          <p id="loadingText">Calibrating vibes…</p>
+        <div class="loading-screen">
+          <div class="loading-header">
+            <div class="loading-brand">
+              <span class="loading-dot" aria-hidden="true"></span>
+              <span>FOCUS DOST</span>
+            </div>
+            <div class="loading-phase" id="loadingPhase">READING</div>
+          </div>
+
+          <div class="loading-copy">
+            <h2 id="loadingTitle">Reading what you shared</h2>
+            <p id="loadingSubtitle">Picking up every signal</p>
+          </div>
+
+          <div class="neural-field" aria-hidden="true">
+            <svg class="neural-web" viewBox="0 0 620 260" role="presentation">
+              <defs>
+                <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+                  <feGaussianBlur stdDeviation="2" result="blur" />
+                  <feMerge>
+                    <feMergeNode in="blur" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+              </defs>
+              <g class="neural-lines" fill="none" stroke-width="1">
+                <path id="path-a" d="M110 50 L230 96 L350 38 L470 118" />
+                <path id="path-b" d="M110 100 L230 32 L350 182 L470 68" />
+                <path id="path-c" d="M110 150 L230 228 L350 110 L470 208" />
+                <path id="path-d" d="M110 200 L230 172 L350 236 L470 160" />
+                <path id="path-e" d="M110 50 L230 172 L350 110 L470 208" />
+                <path id="path-f" d="M110 200 L230 32 L350 182 L470 68" />
+                <path id="path-g" d="M110 100 L230 228 L350 38 L470 160" />
+                <path id="path-h" d="M110 150 L230 96 L350 236 L470 118" />
+                <path id="path-i" d="M110 50 L230 32 L350 110 L470 160" />
+                <path id="path-j" d="M110 200 L230 96 L350 182 L470 118" />
+                <path id="path-p1" d="M110 50 L230 96 L350 38 L470 118" />
+                <path id="path-p2" d="M110 100 L230 32 L350 182 L470 68" />
+                <path id="path-p3" d="M110 150 L230 228 L350 110 L470 208" />
+                <path id="path-p4" d="M110 200 L230 172 L350 236 L470 160" />
+                <path id="path-p5" d="M110 50 L230 172 L350 110 L470 208" />
+              </g>
+              <g class="neural-nodes" filter="url(#glow)">
+                <circle cx="110" cy="50" r="3" />
+                <circle cx="110" cy="100" r="3" />
+                <circle cx="110" cy="150" r="3" />
+                <circle cx="110" cy="200" r="3" />
+                <circle cx="230" cy="32" r="3" />
+                <circle cx="230" cy="96" r="3" />
+                <circle cx="230" cy="172" r="3" />
+                <circle cx="230" cy="228" r="3" />
+                <circle cx="350" cy="38" r="3" />
+                <circle cx="350" cy="110" r="3" />
+                <circle cx="350" cy="182" r="3" />
+                <circle cx="350" cy="236" r="3" />
+                <circle cx="470" cy="68" r="3" />
+                <circle cx="470" cy="118" r="3" />
+                <circle cx="470" cy="160" r="3" />
+                <circle cx="470" cy="208" r="3" />
+              </g>
+              <g class="neural-particles" filter="url(#glow)">
+                <circle r="3.6">
+                  <animateMotion dur="4.4s" repeatCount="indefinite" rotate="auto" begin="0s">
+                    <mpath href="#path-p1" />
+                  </animateMotion>
+                </circle>
+                <circle r="3.2">
+                  <animateMotion dur="4s" repeatCount="indefinite" rotate="auto" begin="0.6s">
+                    <mpath href="#path-p2" />
+                  </animateMotion>
+                </circle>
+                <circle r="3.4">
+                  <animateMotion dur="3.6s" repeatCount="indefinite" rotate="auto" begin="1.2s">
+                    <mpath href="#path-p3" />
+                  </animateMotion>
+                </circle>
+                <circle r="3">
+                  <animateMotion dur="3.8s" repeatCount="indefinite" rotate="auto" begin="1.8s">
+                    <mpath href="#path-p4" />
+                  </animateMotion>
+                </circle>
+                <circle r="3.2">
+                  <animateMotion dur="4.2s" repeatCount="indefinite" rotate="auto" begin="2.4s">
+                    <mpath href="#path-p5" />
+                  </animateMotion>
+                </circle>
+              </g>
+            </svg>
+          </div>
+
+          <div class="loading-echo" id="loadingEcho">You said: <span>...</span></div>
+
+          <div class="loading-progress" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <p class="loading-note" id="loadingNote">This takes a moment - your plan is being crafted</p>
         </div>
       </section>
 
       <section class="stage" id="stageQA">
-        <div class="glass qa-card">
-          <div class="qa-meta" id="qMeta">domain: — | slot: —</div>
-          <div class="qa-question" id="questionText">Your next question will bloom here.</div>
-          <div class="stage-hint" id="hintBox"></div>
-          <label for="answerInput" class="label">Your answer</label>
-          <textarea id="answerInput" rows="4" placeholder="Type a quick, honest answer..."></textarea>
-          <div class="row">
-            <button id="btnAnswer" class="btn primary" disabled>Submit Answer</button>
-            <button id="btnSkip" class="btn ghost" hidden>Skip Remaining</button>
+        <div class="qa-shell">
+          <div class="qa-topbar">
+            <button class="qa-back" type="button" aria-label="Back">←</button>
+            <div class="qa-title">Understanding You</div>
+            <div class="qa-count" id="qaCount">1/1</div>
+          </div>
+          <div class="qa-progress"><span></span></div>
+
+          <div class="qa-card">
+            <div class="qa-meta" id="qMeta">domain: — | slot: —</div>
+            <div class="qa-question" id="questionText">Your next question will bloom here.</div>
+            <div class="stage-hint" id="hintBox"></div>
+            <label for="answerInput" class="label">Your answer</label>
+            <textarea id="answerInput" rows="4" placeholder="Type a quick, honest answer..."></textarea>
+            <div class="qa-help">
+              <span class="qa-help-icon">💡</span>
+              <span>Be honest - there's no right or wrong answer. This helps us understand you better.</span>
+            </div>
+            <div class="row">
+              <button id="btnAnswer" class="btn primary" disabled>Submit Answer</button>
+              <button id="btnSkip" class="btn ghost" hidden>Skip Remaining</button>
+            </div>
           </div>
         </div>
       </section>
 
+      <section class="stage" id="stageSubjectSelection">
+        <div class="glass intro-card subject-card">
+          <p class="eyebrow">Choose Subject</p>
+          <h2>Which subject would you like to practice?</h2>
+          <p>Select the subject you want to focus on for this session.</p>
+          
+          <div class="subject-options" id="subjectOptions">
+            <label class="subject-option">
+              <input type="radio" name="subject" value="Physics" />
+              <span class="subject-radio"></span>
+              <span class="subject-name">Physics</span>
+            </label>
+            <label class="subject-option">
+              <input type="radio" name="subject" value="Chemistry" />
+              <span class="subject-radio"></span>
+              <span class="subject-name">Chemistry</span>
+            </label>
+            <label class="subject-option">
+              <input type="radio" name="subject" value="Mathematics" />
+              <span class="subject-radio"></span>
+              <span class="subject-name">Mathematics</span>
+            </label>
+          </div>
+
+          <div class="subject-actions">
+            <button id="btnSubjectNext" class="btn primary" type="button" disabled>Continue</button>
+            <button id="btnSaveQuestionSubject" class="btn save-btn" type="button" aria-label="Save subject">🔖</button>
+          </div>
+
+          <div class="stage-hint" id="subjectHint"></div>
+        </div>
+      </section>
+
+      <section class="stage" id="stageTopicSelection">
+        <div class="glass intro-card topic-card">
+          <p class="eyebrow">Choose Chapters</p>
+          <h2>Select chapters or concepts</h2>
+          <p>Choose chapters, concepts, or sub-concepts from your selected subject.</p>
+          
+          <div class="topic-options" id="topicOptions">
+            <div class="topic-loading">Loading available topics...</div>
+          </div>
+
+          <div class="row">
+            <button id="btnTopicBack" class="btn ghost" type="button">Back</button>
+            <button id="btnTopicNext" class="btn primary" type="button" disabled>Start Practice</button>
+          </div>
+
+          <div class="stage-hint" id="topicHint"></div>
+        </div>
+      </section>
+
       <section class="stage" id="stageDevil">
-        <div class="glass devil-brief-card">
-          <div class="devil-hero">
-            <div class="devil-avatar" aria-hidden="true">😈</div>
-            <div>
-              <p class="eyebrow">Final Briefing</p>
-              <h2 id="devilTitle">The Devil Designed Your Test</h2>
-              <p class="devil-intro" id="devilIntro">
-                I have studied your responses and built a pressure test around your exact weak points.
-              </p>
+        <div class="glass devil-brief-card devil-brief-redesign">
+          <!-- Hero row: avatar + name/intro -->
+          <div class="devil-hero-row">
+            <div class="devil-avatar-img">😈</div>
+            <div class="devil-hero-text">
+              <h2 id="devilTitle">Meet Lucifer the Tempter</h2>
+              <p class="devil-subtitle" id="devilIntro">I designed your focus test.</p>
             </div>
           </div>
 
-          <div class="devil-grid">
-            <article class="devil-panel">
-              <h3>Your Pressure Points</h3>
-              <ul id="devilProblems" class="devil-list"></ul>
-            </article>
+          <!-- Taunt quote -->
+          <blockquote class="devil-taunt" id="devilTaunt">
+            <p id="devilChallengeLine">Dare you think you can outsmart the flames of the underworld? Let's see if you burn or rise!</p>
+          </blockquote>
 
-            <article class="devil-panel">
-              <h3>How I Built This Test</h3>
-              <ul id="devilDesign" class="devil-list"></ul>
-            </article>
+          <!-- "I know what's bothering you" section -->
+          <div class="devil-insight-section">
+            <p class="devil-insight-label">I KNOW WHAT'S BOTHERING YOU</p>
+            <div class="devil-insight-card">
+              <p class="devil-insight-summary" id="devilInsightSummary">stress related to your academics</p>
+              <hr class="devil-divider" />
+              <p class="devil-insight-sub">Specifically:</p>
+              <ul id="devilProblems" class="devil-insight-list"></ul>
+            </div>
+          </div>
 
-            <article class="devil-panel">
-              <h3>Your Test Blueprint</h3>
-              <div id="devilBlueprint" class="devil-blueprint"></div>
-            </article>
+          <!-- Warning line -->
+          <p class="devil-warning" id="devilWarning">
+            <span class="devil-warning-icon">⚠️</span>
+            Face the flames and prove your mettle, or be consumed by your own hesitation!
+          </p>
 
-            <article class="devil-panel">
-              <h3>Challenge Declaration</h3>
-              <p id="devilChallengeLine" class="devil-challenge-line">
-                Accept my challenge. I know you cannot beat me.
-              </p>
-              <div class="devil-cta-row">
-                <button id="btnAcceptChallenge" class="btn primary" type="button">Accept Challenge</button>
-              </div>
-              <div class="stage-hint" id="devilHint"></div>
-            </article>
+          <!-- CTA -->
+          <button id="btnAcceptChallenge" class="btn primary devil-cta" type="button">
+            I'm Ready — Bring It On
+          </button>
+          <p class="devil-cta-hint">Accept the challenge and pick your subject.</p>
+          <div class="stage-hint" id="devilHint"></div>
+
+          <!-- Hidden panels (blueprint/design kept for data but not shown in new UI) -->
+          <div hidden>
+            <ul id="devilDesign"></ul>
+            <div id="devilBlueprint"></div>
           </div>
         </div>
       </section>
 
       <section class="stage" id="stagePopups">
-        <div class="glass pop-card">
-          <p class="eyebrow">Focus Pops</p>
-          <h2>Popups are live</h2>
-          <p id="popupSummary">We’re releasing your personalized pulses now. Watch the center top.</p>
-          <div class="summary-panel">
-            <div class="summary-panel-head">
-              <p class="eyebrow">User Read</p>
-              <h3>What The Model Picked Up</h3>
-            </div>
-            <div id="summaryMain" class="summary-card">No summary yet.</div>
-          </div>
+        <div class="pop-card">
           <div class="test-card" id="testCard">
+            <div class="test-topbar">
+              <button class="test-close" type="button" aria-label="Close">×</button>
+              <div class="test-timer-pill" id="questionTimer">19:03</div>
+              <button class="test-finish" id="btnFinishTest" type="button">Finish Test</button>
+            </div>
             <div class="test-head">
-              <div>
-                <div class="q-count" id="questionCounter">Questions —</div>
-                <div class="q-subject" id="questionSubject">—</div>
+              <div class="test-head-main">
+                <div class="q-count" id="questionCounter">Q. 1 of 1</div>
+                <div class="q-type-wrap">
+                  <label for="questionTypeSelect" class="sr-only">Question type</label>
+                  <select id="questionTypeSelect" class="q-type-select" disabled>
+                    <option>Math-Single Type</option>
+                  </select>
+                </div>
+                <button id="btnSaveQuestionHeader" class="question-header-save" type="button" aria-label="Save question">
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/>
+  </svg>
+</button>
               </div>
-              <div class="pressure-indicators">
-                <div class="pill subtle pressure-pill" id="mentorsWatching">Mentors watching: —</div>
-                <div class="pill subtle pressure-pill" id="questionTimer">Time left: --:--</div>
-              </div>
+              <div class="q-subject" id="questionSubject">ID: —</div>
+              <div class="pressure-indicators"></div>
               <div class="mutate-badge pill subtle" id="mutateBadge">Mutated</div>
               <div class="test-actions">
                 <button id="btnReloadQuestions" class="btn ghost small">Reload set</button>
-                <button id="btnSubmitQuestion" class="btn primary small">Submit</button>
               </div>
             </div>
             <div class="live-feed" id="competitorFeed">Live arena feed will appear here.</div>
@@ -155,8 +341,34 @@
               <span>Mark the most appropriate option. Only one option is correct.</span>
             </div>
             <div class="question-body">
-              <div class="question-stem" id="questionStem">Questions will appear here with options.</div>
+              <div class="question-toolbar">
+                <button class="question-pill" id="btnReportError" type="button">Report Error</button>
+                <button class="question-pill" id="btnLifeline" type="button">Lifelines: 3</button>
+              </div>
+              <div class="question-panel">
+                <div class="question-stem" id="questionStem">Questions will appear here with options.</div>
+                <button class="question-zoom" id="btnZoomQuestion" type="button" aria-label="Zoom question">⤢</button>
+              </div>
               <div class="options-grid" id="questionOptions"></div>
+              <div class="solution-trigger-row">
+                <div id="btnShowSolution" class="solution-trigger" role="button" tabindex="0" aria-label="Show solution">
+                  <span class="bulb-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                      <defs>
+                        <linearGradient id="bulbGlowGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                          <stop offset="0%" stop-color="#60a5fa"></stop>
+                          <stop offset="100%" stop-color="#2563eb"></stop>
+                        </linearGradient>
+                      </defs>
+                      <path d="M12 2.5a6.8 6.8 0 0 0-4.8 11.6c.8.8 1.3 1.6 1.5 2.6h6.6c.2-1 .7-1.8 1.5-2.6A6.8 6.8 0 0 0 12 2.5Z" fill="url(#bulbGlowGrad)"></path>
+                      <rect x="9.1" y="17.6" width="5.8" height="1.8" rx="0.9" fill="#1d4ed8"></rect>
+                      <rect x="9.6" y="20" width="4.8" height="1.5" rx="0.75" fill="#1e40af"></rect>
+                      <path d="M5.5 6.9l-1.4-1.2M18.5 6.9l1.4-1.2M12 1v-1M3.6 12h-2M22.4 12h-2" stroke="#60a5fa" stroke-width="1.3" stroke-linecap="round"></path>
+                    </svg>
+                  </span>
+                  <span>Solution</span>
+                </div>
+              </div>
               <div class="integer-panel" id="integerPanel">
                 <input id="integerInput" type="text" placeholder="Enter your answer here..." />
                 <div class="keypad" id="keypad">
@@ -180,18 +392,20 @@
               </div>
             </div>
             <div class="stage-hint" id="testHint"></div>
+            <div class="test-submit">
+              <button id="btnSubmitQuestion" class="btn primary" disabled>Submit Answer</button>
+            </div>
             <div class="row">
               <button id="btnPrevQuestion" class="btn ghost">Previous</button>
               <button id="btnNextQuestion" class="btn primary">Next</button>
             </div>
           </div>
-          <button id="btnRestart" class="btn ghost">Start Fresh</button>
         </div>
       </section>
     </main>
   </div>
 
-  <aside class="hud-panel" id="hudPanel">
+  <aside class="hud-panel open" id="hudPanel">
     <div class="hud-head">
       <div>
         <p class="eyebrow">Control Room</p>
@@ -228,13 +442,7 @@
       <div class="section-title">Trace Log</div>
       <pre id="logBox"></pre>
     </div>
-    <div class="hud-section">
-      <div class="section-title">Popup Console</div>
-      <div class="console" id="popupConsole"></div>
-    </div>
   </aside>
-
-  <div id="popupOverlay" class="popup-overlay"></div>
   <div id="binaryOverlay" class="binary-overlay" aria-hidden="true">
     <div class="binary-card">
       <p class="eyebrow">Quick Split</p>
@@ -257,8 +465,20 @@
     </div>
   </div>
 
+  <div id="solutionModal" class="confirm-modal" hidden>
+    <div class="confirm-card solution-card">
+      <h3>Solution</h3>
+      <p id="solutionAnswerLine">Correct answer: —</p>
+      <div id="solutionContent" class="solution-content">Solution not available.</div>
+      <div class="confirm-actions">
+        <button id="btnCloseSolution" class="btn primary small" type="button">Close</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   <script src="/auth.js"></script>
   <script src="/app.js"></script>
+  <script src="/academic_topics.js"></script>
 </body>
 </html>

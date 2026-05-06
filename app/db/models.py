@@ -42,6 +42,11 @@ class Session(db.Model):
     filled_slots = db.Column(MutableDict.as_mutable(JSONType), nullable=False, default=dict)
     meta = db.Column(MutableDict.as_mutable(JSONType), nullable=False, default=dict)
     popups = db.Column(MutableList.as_mutable(JSONType), nullable=False, default=list)
+    
+    # Academic topics extraction data
+    academic_topics_raw = db.Column(MutableDict.as_mutable(JSONType), nullable=True)
+    academic_topics_subject = db.Column(db.String(50), nullable=True)
+    academic_topics_topics = db.Column(MutableList.as_mutable(JSONType), nullable=True)
 
     created_at = db.Column(
         db.DateTime, nullable=False, server_default=func.now(), default=datetime.utcnow

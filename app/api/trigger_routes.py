@@ -36,7 +36,6 @@ ALLOWED_TRIGGERS = {
     "fakeCrashScreen",
     "blackout",
     "hesitationHeatmap",
-    "bollywoodReelTrap",
 }
 
 
@@ -50,12 +49,12 @@ EVENT_PRIORITY = {
     "answer_changed": ["optionShuffle", "hesitationHeatmap", "mirageHighlight"],
     "interaction_hesitation": ["mirageHighlight", "hesitationHeatmap", "stressTimer"],
     "long_hesitation": ["phantomCompetitor", "stressTimer", "spatialTicking"],
-    "idle_resumed": ["blurAttack", "chaosBackground", "bollywoodReelTrap"],
-    "feedback_topic_selected": ["bollywoodReelTrap"],
+    "idle_resumed": ["blurAttack", "chaosBackground"],
+    "feedback_topic_selected": ["chaosBackground"],
     "time_pressure": ["heartbeatVibration", "stressTimer", "fakeLowBattery", "spatialTicking"],
     "question_loaded": ["fakeMentorCount", "phantomCompetitor"],
     "submit_attempt": ["spatialTicking", "stressTimer"],
-    "context_switched": ["bollywoodReelTrap", "chaosBackground", "fakeMentorCount"],
+    "context_switched": ["chaosBackground", "fakeMentorCount"],
     "device_agitation": ["spatialTicking", "shepardTone", "stressTimer"],
     "high_tap_intensity": ["confidenceBreaker", "stressTimer", "optionShuffle"],
 }
@@ -111,7 +110,6 @@ TRIGGER_INTENSITY_HINTS = {
     "spatialTicking": "medium",
     "waveDistortion": "medium",
     "heartbeatVibration": "medium",
-    "bollywoodReelTrap": "medium",
     "blurAttack": "high",
     "screenFlip": "high",
     "colorInversion": "high",
@@ -175,7 +173,7 @@ Orchestration behavior:
   - overload -> chaos/shepard/wave style
   - urgency -> timer/ticking/haptic urgency style
 - If conflicting signals or weak confidence, choose no trigger.
-- If preferred interest topic exists and bollywoodReelTrap is available, prefer bollywoodReelTrap
+- If preferred interest topic exists, bias toward non-repetitive medium-intensity triggers
     for suitable events (especially context_switch/idle/distraction-style moments).
 
 Safety:
@@ -729,8 +727,8 @@ def recommend_trigger():
         or ""
     ).strip().lower()
 
-    if preferred_interest_topic and "bollywoodReelTrap" in available:
-        event_priority = ["bollywoodReelTrap", *event_priority]
+    if preferred_interest_topic:
+        event_priority = [*event_priority]
 
     payload = {
         "event_name": event_name,
