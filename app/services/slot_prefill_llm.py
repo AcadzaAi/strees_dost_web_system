@@ -207,7 +207,7 @@ def extract_state_with_llm(user_text: str) -> SessionState:
     for attempt in (1, 2):
         try:
             resp = chat_json(
-                model="gpt-5-mini",
+                model="gpt-4o-mini",
                 system=SYSTEM_PROMPT_EXTRACT_STATE,
                 user=json.dumps(payload, ensure_ascii=False),
             )
@@ -236,7 +236,7 @@ def update_state_with_user_reply(state: SessionState, new_text: str) -> SessionS
     for attempt in (1, 2):
         try:
             resp = chat_json(
-                model="gpt-5-mini",
+                model="gpt-4o-mini",
                 system=SYSTEM_PROMPT_UPDATE_STATE,
                 user=json.dumps(payload, ensure_ascii=False),
             )
@@ -267,7 +267,7 @@ def prefill_slots_with_llm(user_text: str) -> SlotPrefillResponse:
     for attempt in (1, 2):
         try:
             resp = chat_json(
-                model="gpt-5-mini",
+                model="gpt-4o-mini",
                 system=SYSTEM_PROMPT_PREFILL,
                 user=json.dumps(payload, ensure_ascii=False),
             )

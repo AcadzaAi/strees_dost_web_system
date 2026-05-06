@@ -137,7 +137,7 @@ def mutate_question(question: dict) -> Tuple[dict, bool]:
 
     try:
         resp = chat_json(
-            model="gpt-5-mini",
+            model="gpt-4o-mini",
             system=SYSTEM_PROMPT_MUTATE,
             user=json.dumps(base_payload, ensure_ascii=False),
         )
