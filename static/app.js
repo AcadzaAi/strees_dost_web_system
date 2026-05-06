@@ -7284,7 +7284,7 @@ async function fetchNextQuestion(message) {
 async function submitAnswer() {
   // CRITICAL: Deactivate all triggers immediately when user submits
   // This prevents triggers from overlapping with the next question
-  deactivateAllTriggers();
+  StressTriggers.deactivateAllTriggers();
   
   if (!sessionId || btnAnswer.disabled) return;
   const answer = answerInput.value.trim();
@@ -7330,7 +7330,7 @@ async function submitAnswer() {
 
 async function skipRemainingQuestions() {
   // CRITICAL: Deactivate all triggers when skipping
-  deactivateAllTriggers();
+  StressTriggers.deactivateAllTriggers();
   
   if (!sessionId || !btnSkip || btnSkip.hidden || btnSkip.disabled) return;
   try {
