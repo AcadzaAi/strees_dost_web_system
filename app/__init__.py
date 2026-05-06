@@ -6,6 +6,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+<<<<<<< HEAD
+=======
+from .api.bollywood_routes import bp as bollywood_bp
+from .api.extract_routes import bp as extract_bp
+>>>>>>> 9cf2445d80e1f3f3d18f0ed76d3f1177d5703a06
 from .api.health_routes import bp as health_bp
 from .api.session_routes import bp as session_bp
 from .api.session_routes_academic import bp as session_academic_bp

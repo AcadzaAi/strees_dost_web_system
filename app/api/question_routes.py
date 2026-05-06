@@ -22,6 +22,11 @@ except ImportError:  # pragma: no cover
     _CERTIFI_PATH = None
 
 from ..services.question_mutator import mutate_question
+from ..services.question_trigger_decision import (
+    get_full_test_plan,
+    get_trigger_for_question,
+    is_new_user,
+)
 from ..realtime.scheduler import is_popup_simulation_active
 
 logger = logging.getLogger(__name__)
@@ -658,6 +663,185 @@ def get_stats():
             "sample_ids": question_loader.get_random_ids(5),
         }
     )
+
+
+@question_bp.route("/trigger-plan", methods=["POST"])
+def get_trigger_plan():
+    """Generate trigger plan for Focus Zones test.
+    
+    Request body:
+    {
+        "user_profile": {
+            "name": "John",  // Empty if new user
+            "test_count": 0,  // 0 for new user
+            "last_test_date": "2026-05-01",
+            "previous_triggers": ["SPOTLIGHT_HUNT", "HARD_FOG", ...]  // From last test
+        }
+    }
+    
+    Response:
+    {
+        "status": "success",
+        "is_new_user": true,
+        "total_questions": 7,
+        "medium_count": 5,
+        "hard_count": 2,
+        "sequence": [
+            {
+                "question_number": 1,
+                "trigger_name": "SPOTLIGHT_HUNT",
+                "difficulty": "medium",
+                "intensity": "mild",
+                "description": "...",
+                "is_hard": false,
+                "is_meta_question": false
+            },
+            ...
+        ],
+        "medium_questions": [...],  // 5 medium trigger configs
+        "hard_questions": [...]     // 2 hard trigger configs
+    }
+    """
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        user_profile = body.get("user_profile") or {}
+        
+        # Extract previous triggers if available
+        previous_triggers = user_profile.get("previous_triggers")
+        
+        # Generate test plan
+        plan = get_full_test_plan(user_profile, previous_triggers)
+        
+        logger.info(
+            "trigger_plan: user_type=%s medium=%d hard=%d",
+            plan["user_type"],
+            plan["medium_count"],
+            plan["hard_count"],
+        )
+        
+        return jsonify({
+            "status": "success",
+            **plan,
+        })
+    
+    except Exception as exc:
+        logger.exception("trigger_plan failed: %s", exc)
+        return jsonify({
+            "status": "error",
+            "message": "Failed to generate trigger plan",
+            "detail": str(exc),
+        }), 500
+
+
+@question_bp.route("/trigger/<int:question_number>", methods=["POST"])
+def get_question_trigger(question_number: int):
+    """Get trigger for a specific question number.
+    
+    Request body:
+    {
+        "user_profile": {
+            "name": "John",
+            "test_count": 0,
+            "previous_triggers": [...]
+        }
+    }
+    
+    Response:
+    {
+        "status": "success",
+        "question_number": 1,
+        "trigger_name": "SPOTLIGHT_HUNT",
+        "difficulty": "medium",
+        "intensity": "mild",
+        "description": "...",
+        "is_hard": false,
+        "is_meta_question": false
+    }
+    """
+    try:
+        if not 1 <= question_number <= 7:
+            return jsonify({
+                "status": "error",
+                "message": "Invalid question_number. Must be 1-7.",
+            }), 400
+        
+        body = request.get_json(force=True, silent=True) or {}
+        user_profile = body.get("user_profile") or {}
+        previous_triggers = user_profile.get("previous_triggers")
+        
+        trigger_config = get_trigger_for_question(
+            question_number,
+            user_profile,
+            previous_triggers,
+        )
+        
+        logger.info(
+            "question_trigger: q=%d trigger=%s difficulty=%s",
+            question_number,
+            trigger_config["trigger_name"],
+            trigger_config["difficulty"],
+        )
+        
+        return jsonify({
+            "status": "success",
+            **trigger_config,
+        })
+    
+    except ValueError as exc:
+        return jsonify({
+            "status": "error",
+            "message": str(exc),
+        }), 400
+    
+    except Exception as exc:
+        logger.exception("question_trigger failed: %s", exc)
+        return jsonify({
+            "status": "error",
+            "message": "Failed to get trigger",
+            "detail": str(exc),
+        }), 500
+
+
+@question_bp.route("/check-user-type", methods=["POST"])
+def check_user_type():
+    """Check if user is new or returning.
+    
+    Request body:
+    {
+        "user_profile": {
+            "name": "John",
+            "test_count": 0
+        }
+    }
+    
+    Response:
+    {
+        "status": "success",
+        "is_new_user": true,
+        "should_ask_name": true,
+        "message": "New user detected"
+    }
+    """
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        user_profile = body.get("user_profile") or {}
+        
+        new_user = is_new_user(user_profile)
+        
+        return jsonify({
+            "status": "success",
+            "is_new_user": new_user,
+            "should_ask_name": new_user,
+            "message": "New user detected" if new_user else "Returning user detected",
+        })
+    
+    except Exception as exc:
+        logger.exception("check_user_type failed: %s", exc)
+        return jsonify({
+            "status": "error",
+            "message": "Failed to check user type",
+            "detail": str(exc),
+        }), 500
 
 
 @question_bp.route("/mutate/<question_id>", methods=["POST"])
