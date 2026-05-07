@@ -304,27 +304,21 @@ class QuestionIDLoader:
             is_hard = level == "HARD"
             is_medium = level == "MEDIUM"
             
-            # Check if matches subject
+            # Check if matches subject (case-insensitive exact match)
             matches_subject = False
             if subject:
                 q_subject = (q.get("subject") or "").lower()
-                matches_subject = q_subject == subject.lower()
+                subject_lower = subject.lower()
+                matches_subject = q_subject == subject_lower
             
             # Check if matches chapter (from topics list)
+            # Topics list contains chapter names selected by the user
             matches_chapter = False
             if topics and matches_subject:
                 q_chapter = (q.get("chapter") or "").lower()
                 topic_lower = [t.lower() for t in topics]
-                # Check if chapter matches any topic
+                # Check if chapter matches any topic (chapter name only, not concepts)
                 if q_chapter in topic_lower:
-                    matches_chapter = True
-                # Also check concepts/sub_concepts
-                q_topics: set[str] = set()
-                if q.get("concepts"):
-                    q_topics.update(c.lower() for c in q["concepts"].split("|"))
-                if q.get("sub_concepts"):
-                    q_topics.update(c.lower() for c in q["sub_concepts"].split("|"))
-                if any(t in q_topics for t in topic_lower):
                     matches_chapter = True
             
             # Add to appropriate pools
@@ -529,16 +523,32 @@ class AcadzaQuestionFetcher:
             return None
 
     def fetch_multiple(self, question_ids: List[str]) -> List[Dict]:
+        """Fetch multiple questions in parallel for better performance."""
         questions: list[Dict] = []
         if not question_ids:
             return questions
 
-        for qid in question_ids:
-            data = self.fetch_question(qid)
-            if data:
-                questions.append(data)
-                
-        logger.info("Fetched %s/%s questions", len(questions), len(question_ids))
+        import concurrent.futures
+        import threading
+        
+        # Use ThreadPoolExecutor for parallel HTTP requests
+        max_workers = min(10, len(question_ids))  # Max 10 parallel requests
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all fetch tasks
+            future_to_qid = {executor.submit(self.fetch_question, qid): qid for qid in question_ids}
+            
+            # Collect results as they complete
+            for future in concurrent.futures.as_completed(future_to_qid):
+                qid = future_to_qid[future]
+                try:
+                    data = future.result()
+                    if data:
+                        questions.append(data)
+                except Exception as exc:
+                    logger.error("Question %s fetch failed: %s", qid, exc)
+        
+        logger.info("Fetched %s/%s questions in parallel", len(questions), len(question_ids))
         return questions
 
 

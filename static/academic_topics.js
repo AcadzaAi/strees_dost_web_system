@@ -366,7 +366,8 @@
   /* ── commit selection → start test ──────────────────────────────────────── */
   async function commitAndGo(sessionId) {
     try {
-      const topics = selectedConcepts.map(c => `${c.chapter} - ${c.concept}`);
+      // Send only chapter names as topics for question filtering
+      const topics = selectedChapters;
       await postJSON(`/api/session/${sessionId}/meta`, {
         selected_subject: selectedSubject,
         selected_topics: topics,
