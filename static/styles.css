@@ -4320,6 +4320,39 @@ body.stress-contrast-decay .option {
   }
 }
 
+@keyframes hardQuestionSkullShake {
+  0%, 100% {
+    transform: translateX(0) rotate(0deg) scale(1);
+  }
+  10% {
+    transform: translateX(-8px) rotate(-6deg) scale(1.02);
+  }
+  20% {
+    transform: translateX(8px) rotate(6deg) scale(1.02);
+  }
+  30% {
+    transform: translateX(-6px) rotate(-4deg) scale(1.01);
+  }
+  40% {
+    transform: translateX(6px) rotate(4deg) scale(1.01);
+  }
+  50% {
+    transform: translateX(-4px) rotate(-3deg) scale(1);
+  }
+  60% {
+    transform: translateX(4px) rotate(3deg) scale(1);
+  }
+  70% {
+    transform: translateX(-2px) rotate(-2deg) scale(1);
+  }
+  80% {
+    transform: translateX(2px) rotate(2deg) scale(1);
+  }
+  90% {
+    transform: translateX(-1px) rotate(-1deg) scale(1);
+  }
+}
+
 .hard-question-fullscreen {
   position: fixed;
   inset: 0;
@@ -4380,6 +4413,10 @@ body.stress-contrast-decay .option {
 
 .hard-question-fullscreen.is-fail .hard-question-icon {
   animation: hardQuestionSkullPulse 2.6s ease-in-out infinite;
+}
+
+.hard-question-icon.shake-skull {
+  animation: hardQuestionSkullShake 0.6s ease-in-out infinite;
 }
 
 .hard-question-eyebrow {

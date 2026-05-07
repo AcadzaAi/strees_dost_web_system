@@ -162,16 +162,16 @@ def test_specific_question_trigger():
     # Test Q1 for new user
     q1_trigger = get_trigger_for_question(1, new_user_profile)
     assert q1_trigger["question_number"] == 1
-    assert q1_trigger["trigger_name"] == "SPOTLIGHT_HUNT"
+    assert q1_trigger["trigger_name"] == "TORCHLIGHT_SPOTLIGHT"
     assert q1_trigger["is_hard"] == False
-    print("✓ Q1 trigger for new user: SPOTLIGHT_HUNT (medium)")
+    print("✓ Q1 trigger for new user: TORCHLIGHT_SPOTLIGHT (medium)")
     
     # Test Q3 for new user (should be hard)
     q3_trigger = get_trigger_for_question(3, new_user_profile)
     assert q3_trigger["question_number"] == 3
-    assert q3_trigger["trigger_name"] == "FLIP_CYCLE"
+    assert q3_trigger["trigger_name"] == "SCREEN_FLIP"
     assert q3_trigger["is_hard"] == True
-    print("✓ Q3 trigger for new user: FLIP_CYCLE (hard)")
+    print("✓ Q3 trigger for new user: SCREEN_FLIP (hard)")
     
     # Test Q1 for returning user (should never be hard)
     returning_user_profile = {"name": "John", "test_count": 5}
@@ -217,15 +217,15 @@ def test_previous_trigger_avoidance():
     
     engine = QuestionTriggerDecisionEngine()
     
-    # Simulate previous test ending with SPOTLIGHT_HUNT
+    # Simulate previous test ending with TORCHLIGHT_SPOTLIGHT
     previous_triggers = [
         "ACCURACY_TEST",
         "HARD_FOG",
         "READING_TEST",
-        "FLIP_CYCLE",
+        "SCREEN_FLIP",
         "BILLIARD_BALL",
         "HARD_PEER_DOUBT",
-        "SPOTLIGHT_HUNT",  # Last trigger
+        "TORCHLIGHT_SPOTLIGHT",  # Last trigger
     ]
     
     # Generate new sequence multiple times
@@ -234,11 +234,11 @@ def test_previous_trigger_avoidance():
         sequence = engine.get_trigger_sequence_for_returning_user(previous_triggers)
         first_triggers.append(sequence[0]["trigger_name"])
     
-    # Check that SPOTLIGHT_HUNT is less likely to appear first
-    spotlight_count = first_triggers.count("SPOTLIGHT_HUNT")
+    # Check that TORCHLIGHT_SPOTLIGHT is less likely to appear first
+    spotlight_count = first_triggers.count("TORCHLIGHT_SPOTLIGHT")
     total_count = len(first_triggers)
     
-    print(f"✓ SPOTLIGHT_HUNT appeared {spotlight_count}/{total_count} times as Q1")
+    print(f"✓ TORCHLIGHT_SPOTLIGHT appeared {spotlight_count}/{total_count} times as Q1")
     print(f"  (Should be less frequent due to deprioritization)")
 
 

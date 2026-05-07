@@ -99,22 +99,16 @@ def _local_fallback_questions(count: int = 7) -> List[Dict]:
             "metadata": {"fallback": True},
         },
         {
-            "question_id": "fallback-2",
-            "question_type": "scq",
+            "question_id": "fallback-6",
+            "question_type": "integer",
             "subject": "Physics",
-            "chapter": "Kinematics",
-            "difficulty": "Easy",
-            "level": "EASY",
-            "question_html": "<p>A body starts from rest and accelerates at 2 m/s<sup>2</sup>. Distance covered in 3 s is?</p>",
+            "chapter": "Rotational Mechanics",
+            "difficulty": "Hard",
+            "level": "HARD",
+            "question_html": "<p>A solid sphere rolls down an incline of height h without slipping. What is the ratio of its translational kinetic energy to total kinetic energy? (Answer as integer * 7)</p>",
             "question_images": [],
-            "options": [
-                {"label": "A", "text": "3 m"},
-                {"label": "B", "text": "6 m"},
-                {"label": "C", "text": "9 m"},
-                {"label": "D", "text": "12 m"},
-            ],
-            "correct_answer": "C",
-            "solution_html": "<p>s = 1/2 at<sup>2</sup> = 1/2 * 2 * 3<sup>2</sup> = 9 m.</p>",
+            "integer_answer": 5,
+            "solution_html": "<p>Ratio is 5/7. 5/7 * 7 = 5.</p>",
             "solution_images": [],
             "metadata": {"fallback": True},
         },
@@ -123,8 +117,8 @@ def _local_fallback_questions(count: int = 7) -> List[Dict]:
             "question_type": "integer",
             "subject": "Chemistry",
             "chapter": "Mole Concept",
-            "difficulty": "Easy",
-            "level": "EASY",
+            "difficulty": "Medium",
+            "level": "MEDIUM",
             "question_html": "<p>How many atoms are present in 1 mole of a substance? (Enter integer part of coefficient x in x × 10<sup>23</sup>)</p>",
             "question_images": [],
             "integer_answer": 6,
@@ -157,8 +151,8 @@ def _local_fallback_questions(count: int = 7) -> List[Dict]:
             "question_type": "scq",
             "subject": "Physics",
             "chapter": "Units and Dimensions",
-            "difficulty": "Easy",
-            "level": "EASY",
+            "difficulty": "Medium",
+            "level": "MEDIUM",
             "question_html": "<p>The SI unit of force is:</p>",
             "question_images": [],
             "options": [
@@ -169,20 +163,6 @@ def _local_fallback_questions(count: int = 7) -> List[Dict]:
             ],
             "correct_answer": "C",
             "solution_html": "<p>Force = mass × acceleration, SI unit is Newton.</p>",
-            "solution_images": [],
-            "metadata": {"fallback": True},
-        },
-        {
-            "question_id": "fallback-6",
-            "question_type": "integer",
-            "subject": "Physics",
-            "chapter": "Rotational Mechanics",
-            "difficulty": "Hard",
-            "level": "HARD",
-            "question_html": "<p>A solid sphere rolls down an incline of height h without slipping. What is the ratio of its translational kinetic energy to total kinetic energy? (Answer as integer * 7)</p>",
-            "question_images": [],
-            "integer_answer": 5,
-            "solution_html": "<p>Ratio is 5/7. 5/7 * 7 = 5.</p>",
             "solution_images": [],
             "metadata": {"fallback": True},
         },
@@ -206,22 +186,31 @@ def _local_fallback_questions(count: int = 7) -> List[Dict]:
             "solution_images": [],
             "metadata": {"fallback": True},
         },
+        {
+            "question_id": "fallback-2",
+            "question_type": "scq",
+            "subject": "Physics",
+            "chapter": "Kinematics",
+            "difficulty": "Easy",
+            "level": "EASY",
+            "question_html": "<p>A body starts from rest and accelerates at 2 m/s<sup>2</sup>. Distance covered in 3 s is?</p>",
+            "question_images": [],
+            "options": [
+                {"label": "A", "text": "3 m"},
+                {"label": "B", "text": "6 m"},
+                {"label": "C", "text": "9 m"},
+                {"label": "D", "text": "12 m"},
+            ],
+            "correct_answer": "C",
+            "solution_html": "<p>s = 1/2 at<sup>2</sup> = 1/2 * 2 * 3<sup>2</sup> = 9 m.</p>",
+            "solution_images": [],
+            "metadata": {"fallback": True},
+        },
     ]
 
-    # Pick 2 hard and 5 easy/medium
-    hard_pool = [q for q in bank if q["difficulty"].lower() == "hard"]
-    easy_pool = [q for q in bank if q["difficulty"].lower() != "hard"]
-    
-    selected_hard = hard_pool[:min(2, len(hard_pool))]
-    selected_easy = easy_pool[:min(5, len(easy_pool))]
-    picked = selected_hard + selected_easy
-    
-    if len(picked) < count:
-        while len(picked) < count:
-            picked.append(random.choice(easy_pool))
-
+    # Return questions in order: Q1=Easy, Q2=Hard, Q3=Medium, Q4=Medium, Q5=Medium, Q6=Hard, Q7=Easy
     out: List[Dict] = []
-    for idx, q in enumerate(picked):
+    for idx, q in enumerate(bank[:count]):
         item = dict(q)
         item["question_index"] = idx + 1
         out.append(item)
@@ -675,7 +664,7 @@ def get_trigger_plan():
             "name": "John",  // Empty if new user
             "test_count": 0,  // 0 for new user
             "last_test_date": "2026-05-01",
-            "previous_triggers": ["SPOTLIGHT_HUNT", "HARD_FOG", ...]  // From last test
+            "previous_triggers": ["TORCHLIGHT_SPOTLIGHT", "HARD_FOG", ...]  // From last test
         }
     }
     
@@ -689,7 +678,7 @@ def get_trigger_plan():
         "sequence": [
             {
                 "question_number": 1,
-                "trigger_name": "SPOTLIGHT_HUNT",
+                "trigger_name": "TORCHLIGHT_SPOTLIGHT",
                 "difficulty": "medium",
                 "intensity": "mild",
                 "description": "...",
@@ -750,7 +739,7 @@ def get_question_trigger(question_number: int):
     {
         "status": "success",
         "question_number": 1,
-        "trigger_name": "SPOTLIGHT_HUNT",
+        "trigger_name": "TORCHLIGHT_SPOTLIGHT",
         "difficulty": "medium",
         "intensity": "mild",
         "description": "...",

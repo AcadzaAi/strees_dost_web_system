@@ -52,9 +52,9 @@ PRIORITY_ORDER = [
 
 # Question-level trigger system for Focus Zones test
 QUESTION_TRIGGERS = [
-    "SPOTLIGHT_HUNT",
+    "TORCHLIGHT_SPOTLIGHT",
     "HARD_FOG",
-    "FLIP_CYCLE",
+    "SCREEN_FLIP",
     "ACCURACY_TEST",
     "READING_TEST",
     "HARD_PEER_DOUBT",
@@ -63,58 +63,80 @@ QUESTION_TRIGGERS = [
 
 # Trigger metadata: difficulty and characteristics
 QUESTION_TRIGGER_META = {
-    "SPOTLIGHT_HUNT": {
+    "TORCHLIGHT_SPOTLIGHT": {
         "difficulty": "medium",
         "intensity": "mild",
-        "description": "Spotlight effect that tests visual focus",
+        "description": "Torchlight spotlight effect that tests visual focus",
         "order": 1,
+        "frontend_trigger": "torchlightSpotlight",
+        "delay_ms": 6000,
     },
     "HARD_FOG": {
         "difficulty": "medium",  # Despite name, used as medium trigger at Q2
         "intensity": "strong",
-        "description": "Fog overlay with meta-question about previous question",
+        "description": "Fog overlay with pre-sequence (difficulty check, warning, stress timer)",
         "order": 2,
         "is_meta_question": True,
+        "frontend_trigger": "hardFog",
+        "delay_ms": 6000,
+        "pre_sequence": ["difficultyCheckPrompt", "hardQuestionWarning", "stressTimer"],
     },
-    "FLIP_CYCLE": {
+    "SCREEN_FLIP": {
         "difficulty": "hard",
         "intensity": "strong",
-        "description": "Screen flip cycle that tests spatial orientation",
+        "description": "Screen flip cycle (5 flips, final state permanent)",
         "order": 3,
+        "frontend_trigger": "screenFlip",
+        "delay_ms": 5000,
+        "flip_cycles": 5,
     },
     "ACCURACY_TEST": {
         "difficulty": "medium",
         "intensity": "moderate",
-        "description": "Precision-based accuracy challenge",
+        "description": "Shaking screen accuracy test with explain trap",
         "order": 4,
+        "frontend_trigger": "accuracyTest",
+        "delay_ms": 1000,
+        "wait_for_screen_free": True,
     },
     "READING_TEST": {
         "difficulty": "medium",
         "intensity": "moderate",
-        "description": "Reading comprehension under pressure",
+        "description": "Reading test with hand signal, clear time, and blur gate",
         "order": 5,
+        "frontend_trigger": "readingTest",
+        "delay_ms": 3000,
+        "sequence": ["focusHandSignal", "clearReading", "focusReadGate"],
     },
     "HARD_PEER_DOUBT": {
         "difficulty": "hard",
         "intensity": "strong",
-        "description": "Peer comparison with meta-question",
+        "description": "Peer comparison with pre-sequence and submission interception",
         "order": 6,
         "is_meta_question": True,
+        "frontend_trigger": "hardPeerDoubt",
+        "delay_ms": 6000,
+        "pre_sequence": ["difficultyCheckPrompt", "hardQuestionWarning", "stressTimer"],
+        "interception_enabled": True,
+        "max_interceptions": 2,
     },
     "BILLIARD_BALL": {
         "difficulty": "medium",
         "intensity": "moderate",
-        "description": "Moving target tracking challenge",
+        "description": "Bouncing question with pre-taunt",
         "order": 7,
+        "frontend_trigger": "billiardBall",
+        "delay_ms": 1500,
+        "sequence": ["premiumImagePopup", "bouncingQuestion"],
     },
 }
 
 # New user sequence (fixed order, mild to strong)
-# Q3 and Q6 are hard questions for new users
+# Q2 and Q6 are hard questions for new users
 NEW_USER_TRIGGER_SEQUENCE = [
-    "SPOTLIGHT_HUNT",      # Q1 (medium)
-    "HARD_FOG",            # Q2 (medium - despite name)
-    "FLIP_CYCLE",          # Q3 (hard) ⚠️
+    "TORCHLIGHT_SPOTLIGHT", # Q1 (medium)
+    "HARD_FOG",            # Q2 (hard) ⚠️
+    "SCREEN_FLIP",         # Q3 (medium)
     "ACCURACY_TEST",       # Q4 (medium)
     "READING_TEST",        # Q5 (medium)
     "HARD_PEER_DOUBT",     # Q6 (hard) ⚠️
@@ -122,12 +144,12 @@ NEW_USER_TRIGGER_SEQUENCE = [
 ]
 
 # Hard triggers (can only appear Q2-Q6 for returning users)
-HARD_QUESTION_TRIGGERS = ["FLIP_CYCLE", "HARD_PEER_DOUBT"]
+HARD_QUESTION_TRIGGERS = ["HARD_FOG", "HARD_PEER_DOUBT"]
 
 # Medium triggers (can appear anywhere for returning users)
 MEDIUM_QUESTION_TRIGGERS = [
-    "SPOTLIGHT_HUNT",
-    "HARD_FOG",  # Despite name, used as medium difficulty
+    "TORCHLIGHT_SPOTLIGHT",
+    "SCREEN_FLIP",
     "ACCURACY_TEST",
     "READING_TEST",
     "BILLIARD_BALL",

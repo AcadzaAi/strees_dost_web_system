@@ -115,6 +115,7 @@ let testQuestions = [];
 let testQuestionIndex = 0;
 let selectedOptions = {};
 let answeredMap = {};
+let pendingTriggerTimeouts = []; // Store pending trigger timeouts to cancel when switching questions
 let mutationTimers = [];
 let mutationPaused = false;
 let isLoadingTestBank = false;
@@ -127,6 +128,13 @@ let solutionModalOpen = false;
 let pendingAdvanceAfterSubmit = false;
 let questionTriggerPlan = null; // Stores trigger plan from backend
 const SOLUTION_GRACE_MS = 1400;
+
+// Cancel all pending trigger timeouts when switching questions
+function cancelPendingTriggers() {
+  console.log('[cancelPendingTriggers] Cancelling', pendingTriggerTimeouts.length, 'pending triggers');
+  pendingTriggerTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
+  pendingTriggerTimeouts = [];
+}
 const disableStressMode = false;
 const stressDebug = true;
 const manualStressTriggerMode = true;
@@ -349,23 +357,38 @@ const CLIENT_FALLBACK_QUESTIONS = [
 ];
 
 async function openDevFallbackQuestionsDirect() {
-  const cloned = DEV_FALLBACK_QUESTIONS.map((q, idx) => ({
-    ...q,
-    question_index: idx + 1,
-    options: Array.isArray(q.options) ? q.options.map((opt) => ({ ...opt })) : [],
-  }));
-  testQuestions = cloned;
-  testQuestionIndex = 0;
-  selectedOptions = {};
-  answeredMap = {};
-  clearMutationTimers();
-  
-  // Fetch trigger plan for fallback questions too
-  await fetchQuestionTriggerPlan();
-  
-  setTestHint("Dev mode: Loaded local fallback questions directly.");
-  renderTestQuestion();
-  showStage("popups");
+  try {
+    const cloned = DEV_FALLBACK_QUESTIONS.map((q, idx) => ({
+      ...q,
+      question_index: idx + 1,
+      options: Array.isArray(q.options) ? q.options.map((opt) => ({ ...opt })) : [],
+    }));
+    testQuestions = cloned;
+    testQuestionIndex = 0;
+    selectedOptions = {};
+    answeredMap = {};
+    
+    try {
+      clearMutationTimers();
+    } catch (err) {
+      console.error('[openDevFallbackQuestionsDirect] clearMutationTimers failed:', err);
+    }
+    
+    // Fetch trigger plan for fallback questions too (non-blocking)
+    try {
+      await fetchQuestionTriggerPlan();
+    } catch (err) {
+      console.error('[openDevFallbackQuestionsDirect] Failed to fetch trigger plan:', err);
+      // Continue anyway - triggers will use default behavior
+    }
+    
+    setTestHint("Dev mode: Loaded local fallback questions directly.");
+    renderTestQuestion();
+    showStage("popups");
+  } catch (err) {
+    console.error('[openDevFallbackQuestionsDirect] Critical error:', err);
+    alert('Failed to load fallback questions: ' + err.message);
+  }
 }
 
 // Utility ------------------------------------------------------------------
@@ -1013,6 +1036,7 @@ const StressTriggers = (() => {
     stage: "name",
     examStartedAt: 0,
     examDurationMs: 900000,
+    examTimerId: null,
     lifelines: 3,
     questionStartedAt: 0,
     currentQuestionId: "",
@@ -1072,6 +1096,10 @@ const StressTriggers = (() => {
     optionFeedbackQuestionId: "",
     optionFeedbackOverlay: null,
     optionFeedbackLastOption: "",
+    // Q6 option feedback interception state
+    optionFeedbackInterceptionEnabled: false,
+    optionFeedbackInterceptionCount: 0,
+    optionFeedbackMaxInterceptions: 2,
   };
 
   const FEEDBACK_PROMPT_LIBRARY = {
@@ -1247,9 +1275,7 @@ const StressTriggers = (() => {
     difficultyCheckPrompt: { conflicts: ["blackout", "fakeCrashScreen", "blurAttack"], cooldown: [18000, 30000] },
     boucingQuestion: { conflicts: ["blackout", "fakeCrashScreen"], cooldown: [24000, 36000] },
     // Question-level triggers for Focus Zones test
-    spotlightHunt: { conflicts: ["torchlightSpotlight", "blackout"], cooldown: [15000, 22000] },
     hardFog: { conflicts: ["blurAttack"], cooldown: [18000, 26000] },
-    flipCycle: { conflicts: ["screenFlip"], cooldown: [20000, 30000] },
     accuracyTest: { conflicts: [], cooldown: [16000, 24000] },
     readingTest: { conflicts: [], cooldown: [16000, 24000] },
     hardPeerDoubt: { conflicts: ["phantomCompetitor"], cooldown: [18000, 28000] },
@@ -1269,9 +1295,7 @@ const StressTriggers = (() => {
     "focusReadGate",
     "premiumImagePopup",
     // Question-level triggers for Focus Zones test
-    "spotlightHunt",
     "hardFog",
-    "flipCycle",
     "accuracyTest",
     "readingTest",
     "hardPeerDoubt",
@@ -1545,8 +1569,17 @@ const StressTriggers = (() => {
   }
 
   function timeRemainingMs() {
-    if (!state.examStartedAt) return state.examDurationMs;
-    return Math.max(0, state.examDurationMs - (Date.now() - state.examStartedAt));
+    if (!state.examStartedAt || state.examStartedAt <= 0) return state.examDurationMs;
+    const elapsed = Date.now() - state.examStartedAt;
+    const remaining = state.examDurationMs - elapsed;
+    return Math.max(0, remaining);
+  }
+  
+  function timeUsedMs() {
+    if (!state.examStartedAt || state.examStartedAt <= 0) return 0;
+    const elapsed = Date.now() - state.examStartedAt;
+    // Cap at exam duration to prevent going over
+    return Math.min(elapsed, state.examDurationMs);
   }
 
   function currentUserState() {
@@ -2006,7 +2039,8 @@ const StressTriggers = (() => {
 
   function showHardQuestionFullScreen(kind) {
     const overlay = document.createElement("div");
-    overlay.className = `hard-question-fullscreen ${kind === "fail" ? "is-fail" : "is-intro"}`;
+    overlay.className = `hard-question-fullscreen ${kind === "fail" || kind === "fail-wrong" ? "is-fail" : "is-intro"}`;
+    
     if (kind === "intro") {
       overlay.innerHTML = `
         <div class="hard-question-center">
@@ -2023,7 +2057,21 @@ const StressTriggers = (() => {
           <div class="hard-question-footnote">Starting now...</div>
         </div>
       `;
+    } else if (kind === "fail-wrong") {
+      // Wrong answer fail screen with shaky skull
+      overlay.innerHTML = `
+        <div class="hard-question-center">
+          <div class="hard-question-icon shake-skull">💀</div>
+          <div class="hard-question-eyebrow">HARD QUESTION · FAILED</div>
+          <div class="hard-question-title">That was the make-or-break moment.</div>
+          <div class="hard-question-box is-fail-box">
+            <div class="hard-question-box-sub">You broke.</div>
+          </div>
+          <div class="hard-question-footnote">Next question in 3s</div>
+        </div>
+      `;
     } else {
+      // Timeout fail screen (30 seconds expired)
       overlay.innerHTML = `
         <div class="hard-question-center">
           <div class="hard-question-icon">💀</div>
@@ -2059,7 +2107,15 @@ const StressTriggers = (() => {
     info.introOverlay?.remove();
     info.failOverlay?.remove();
     const timerEl = document.getElementById("questionTimer");
-    if (timerEl) timerEl.classList.remove("hard-question-countdown");
+    if (timerEl) {
+      timerEl.classList.remove("hard-question-countdown");
+      // Reset timer display to normal exam timer
+      const remainingMs = timeRemainingMs();
+      const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      timerEl.textContent = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    }
     state.hardQuestionChallenge = null;
     state.hardQuestionPostSubmitDelayMs = 0;
   }
@@ -2188,9 +2244,7 @@ const StressTriggers = (() => {
       challenge.tickId = setInterval(() => {
         if (!state.hardQuestionChallenge || state.hardQuestionChallenge.questionId !== challenge.questionId) return;
         const remainingMs = Math.max(0, challenge.deadlineAt - Date.now());
-        const totalSeconds = Math.ceil(remainingMs / 1000);
-        const timer = document.getElementById("questionTimer");
-        if (timer) timer.textContent = `00:${String(Math.max(0, totalSeconds)).padStart(2, "0")}`;
+        // Timer display is now handled by startExamClock
         if (remainingMs > 0) return;
         clearInterval(challenge.tickId);
         challenge.tickId = null;
@@ -2317,25 +2371,61 @@ const StressTriggers = (() => {
 
   function isRecallValid(stemText, inputText) {
     const raw = String(inputText || "").trim();
-    if (raw.length < 12) return false;
+    
+    // Minimum length check - at least 10 characters
+    if (raw.length < 10) {
+      console.log('[isRecallValid] Too short:', raw.length, 'chars');
+      return false;
+    }
+    
+    // Tokenize input
     const inputTokens = raw
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, " ")
       .split(" ")
       .filter(Boolean);
-    if (!inputTokens.length) return false;
+    
+    if (!inputTokens.length) {
+      console.log('[isRecallValid] No valid tokens');
+      return false;
+    }
+    
     const inputSet = new Set(inputTokens);
+    
+    // Extract keywords from question
     const keywords = extractQuestionKeywords(stemText);
+    console.log('[isRecallValid] Question keywords:', keywords);
+    
+    // Count matching keywords
     const matches = keywords.filter((t) => inputSet.has(t)).length;
-    const minMatches = Math.max(2, Math.ceil(keywords.length * 0.34));
+    console.log('[isRecallValid] Keyword matches:', matches, '/', keywords.length);
+    
+    // More lenient threshold: 25% of keywords OR at least 2 keywords
+    const minMatches = Math.max(1, Math.ceil(keywords.length * 0.25));
+    
+    // Check for numbers in the question
     const numbers = String(stemText || "").match(/\b\d+(?:\.\d+)?\b/g) || [];
     const hasNumber = numbers.some((n) => raw.includes(n));
-    return matches >= minMatches || (hasNumber && raw.length >= 16);
+    console.log('[isRecallValid] Has number match:', hasNumber, numbers);
+    
+    // Accept if:
+    // 1. Matches enough keywords
+    // 2. Has a number from the question AND reasonable length (15+ chars)
+    // 3. Very long answer (40+ chars) showing effort
+    const isValid = matches >= minMatches || 
+                    (hasNumber && raw.length >= 15) ||
+                    raw.length >= 40;
+    
+    console.log('[isRecallValid] Result:', isValid, '(matches:', matches, 'minMatches:', minMatches, 'length:', raw.length, ')');
+    return isValid;
   }
 
   function triggerFocusReadGate() {
     const ctx = getActiveQuestionContext();
     if (!ctx.question || !ctx.stemText) return null;
+    
+    console.log('[triggerFocusReadGate] Starting with question:', ctx.stemText);
+    
     const overlay = document.createElement("div");
     overlay.className = "stress-read-gate";
     overlay.dataset.step = "1";
@@ -2359,40 +2449,112 @@ const StressTriggers = (() => {
         <button type="button" class="btn ghost read-gate-btn read-gate-ghost" data-action="giveup">I gave up</button>
         <div class="read-gate-foot">No going back.</div>
       </div>
-      <div class="read-gate-card" data-step="3">
-        <div class="read-gate-emoji" aria-hidden="true">🤥</div>
-        <div class="read-gate-eyebrow">POOR FOCUS</div>
-        <div class="read-gate-title">Your reading focus is bottom tier.</div>
-        <button type="button" class="btn ghost read-gate-btn" data-action="retry">Honesty noted. Fix it.</button>
-      </div>
     `;
     document.body.appendChild(overlay);
 
     const stepInput = overlay.querySelector(".read-gate-input");
+    let isProcessing = false; // Flag to prevent multiple clicks
+    
     const showStep = (step) => {
       overlay.dataset.step = String(step);
       if (step === 2) stepInput?.focus();
     };
 
     const closeGate = () => {
+      console.log('[triggerFocusReadGate] Closing gate and removing overlay');
+      overlay.remove();
       deactivateTrigger("focusReadGate");
     };
 
-    overlay.querySelector('[data-action="unlock"]')?.addEventListener("click", () => showStep(2));
-    overlay.querySelector('[data-action="verify"]')?.addEventListener("click", () => {
-      const value = String(stepInput?.value || "").trim();
-      if (isRecallValid(ctx.stemText, value)) {
-        closeGate();
-      } else {
-        showStep(3);
+    // Show roast message for 4.5 seconds then unlock
+    const showRoastAndUnlock = (message) => {
+      if (isProcessing) {
+        console.log('[triggerFocusReadGate] Already processing, ignoring duplicate click');
+        return;
       }
-    });
-    overlay.querySelector('[data-action="giveup"]')?.addEventListener("click", () => showStep(3));
-    overlay.querySelector('[data-action="retry"]')?.addEventListener("click", () => showStep(2));
+      isProcessing = true;
+      
+      console.log('[triggerFocusReadGate] Showing roast:', message);
+      
+      // Hide the input overlay first
+      overlay.style.display = 'none';
+      
+      const roastOverlay = document.createElement('div');
+      roastOverlay.className = 'stress-difficulty-check-overlay';
+      roastOverlay.style.zIndex = '10003';
+      roastOverlay.innerHTML = `
+        <div class="binary-card" style="max-width: 420px; padding: 28px 24px;">
+          <div class="binary-question" style="font-size: 20px; font-weight: 600; line-height: 1.4; color: #f8fafc;">${message}</div>
+        </div>
+      `;
+      document.body.appendChild(roastOverlay);
+      
+      console.log('[triggerFocusReadGate] Roast overlay appended to body');
+      
+      setTimeout(() => {
+        console.log('[triggerFocusReadGate] Roast complete, unlocking question');
+        roastOverlay.remove();
+        closeGate();
+      }, 4500);
+    };
+
+    const unlockBtn = overlay.querySelector('[data-action="unlock"]');
+    const verifyBtn = overlay.querySelector('[data-action="verify"]');
+    const giveupBtn = overlay.querySelector('[data-action="giveup"]');
+
+    if (unlockBtn) {
+      unlockBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        console.log('[triggerFocusReadGate] Unlock button clicked');
+        showStep(2);
+      });
+    }
+    
+    if (verifyBtn) {
+      verifyBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        if (isProcessing) {
+          console.log('[triggerFocusReadGate] Already processing, ignoring click');
+          return;
+        }
+        
+        const value = String(stepInput?.value || "").trim();
+        console.log('[triggerFocusReadGate] Verify clicked, input:', value);
+        
+        if (isRecallValid(ctx.stemText, value)) {
+          console.log('[triggerFocusReadGate] Answer valid, showing success roast');
+          showRoastAndUnlock("Impressive recall. But reading isn't the hard part — answering correctly is. 📖");
+        } else {
+          console.log('[triggerFocusReadGate] Answer invalid, showing failure roast');
+          showRoastAndUnlock("That's not even close. Were you actually reading, or just staring? 👀");
+        }
+      });
+    }
+    
+    if (giveupBtn) {
+      giveupBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        if (isProcessing) {
+          console.log('[triggerFocusReadGate] Already processing, ignoring click');
+          return;
+        }
+        
+        console.log('[triggerFocusReadGate] Give up button clicked');
+        showRoastAndUnlock("At least you're honest about your lack of focus. That's... something. 🤷");
+      });
+    }
 
     return {
       durationMs: 0,
-      cleanup: () => overlay.remove(),
+      cleanup: () => {
+        console.log('[triggerFocusReadGate] Cleanup called');
+        overlay.remove();
+      },
     };
   }
 
@@ -2915,8 +3077,8 @@ const StressTriggers = (() => {
 
     monitorTimer = setInterval(() => {
       const movedToAnotherQuestion = String(state.currentQuestionId || "") !== qid;
-      const hasAnswer = Boolean(String(selectedOptions[qid] || "").trim());
-      if (movedToAnotherQuestion || hasAnswer) {
+      // Removed hasAnswer check - torchlight should continue even if option is selected
+      if (movedToAnotherQuestion) {
         deactivateTrigger("torchlightSpotlight");
       }
     }, 180);
@@ -2975,9 +3137,20 @@ const StressTriggers = (() => {
     };
   }
 
-  function triggerScreenFlip() {
+  function triggerScreenFlip(ctx) {
     const shell = getAppShell();
     if (!shell) return null;
+    
+    // Get parameters from context
+    const flipCycles = ctx?.flipCycles || 5; // Default 5 cycles
+    const flipDuration = ctx?.flipDuration || 5000; // Default 5s flipped
+    const waitDuration = ctx?.waitDuration || 5000; // Default 5s wait
+    const permanentFinalState = ctx?.permanentFinalState !== false; // Default true
+    
+    console.log(`[triggerScreenFlip] Starting ${flipCycles} flip cycles`);
+    console.log(`[triggerScreenFlip] Flip duration: ${flipDuration}ms, Wait duration: ${waitDuration}ms`);
+    console.log(`[triggerScreenFlip] Permanent final state: ${permanentFinalState}`);
+    
     const taunts = [
       "Orientation is comfort. I just took it.",
       "When the world turns, only discipline stays upright.",
@@ -2988,15 +3161,74 @@ const StressTriggers = (() => {
     const banner = mountDevilTopBanner({
       title: "Devil Flip",
       lead: "I turned your screen against you.",
-      challenge: "Answer now. Can your focus survive a full flip?",
+      challenge: `Answer now. ${flipCycles} flips incoming.`,
       taunt,
     });
 
-    shell.classList.add("stress-screen-flip");
+    let currentCycle = 0;
+    let isFlipped = false;
+    let cycleTimeoutId = null;
+    let isCancelled = false;
+    
+    const performFlipCycle = () => {
+      if (isCancelled) return;
+      
+      currentCycle++;
+      console.log(`[triggerScreenFlip] Cycle ${currentCycle}/${flipCycles} - Flipping screen`);
+      
+      // Flip the screen
+      shell.classList.add("stress-screen-flip");
+      isFlipped = true;
+      
+      // Stay flipped for flipDuration
+      cycleTimeoutId = setTimeout(() => {
+        if (isCancelled) return;
+        
+        // Check if this is the last cycle
+        if (currentCycle >= flipCycles) {
+          // Last cycle - keep flipped permanently if permanentFinalState is true
+          if (permanentFinalState) {
+            console.log(`[triggerScreenFlip] Final cycle ${currentCycle}/${flipCycles} - Staying flipped permanently`);
+            // Don't flip back, leave it flipped
+          } else {
+            console.log(`[triggerScreenFlip] Final cycle ${currentCycle}/${flipCycles} - Flipping back`);
+            shell.classList.remove("stress-screen-flip");
+            isFlipped = false;
+          }
+        } else {
+          // Not the last cycle - flip back
+          console.log(`[triggerScreenFlip] Cycle ${currentCycle}/${flipCycles} - Flipping back`);
+          shell.classList.remove("stress-screen-flip");
+          isFlipped = false;
+          
+          // Wait for waitDuration before next flip
+          cycleTimeoutId = setTimeout(() => {
+            if (isCancelled) return;
+            performFlipCycle(); // Start next cycle
+          }, waitDuration);
+        }
+      }, flipDuration);
+    };
+    
+    // Start the first flip cycle
+    performFlipCycle();
+    
+    // Calculate total duration: (flipDuration + waitDuration) * (cycles - 1) + flipDuration
+    // Last cycle doesn't have a wait period
+    const totalDuration = (flipDuration + waitDuration) * (flipCycles - 1) + flipDuration;
+    
     return {
-      durationMs: stableRange("screenFlip_duration", 2600, 4200),
+      durationMs: totalDuration,
       cleanup: () => {
-        shell.classList.remove("stress-screen-flip");
+        console.log(`[triggerScreenFlip] Cleanup called`);
+        isCancelled = true;
+        if (cycleTimeoutId) {
+          clearTimeout(cycleTimeoutId);
+        }
+        // Only remove flip if not permanent or if we're cleaning up mid-cycle
+        if (!permanentFinalState || currentCycle < flipCycles) {
+          shell.classList.remove("stress-screen-flip");
+        }
         banner.remove();
       },
     };
@@ -4995,40 +5227,173 @@ const StressTriggers = (() => {
   }
 
   // Q4 → ACCURACY_TEST
-  function triggerAccuracyTest() {
+  function triggerAccuracyTest(ctx) {
     if (!questionBody) return null;
     
-    const timers = [];
-    let shakeInterval = null;
+    console.log('[triggerAccuracyTest] Starting accuracy test');
     
+    let shakeTimeoutId = null;
+    const timePenalty = 180000; // 3 minutes penalty (180 seconds)
+    const createdOverlays = []; // Track all created overlays for cleanup
+    let isCleanedUp = false; // Flag to prevent showing popups after cleanup
+    const triggerQuestionId = state.currentQuestionId; // Store the question ID when trigger starts
+    
+    // Create the initial popup - exact colors from design
     const overlay = document.createElement('div');
     overlay.className = 'stress-difficulty-check-overlay';
+    overlay.style.zIndex = '10000';
+    createdOverlays.push(overlay);
     overlay.innerHTML = `
-      <div class="stress-difficulty-check-card">
-        <div class="stress-difficulty-check-emoji">⚠️</div>
-        <div class="stress-difficulty-check-title">Accuracy Challenge</div>
-        <div class="stress-difficulty-check-sub">Can you read through a shaking screen?</div>
-        <div class="binary-actions">
-          <button class="binary-btn" id="accuracy-yes" style="background: rgba(26, 215, 181, 0.15); border-color: rgba(26, 215, 181, 0.5); color: #28d8af;">Yes, I can</button>
-          <button class="binary-btn" id="accuracy-no" style="background: rgba(255, 99, 132, 0.15); border-color: rgba(255, 99, 132, 0.5); color: #ff6384;">No, skip it</button>
+      <div class="stress-difficulty-check-card" style="
+        max-width: 420px; 
+        padding: 40px 28px; 
+        background: rgba(30, 25, 20, 0.98);
+        border: 1px solid rgba(120, 100, 80, 0.3);
+        border-radius: 20px;
+      ">
+        <div class="stress-difficulty-check-emoji" style="font-size: 80px; margin-bottom: 20px;">🎯</div>
+        <div class="stress-difficulty-check-eyebrow" style="
+          font-size: 11px; 
+          letter-spacing: 0.2em; 
+          text-transform: uppercase; 
+          color: #D4A574; 
+          font-weight: 700; 
+          margin-bottom: 16px;
+        ">ACCURACY CHECK</div>
+        <div class="stress-difficulty-check-title" style="
+          font-size: 26px; 
+          font-weight: 700; 
+          margin-bottom: 12px; 
+          line-height: 1.3;
+          color: #FFFFFF;
+        ">Wanna test your accuracy?</div>
+        <div class="stress-difficulty-check-sub" style="
+          font-size: 14px; 
+          color: rgba(180, 170, 160, 0.85); 
+          font-style: italic; 
+          margin-bottom: 28px;
+        ">(Say yes if you're confident you can read anything.)</div>
+        <div class="binary-actions" style="display: flex; gap: 12px; width: 100%;">
+          <button class="binary-btn" id="accuracy-no" style="
+            flex: 1; 
+            background: rgba(50, 45, 40, 0.6); 
+            border: 1px solid rgba(100, 90, 80, 0.4); 
+            color: rgba(200, 190, 180, 0.9); 
+            padding: 16px 24px; 
+            border-radius: 12px; 
+            font-size: 16px; 
+            font-weight: 600; 
+            cursor: pointer; 
+            transition: all 0.2s;
+          ">No</button>
+          <button class="binary-btn" id="accuracy-yes" style="
+            flex: 1; 
+            background: #F5A623; 
+            border: 1px solid #F5A623; 
+            color: #1A1410; 
+            padding: 16px 24px; 
+            border-radius: 12px; 
+            font-size: 16px; 
+            font-weight: 700; 
+            cursor: pointer; 
+            transition: all 0.2s;
+          ">Yes</button>
         </div>
       </div>
     `;
     document.body.appendChild(overlay);
     
+    // Apply time penalty and show penalty UI (Image 2)
     const applyTimePenalty = () => {
-      // Add 10 second penalty
-      if (state.questionStartedAt) {
-        state.questionStartedAt -= 10000;
+      console.log('[triggerAccuracyTest] Applying time penalty:', timePenalty, 'ms');
+      
+      // Apply penalty by making it appear the exam started earlier
+      // This increases the elapsed time, reducing the remaining time
+      if (state.examStartedAt && state.examStartedAt > 0) {
+        state.examStartedAt -= timePenalty;
+        console.log('[triggerAccuracyTest] Exam timer reduced by', timePenalty / 1000, 'seconds. New examStartedAt:', state.examStartedAt);
       }
+      
+      // Show penalty notification (Image 2 style)
+      const penaltyOverlay = document.createElement('div');
+      penaltyOverlay.style.cssText = `
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 10001;
+        width: calc(100% - 40px);
+        max-width: 460px;
+        animation: slideUpFade 0.3s ease;
+      `;
+      
+      const penaltySeconds = Math.floor(timePenalty / 1000);
+      const penaltyMinutes = Math.floor(penaltySeconds / 60);
+      const remainingSeconds = penaltySeconds % 60;
+      const penaltyDisplay = penaltyMinutes > 0 
+        ? `${penaltyMinutes}:${remainingSeconds.toString().padStart(2, '0')}`
+        : `${penaltySeconds}s`;
+      
+      penaltyOverlay.innerHTML = `
+        <div style="
+          background: linear-gradient(135deg, rgba(127, 29, 29, 0.95), rgba(153, 27, 27, 0.95));
+          border: 1px solid rgba(248, 113, 113, 0.4);
+          border-radius: 16px;
+          padding: 20px 24px;
+          display: flex;
+          align-items: center;
+          gap: 16px;
+          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        ">
+          <div style="
+            font-size: 42px;
+            line-height: 1;
+            flex-shrink: 0;
+          ">⏱️</div>
+          <div style="flex: 1;">
+            <div style="
+              font-size: 12px;
+              letter-spacing: 0.1em;
+              text-transform: uppercase;
+              color: rgba(252, 165, 165, 0.9);
+              font-weight: 700;
+              margin-bottom: 4px;
+            ">TIME PENALTY</div>
+            <div style="
+              font-size: 14px;
+              color: rgba(254, 202, 202, 0.95);
+              line-height: 1.4;
+            ">You declined the challenge. −${penaltyDisplay} deducted.</div>
+          </div>
+          <div style="
+            font-size: 32px;
+            font-weight: 800;
+            color: #fca5a5;
+            flex-shrink: 0;
+          ">−${penaltyDisplay}</div>
+        </div>
+      `;
+      
+      document.body.appendChild(penaltyOverlay);
+      
+      // Remove penalty notification after 5 seconds
+      setTimeout(() => {
+        penaltyOverlay.style.opacity = '0';
+        penaltyOverlay.style.transform = 'translateX(-50%) translateY(20px)';
+        penaltyOverlay.style.transition = 'all 0.3s ease';
+        setTimeout(() => penaltyOverlay.remove(), 300);
+      }, 5000);
     };
     
+    // Show roast message
     const showRoast = (message, callback) => {
+      console.log('[triggerAccuracyTest] Showing roast:', message);
       const roastOverlay = document.createElement('div');
       roastOverlay.className = 'stress-difficulty-check-overlay';
+      roastOverlay.style.zIndex = '10002';
       roastOverlay.innerHTML = `
-        <div class="binary-card">
-          <div class="binary-question">${message}</div>
+        <div class="binary-card" style="max-width: 420px; padding: 28px 24px;">
+          <div class="binary-question" style="font-size: 20px; font-weight: 600; line-height: 1.4; color: #f8fafc;">${message}</div>
         </div>
       `;
       document.body.appendChild(roastOverlay);
@@ -5039,76 +5404,151 @@ const StressTriggers = (() => {
       }, 4500);
     };
     
-    document.getElementById('accuracy-yes').addEventListener('click', () => {
-      overlay.remove();
-      
-      // Start 60s screen shake
-      const shell = getAppShell();
-      if (shell) {
-        let shakeTime = 0;
-        shakeInterval = setInterval(() => {
-          const x = (Math.random() - 0.5) * 10;
-          const y = (Math.random() - 0.5) * 10;
-          shell.style.transform = `translate(${x}px, ${y}px)`;
-          shakeTime += 100;
-          
-          if (shakeTime >= 60000) {
-            clearInterval(shakeInterval);
-            shell.style.transform = '';
-            
-            const postOverlay = document.createElement('div');
-            postOverlay.className = 'stress-difficulty-check-overlay';
-            postOverlay.innerHTML = `
-              <div class="stress-difficulty-check-card">
-                <div class="stress-difficulty-check-title">Could you read it?</div>
-                <div class="binary-actions">
-                  <button class="binary-btn" id="post-yes">Yes, I could</button>
-                  <button class="binary-btn" id="post-no">No, I couldn't</button>
-                </div>
-              </div>
-            `;
-            document.body.appendChild(postOverlay);
-            
-            document.getElementById('post-yes').addEventListener('click', () => {
-              postOverlay.remove();
-              const explainOverlay = document.createElement('div');
-              explainOverlay.className = 'stress-difficulty-check-overlay';
-              explainOverlay.innerHTML = `
-                <div class="stress-difficulty-check-card">
-                  <div class="stress-difficulty-check-title">Impressive! Explain how:</div>
-                  <textarea class="trigger-textarea" placeholder="Type your explanation..."></textarea>
-                  <button class="binary-btn" id="explain-submit" style="width: 100%;">Submit</button>
-                </div>
-              `;
-              document.body.appendChild(explainOverlay);
-              
-              document.getElementById('explain-submit').addEventListener('click', () => {
-                explainOverlay.remove();
-              });
-            });
-            
-            document.getElementById('post-no').addEventListener('click', () => {
-              postOverlay.remove();
-              showRoast("Honesty appreciated. But you still get a time penalty! 😈", applyTimePenalty);
-            });
-          }
-        }, 100);
+    // Show post-shake check
+    const showPostShakeCheck = () => {
+      // Don't show if we've moved to a different question or cleanup was called
+      if (isCleanedUp || state.currentQuestionId !== triggerQuestionId) {
+        console.log('[triggerAccuracyTest] Skipping post-shake check - question changed or cleaned up');
+        return;
       }
+      
+      console.log('[triggerAccuracyTest] Showing post-shake check');
+      const postOverlay = document.createElement('div');
+      postOverlay.className = 'stress-difficulty-check-overlay';
+      postOverlay.style.zIndex = '10002';
+      createdOverlays.push(postOverlay); // Track for cleanup
+      postOverlay.innerHTML = `
+        <div class="stress-difficulty-check-card" style="max-width: 420px; padding: 32px 24px;">
+          <div class="stress-difficulty-check-title" style="font-size: 22px; font-weight: 700; margin-bottom: 24px;">Could you read through the shake?</div>
+          <div class="binary-actions" style="display: flex; gap: 12px; width: 100%;">
+            <button class="binary-btn" id="post-no" style="flex: 1; background: rgba(248, 113, 113, 0.15); border: 1px solid rgba(248, 113, 113, 0.4); color: #f87171; padding: 14px 20px; border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer;">No, I couldn't</button>
+            <button class="binary-btn" id="post-yes" style="flex: 1; background: rgba(34, 197, 94, 0.15); border: 1px solid rgba(34, 197, 94, 0.4); color: #22c55e; padding: 14px 20px; border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer;">Yes, I could</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(postOverlay);
+      
+      // Handle "No, I couldn't"
+      document.getElementById('post-no').addEventListener('click', () => {
+        console.log('[triggerAccuracyTest] User said they could not read');
+        postOverlay.remove();
+        showRoast("Honesty is rare. But weakness still has a price. ⏱️", applyTimePenalty);
+      });
+      
+      // Handle "Yes, I could" - show explain trap
+      document.getElementById('post-yes').addEventListener('click', () => {
+        console.log('[triggerAccuracyTest] User said they could read - showing explain trap');
+        postOverlay.remove();
+        
+        const explainOverlay = document.createElement('div');
+        explainOverlay.className = 'stress-difficulty-check-overlay';
+        explainOverlay.style.zIndex = '10003';
+        createdOverlays.push(explainOverlay); // Track for cleanup
+        explainOverlay.innerHTML = `
+          <div class="stress-difficulty-check-card" style="max-width: 480px; padding: 32px 24px;">
+            <div class="stress-difficulty-check-title" style="font-size: 22px; font-weight: 700; margin-bottom: 12px;">Impressive! Explain how:</div>
+            <div class="stress-difficulty-check-sub" style="font-size: 14px; color: rgba(226, 232, 240, 0.7); margin-bottom: 16px;">Tell us your technique for reading through the shake.</div>
+            <textarea class="trigger-textarea" placeholder="Type your explanation..." style="
+              width: 100%;
+              min-height: 120px;
+              padding: 14px;
+              border-radius: 10px;
+              border: 1px solid rgba(148, 163, 184, 0.3);
+              background: rgba(15, 23, 42, 0.6);
+              color: #e2e8f0;
+              font-size: 15px;
+              font-family: inherit;
+              resize: vertical;
+              margin-bottom: 16px;
+            "></textarea>
+            <button class="binary-btn" id="explain-submit" style="
+              width: 100%;
+              background: rgba(59, 130, 246, 0.2);
+              border: 1px solid rgba(59, 130, 246, 0.5);
+              color: #3b82f6;
+              padding: 14px 20px;
+              border-radius: 12px;
+              font-size: 15px;
+              font-weight: 600;
+              cursor: pointer;
+            ">Submit Explanation</button>
+          </div>
+        `;
+        document.body.appendChild(explainOverlay);
+        
+        document.getElementById('explain-submit').addEventListener('click', () => {
+          console.log('[triggerAccuracyTest] User submitted explanation');
+          explainOverlay.remove();
+          showRoast("Interesting technique. We'll see if it actually worked. 🤔", null);
+        });
+      });
+    };
+    
+    // Handle "No" button click
+    document.getElementById('accuracy-no').addEventListener('click', () => {
+      console.log('[triggerAccuracyTest] User clicked No - applying penalty immediately');
+      overlay.remove();
+      applyTimePenalty();
     });
     
-    document.getElementById('accuracy-no').addEventListener('click', () => {
+    // Handle "Yes" button click - activate heartbeat shake
+    document.getElementById('accuracy-yes').addEventListener('click', () => {
+      console.log('[triggerAccuracyTest] User clicked Yes - activating heartbeat shake');
       overlay.remove();
-      showRoast("Smart choice to decline. But you still pay the price! ⏱️", applyTimePenalty);
+      
+      // Deactivate the accuracyTest trigger first to allow heartbeat to activate
+      console.log('[triggerAccuracyTest] Deactivating accuracyTest to allow heartbeat');
+      deactivateTrigger('accuracyTest');
+      
+      // Small delay to ensure deactivation completes
+      setTimeout(() => {
+        // Activate heartbeat vibration trigger
+        // Note: The system caps duration at 20 seconds max, so we use that
+        const shakeDuration = 20000; // 20 seconds (system maximum)
+        
+        console.log('[triggerAccuracyTest] Calling activateTrigger for heartbeatVibration');
+        const result = activateTrigger('heartbeatVibration', {
+          userState: currentUserState(),
+          force: true,
+          reason: 'accuracy_test:shake_challenge',
+          timeoutMs: shakeDuration
+        });
+        
+        console.log('[triggerAccuracyTest] activateTrigger result:', result);
+        
+        if (result) {
+          console.log('[triggerAccuracyTest] Heartbeat shake activated successfully for', shakeDuration, 'ms');
+          // After shake completes, show post-shake check
+          shakeTimeoutId = setTimeout(() => {
+            console.log('[triggerAccuracyTest] Shake complete - showing post-shake check');
+            showPostShakeCheck();
+          }, shakeDuration);
+        } else {
+          console.error('[triggerAccuracyTest] Failed to activate heartbeat shake');
+          // Show post-shake check immediately if activation failed
+          showPostShakeCheck();
+        }
+      }, 100);
     });
     
     return {
-      durationMs: 0,
+      durationMs: 0, // Immediate popup
       cleanup: () => {
-        timers.forEach(t => clearTimeout(t));
-        if (shakeInterval) clearInterval(shakeInterval);
-        overlay.remove();
-        const shell = getAppShell();
-        if (shell) shell.style.transform = '';
+        console.log('[triggerAccuracyTest] Cleanup called - removing all overlays');
+        isCleanedUp = true; // Set flag to prevent future popups
+        
+        // Remove all created overlays
+        createdOverlays.forEach(el => {
+          if (el && el.parentNode) {
+            el.remove();
+          }
+        });
+        
+        // Clear the shake timeout
+        if (shakeTimeoutId) {
+          clearTimeout(shakeTimeoutId);
+          shakeTimeoutId = null;
+        }
       },
     };
   }
@@ -5590,9 +6030,7 @@ const StressTriggers = (() => {
     difficultyCheckPrompt: triggerDifficultyCheckPrompt,
     boucingQuestion: triggerBouncingQuestion,
     // Question-level triggers for Focus Zones test
-    spotlightHunt: triggerSpotlightHunt,
     hardFog: triggerHardFog,
-    flipCycle: triggerFlipCycle,
     accuracyTest: triggerAccuracyTest,
     readingTest: triggerReadingTest,
     hardPeerDoubt: triggerHardPeerDoubt,
@@ -5694,6 +6132,15 @@ const StressTriggers = (() => {
   async function requestTriggerFromAI(eventType, extra) {
     if (disableStressMode) return false;
     if (state.stage !== "popups") return false;
+    
+    // Disable AI trigger system for questions with custom trigger sequences (Q1-Q7 in Focus Zones test)
+    const questionNumber = testQuestionIndex + 1;
+    const triggerInfo = getQuestionTrigger(questionNumber);
+    if (triggerInfo && triggerInfo.name) {
+      console.log('[requestTriggerFromAI] Skipping AI triggers - question has custom trigger sequence:', triggerInfo.name);
+      return false;
+    }
+    
     if (isInterruptionActive()) return false;
     if (isInQuietBreak()) return false;
     if (!testQuestions.length) return false;
@@ -5931,70 +6378,332 @@ const StressTriggers = (() => {
     
     // Check if this is a hard question
     const isHard = isHardDifficulty(question?.difficulty);
+    const questionNumber = testQuestionIndex + 1;
     
-    // Only activate question-level triggers for NON-HARD questions
-    // Hard questions use the hardQuestionChallenge system only
-    if (!isHard) {
-      const questionNumber = testQuestionIndex + 1;
-      console.log('[onQuestionRendered] Current testQuestionIndex:', testQuestionIndex);
-      console.log('[onQuestionRendered] Calculated questionNumber:', questionNumber);
-      console.log('[onQuestionRendered] Question ID:', question?.question_id);
-      console.log('[onQuestionRendered] Question difficulty:', question?.difficulty);
+    console.log('[onQuestionRendered] Current testQuestionIndex:', testQuestionIndex);
+    console.log('[onQuestionRendered] Calculated questionNumber:', questionNumber);
+    console.log('[onQuestionRendered] Question ID:', question?.question_id);
+    console.log('[onQuestionRendered] Question difficulty:', question?.difficulty);
+    
+    // Check if this question has a custom trigger sequence
+    const triggerInfo = getQuestionTrigger(questionNumber);
+    const hasCustomTriggerSequence = triggerInfo && triggerInfo.name;
+    
+    // ONLY use custom trigger sequences for Q1-Q7, disable all automatic trigger activation
+    if (hasCustomTriggerSequence) {
+      console.log('[onQuestionRendered] Activating custom trigger sequence for question:', questionNumber);
       
-      const triggerInfo = getQuestionTrigger(questionNumber);
       if (triggerInfo && triggerInfo.name) {
-        // Different delays for different triggers per specifications
+        // Different delays and sequences for different triggers per specifications
         let delayMs = 5000; // Default 5 seconds
         
-        if (triggerInfo.name === 'spotlightHunt') {
-          delayMs = 6000; // Q1: 6 seconds
-        } else if (triggerInfo.name === 'hardFog') {
-          delayMs = 6000; // Q2: 6 seconds
-        } else if (triggerInfo.name === 'flipCycle') {
-          delayMs = 5000; // Q3: 5 seconds
-        } else if (triggerInfo.name === 'accuracyTest') {
-          delayMs = 1000; // Q4: 1 second (after screen free)
-        } else if (triggerInfo.name === 'readingTest') {
-          delayMs = 3000; // Q5: 3 seconds
-        } else if (triggerInfo.name === 'hardPeerDoubt') {
-          delayMs = 6000; // Q6: 6 seconds
-        } else if (triggerInfo.name === 'billiardBall') {
-          delayMs = 1500; // Q7: 1.5 seconds
+        // Q1 → TORCHLIGHT_SPOTLIGHT
+        // Fires 6 seconds after Q1 loads
+        if (triggerInfo.name === 'torchlightSpotlight') {
+          delayMs = 6000;
+          const timeoutId = setTimeout(() => {
+            console.log(`[onQuestionRendered] Activating Q1 trigger: torchlightSpotlight`);
+            activateTrigger('torchlightSpotlight', {
+              userState: currentUserState(),
+              force: true,
+              reason: `question_trigger:Q${questionNumber}:torchlightSpotlight`,
+              intensity: 'mild',
+              questionNumber: questionNumber
+            });
+          }, delayMs);
+          pendingTriggerTimeouts.push(timeoutId);
         }
         
-        console.log(`[onQuestionRendered] Will activate trigger for Q${questionNumber} in ${delayMs}ms:`, triggerInfo.name);
+        // Q2 → HARD_FOG (with pre-sequence)
+        // Pre-sequence: difficultyCheckPrompt → 2.5s pause → hardQuestion (activateHardQuestionChallenge) → includes 30s timer + fog
+        else if (triggerInfo.name === 'hardFog') {
+          delayMs = 6000;
+          const timeoutId1 = setTimeout(() => {
+            console.log(`[onQuestionRendered] Starting Q2 pre-sequence: difficultyCheckPrompt`);
+            console.log(`[onQuestionRendered] state.feedbackPromptOpen:`, state.feedbackPromptOpen);
+            
+            // Force close any existing feedback prompt to ensure difficultyCheckPrompt can activate
+            if (state.feedbackPromptOpen) {
+              console.log(`[onQuestionRendered] Forcing feedbackPromptOpen to false`);
+              state.feedbackPromptOpen = false;
+              releaseInterruptionLock("feedback");
+            }
+            
+            console.log(`[onQuestionRendered] About to call activateTrigger for difficultyCheckPrompt`);
+            
+            // Step 1: Difficulty rating popup (difficultyCheckPrompt trigger)
+            const difficultyCheckResult = activateTrigger('difficultyCheckPrompt', {
+              userState: currentUserState(),
+              force: true,
+              reason: `question_trigger:Q${questionNumber}:pre_sequence`,
+              questionNumber: questionNumber
+            });
+            
+            console.log(`[onQuestionRendered] difficultyCheckPrompt activation result:`, difficultyCheckResult);
+            
+            if (!difficultyCheckResult) {
+              console.error(`[onQuestionRendered] Failed to activate difficultyCheckPrompt! Skipping to hardQuestion.`);
+              // If difficultyCheckPrompt fails, skip directly to hardQuestion
+              const timeoutId2 = setTimeout(() => {
+                console.log(`[onQuestionRendered] Activating hardQuestion challenge (fallback)`);
+                const q = testQuestions[testQuestionIndex];
+                if (q) {
+                  const hardQuestion = { ...q, difficulty: "hard" };
+                  activateHardQuestionChallenge(hardQuestion);
+                }
+              }, 2500);
+              pendingTriggerTimeouts.push(timeoutId2);
+              return;
+            }
+            
+            // Wait for difficulty check to complete, then continue sequence
+            const waitForDifficultyCheck = setInterval(() => {
+              const isActive = isTriggerActive('difficultyCheckPrompt');
+              console.log(`[onQuestionRendered] Checking if difficultyCheckPrompt is active:`, isActive);
+              
+              if (!isActive) {
+                clearInterval(waitForDifficultyCheck);
+                
+                console.log(`[onQuestionRendered] Difficulty check complete, waiting 2.5s`);
+                
+                // Step 2: 2.5s pause, then activate hardQuestion
+                const timeoutId3 = setTimeout(() => {
+                  console.log(`[onQuestionRendered] Activating hardQuestion challenge`);
+                  
+                  // Step 3: Activate hardQuestion challenge
+                  // This shows "Hard Question Ahead" warning for ~2.1s, then starts 30s countdown with scratch-to-reveal fog
+                  const q = testQuestions[testQuestionIndex];
+                  if (q) {
+                    // Force the question to be treated as hard difficulty
+                    const hardQuestion = { ...q, difficulty: "hard" };
+                    activateHardQuestionChallenge(hardQuestion);
+                  }
+                  
+                }, 2500); // 2.5 second pause
+                pendingTriggerTimeouts.push(timeoutId3);
+              }
+            }, 100); // Check every 100ms
+            
+          }, delayMs);
+          pendingTriggerTimeouts.push(timeoutId1);
+        }
         
-        // Activate trigger after specified delay
-        setTimeout(() => {
-          console.log(`[onQuestionRendered] Now activating trigger for Q${questionNumber}:`, triggerInfo.name);
-          activateTrigger(triggerInfo.name, {
-            userState: currentUserState(),
-            force: true, // Force activation to bypass stage/interruption checks
-            reason: `question_trigger:Q${questionNumber}:${triggerInfo.name}`,
-            intensity: triggerInfo.intensity || 'medium',
-            questionNumber: questionNumber,
-            isHardQuestion: false
-          });
-        }, delayMs);
+        // Q3 → SCREEN_FLIP
+        // Fires 5 seconds after Q3 loads. Flips 180°, stays 5s, flips back, waits 5s, repeats 5 times
+        else if (triggerInfo.name === 'screenFlip') {
+          delayMs = 5000;
+          const timeoutId = setTimeout(() => {
+            console.log(`[onQuestionRendered] Activating Q3 trigger: screenFlip with 5 flip cycles`);
+            activateTrigger('screenFlip', {
+              userState: currentUserState(),
+              force: true,
+              reason: `question_trigger:Q${questionNumber}:screenFlip`,
+              intensity: 'strong',
+              questionNumber: questionNumber,
+              flipCycles: 5, // 5 total flips
+              flipDuration: 5000, // Stay flipped for 5s
+              waitDuration: 5000, // Wait 5s between flips
+              permanentFinalState: true // Final flip state stays permanently
+            });
+          }, delayMs);
+          pendingTriggerTimeouts.push(timeoutId);
+        }
+        
+        // Q4 → ACCURACY_TEST
+        // Fires 1 second after Q4 loads
+        else if (triggerInfo.name === 'accuracyTest') {
+          delayMs = 1000;
+          const timeoutId = setTimeout(() => {
+            console.log(`[onQuestionRendered] Activating Q4 trigger: accuracyTest`);
+            activateTrigger('accuracyTest', {
+              userState: currentUserState(),
+              force: true,
+              reason: `question_trigger:Q${questionNumber}:accuracyTest`,
+              questionNumber: questionNumber
+            });
+          }, delayMs);
+          pendingTriggerTimeouts.push(timeoutId);
+        }
+        
+        // Q5 → READING_TEST
+        // Fires 3 seconds after Q5 loads
+        // Sequence: focusHandSignal (4s) → 8s clear reading → focusReadGate (blur + unlock)
+        else if (triggerInfo.name === 'readingTest') {
+          delayMs = 3000;
+          const timeoutId1 = setTimeout(() => {
+            console.log(`[onQuestionRendered] Starting Q5 sequence: focusHandSignal`);
+            
+            // Step 1: Pointing finger popup for 4 seconds
+            const handSignalActivated = activateTrigger('focusHandSignal', {
+              userState: currentUserState(),
+              force: true,
+              reason: `question_trigger:Q${questionNumber}:focusHandSignal`,
+              timeoutMs: 4000,
+              questionNumber: questionNumber
+            });
+            
+            if (handSignalActivated) {
+              console.log(`[onQuestionRendered] Hand signal activated, scheduling 8s clear reading time`);
+              
+              // Step 2: Wait for hand signal to complete (4s) + 8s clear reading time = 12s total
+              const timeoutId2 = setTimeout(() => {
+                console.log(`[onQuestionRendered] Clear reading time complete, activating focusReadGate`);
+                
+                // Step 3: Blur and lock with unlock button
+                activateTrigger('focusReadGate', {
+                  userState: currentUserState(),
+                  force: true,
+                  reason: `question_trigger:Q${questionNumber}:focusReadGate`,
+                  questionNumber: questionNumber,
+                  roastDuration: 4500, // 4.5 second roast
+                  noAutoTimeout: true // Stays blurred until user interacts
+                });
+              }, 12000); // 4s hand signal + 8s clear reading
+              pendingTriggerTimeouts.push(timeoutId2);
+            } else {
+              console.error(`[onQuestionRendered] Failed to activate focusHandSignal`);
+            }
+          }, delayMs);
+          pendingTriggerTimeouts.push(timeoutId1);
+        }
+        
+        // Q6 → HARD_PEER_DOUBT (with pre-sequence + interception)
+        // Same pre-sequence as Q2: difficultyCheckPrompt → 2.5s pause → hardQuestion challenge
+        else if (triggerInfo.name === 'hardPeerDoubt') {
+          delayMs = 6000;
+          setTimeout(() => {
+            console.log(`[onQuestionRendered] Starting Q6 pre-sequence: difficultyCheckPrompt`);
+            
+            // Enable option feedback interception for this question
+            state.optionFeedbackInterceptionEnabled = true;
+            state.optionFeedbackInterceptionCount = 0;
+            state.optionFeedbackMaxInterceptions = 2;
+            
+            // Force close any existing feedback prompt
+            if (state.feedbackPromptOpen) {
+              console.log(`[onQuestionRendered] Forcing feedbackPromptOpen to false for Q6`);
+              state.feedbackPromptOpen = false;
+              releaseInterruptionLock("feedback");
+            }
+            
+            // Step 1: Difficulty rating popup (difficultyCheckPrompt trigger)
+            const difficultyCheckResult = activateTrigger('difficultyCheckPrompt', {
+              userState: currentUserState(),
+              force: true,
+              reason: `question_trigger:Q${questionNumber}:pre_sequence`,
+              questionNumber: questionNumber
+            });
+            
+            if (!difficultyCheckResult) {
+              console.error(`[onQuestionRendered] Failed to activate difficultyCheckPrompt for Q6! Skipping to hardQuestion.`);
+              setTimeout(() => {
+                const q = testQuestions[testQuestionIndex];
+                if (q) {
+                  const hardQuestion = { ...q, difficulty: "hard" };
+                  activateHardQuestionChallenge(hardQuestion);
+                }
+              }, 2500);
+              return;
+            }
+            
+            // Wait for difficulty check to complete, then continue sequence
+            const waitForDifficultyCheck = setInterval(() => {
+              if (!isTriggerActive('difficultyCheckPrompt')) {
+                clearInterval(waitForDifficultyCheck);
+                
+                console.log(`[onQuestionRendered] Difficulty check complete, waiting 2.5s`);
+                
+                // Step 2: 2.5s pause, then activate hardQuestion
+                setTimeout(() => {
+                  console.log(`[onQuestionRendered] Activating hardQuestion challenge for Q6`);
+                  
+                  // Step 3: Activate hardQuestion challenge
+                  const q = testQuestions[testQuestionIndex];
+                  if (q) {
+                    const hardQuestion = { ...q, difficulty: "hard" };
+                    activateHardQuestionChallenge(hardQuestion);
+                  }
+                  
+                }, 2500);
+              }
+            }, 100);
+            
+          }, delayMs);
+        }
+        
+        // Q7 → BILLIARD_BALL
+        // Fires 1.5 seconds after Q7 loads
+        // Sequence: premiumImagePopup (4s taunt) → 0.8s gap → bouncingQuestion (indefinite)
+        else if (triggerInfo.name === 'billiardBall') {
+          delayMs = 1500;
+          const timeoutId1 = setTimeout(() => {
+            console.log(`[onQuestionRendered] Starting Q7 sequence: premiumImagePopup taunt`);
+            
+            // Step 1: Pre-roast taunt for 4 seconds
+            const tauntActivated = activateTrigger('premiumImagePopup', {
+              userState: currentUserState(),
+              force: true,
+              reason: `question_trigger:Q${questionNumber}:pre_taunt`,
+              timeoutMs: 4000,
+              questionNumber: questionNumber,
+              customMessage: "Final question. Let's see if you can focus now."
+            });
+            
+            if (tauntActivated) {
+              console.log(`[onQuestionRendered] Taunt activated, scheduling bouncing question`);
+              
+              // Step 2: Wait for taunt (4s) + gap (0.8s) = 4.8s total
+              const timeoutId2 = setTimeout(() => {
+                console.log(`[onQuestionRendered] Activating bouncingQuestion`);
+                
+                // Step 3: Bouncing question (indefinite)
+                activateTrigger('boucingQuestion', {
+                  userState: currentUserState(),
+                  force: true,
+                  reason: `question_trigger:Q${questionNumber}:bouncingQuestion`,
+                  questionNumber: questionNumber,
+                  shrinkTo: 0.5, // 50% size
+                  showFocusCallout: true, // "FOCUS!" on each bounce
+                  enableVibration: true, // Vibrate on bounce
+                  indefinite: true // Runs until submission
+                });
+              }, 4800); // 4s taunt + 0.8s gap
+              pendingTriggerTimeouts.push(timeoutId2);
+            } else {
+              console.error(`[onQuestionRendered] Failed to activate premiumImagePopup taunt`);
+            }
+          }, delayMs);
+          pendingTriggerTimeouts.push(timeoutId1);
+        }
+        
+        console.log(`[onQuestionRendered] Trigger sequence initiated for Q${questionNumber}:`, triggerInfo.name);
         
         // Don't call requestTriggerFromAI - we already have a planned trigger
         return;
       }
-    } else {
+    } else if (!hasCustomTriggerSequence) {
       console.log('[onQuestionRendered] Hard question detected - using hardQuestionChallenge only');
     }
     
     // Only call AI trigger system if no question-level trigger was activated
-    requestTriggerFromAI("question_loaded", {
-      question_id: state.currentQuestionId,
-      difficulty: state.questionDifficulty,
-    });
+    // Skip AI triggers for questions with custom trigger sequences
+    if (!triggerInfo || !triggerInfo.name) {
+      requestTriggerFromAI("question_loaded", {
+        question_id: state.currentQuestionId,
+        difficulty: state.questionDifficulty,
+      });
+    }
+    
     setTimeout(() => {
       showFeedbackPulse("question_rendered");
     }, 1200);
-    if (isHard) {
-      activateHardQuestionChallenge(question);
-    } else if (
+    
+    // DISABLED: Automatic hard question activation - only use custom trigger sequences
+    // All trigger activation is now handled by the custom sequence logic above
+    console.log('[onQuestionRendered] Automatic trigger activation disabled - using custom sequences only');
+    
+    // Clean up any existing hard question challenge if it's for a different question
+    if (
       state.hardQuestionChallenge &&
       state.hardQuestionChallenge.questionId !== String(question?.question_id || "")
     ) {
@@ -6058,22 +6767,102 @@ const StressTriggers = (() => {
   function beginExamTimer() {
     if (!state.examStartedAt) {
       state.examStartedAt = Date.now();
+      console.log('[beginExamTimer] Exam started at:', state.examStartedAt, 'Date:', new Date(state.examStartedAt).toISOString());
       state.stressBudget = STRESS_BUDGET_MAX;
+    } else {
+      console.log('[beginExamTimer] Exam already started at:', state.examStartedAt, 'Date:', new Date(state.examStartedAt).toISOString());
     }
     startExamClock();
   }
+  
+  function stopExamTimer() {
+    if (state.examTimerId) {
+      clearInterval(state.examTimerId);
+      state.examTimerId = null;
+      console.log('[stopExamTimer] Exam timer stopped');
+    }
+  }
 
   function startExamClock() {
-    if (state.examTimerId) return;
+    if (state.examTimerId) {
+      console.log('[startExamClock] Timer already running with ID:', state.examTimerId);
+      return;
+    }
+    
+    console.log('[startExamClock] Starting new timer interval');
+    let tickCount = 0;
     state.examTimerId = setInterval(() => {
-      if (state.hardQuestionChallenge && state.hardQuestionChallenge.deadlineAt) return;
+      tickCount++;
+      console.log('[startExamClock] Tick #' + tickCount);
+      
       const el = document.getElementById("questionTimer");
-      if (!el) return;
-      const remainingMs = timeRemainingMs();
-      const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
+      if (!el) {
+        console.warn('[startExamClock] Timer element not found!');
+        return;
+      }
+      
+      // If exam hasn't started yet, show initial time
+      if (!state.examStartedAt || state.examStartedAt <= 0) {
+        el.textContent = "15:00";
+        return;
+      }
+      
+      // If hard question is active, show its countdown instead
+      if (state.hardQuestionChallenge && state.hardQuestionChallenge.deadlineAt) {
+        const remainingMs = Math.max(0, state.hardQuestionChallenge.deadlineAt - Date.now());
+        const totalSeconds = Math.ceil(remainingMs / 1000);
+        el.textContent = `00:${String(Math.max(0, totalSeconds)).padStart(2, "0")}`;
+        return;
+      }
+      
+      // Normal exam timer - countdown from 15:00
+      const now = Date.now();
+      const elapsed = now - state.examStartedAt;
+      const remainingMs = state.examDurationMs - elapsed;
+      
+      // Debug logging (remove after fixing)
+      if (remainingMs > state.examDurationMs || remainingMs < -60000) {
+        console.log('[startExamClock] DEBUG:', {
+          now,
+          examStartedAt: state.examStartedAt,
+          elapsed,
+          examDurationMs: state.examDurationMs,
+          remainingMs,
+          elapsedMinutes: (elapsed / 60000).toFixed(2),
+          remainingMinutes: (remainingMs / 60000).toFixed(2)
+        });
+      }
+      
+      // Cap remaining time to valid range
+      const cappedRemainingMs = Math.max(0, Math.min(remainingMs, state.examDurationMs));
+      
+      const totalSeconds = Math.max(0, Math.ceil(cappedRemainingMs / 1000));
       const minutes = Math.floor(totalSeconds / 60);
       const seconds = totalSeconds % 60;
       el.textContent = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+      
+      // Check if time is up
+      if (cappedRemainingMs <= 0) {
+        console.log('[startExamClock] Time is up! Showing end screen');
+        clearInterval(state.examTimerId);
+        state.examTimerId = null;
+        
+        // Capture the time used (should be full exam duration)
+        const timeUsedAtEnd = StressTriggers.timeUsedMs();
+        
+        // Cancel all pending triggers
+        cancelPendingTriggers();
+        
+        // Deactivate all active triggers
+        if (typeof StressTriggers !== 'undefined' && StressTriggers.deactivateAllTriggers) {
+          StressTriggers.deactivateAllTriggers();
+        }
+        
+        // Show test end screen
+        setTimeout(() => {
+          showTestEndScreen(timeUsedAtEnd);
+        }, 500);
+      }
     }, 1000);
   }
 
@@ -6123,8 +6912,9 @@ const StressTriggers = (() => {
       if (correct) {
         clearHardQuestionChallenge();
       } else {
+        // Wrong answer - show fail-wrong screen with shaky skull
         state.hardQuestionPostSubmitDelayMs = 3200;
-        const failOverlay = showHardQuestionFullScreen("fail");
+        const failOverlay = showHardQuestionFullScreen("fail-wrong");
         state.hardQuestionChallenge.failOverlay = failOverlay;
         setTimeout(() => {
           failOverlay.remove();
@@ -6158,6 +6948,13 @@ const StressTriggers = (() => {
   }
 
   function onReset() {
+    // Clear the exam timer
+    if (state.examTimerId) {
+      clearInterval(state.examTimerId);
+      state.examTimerId = null;
+      console.log('[onReset] Cleared exam timer');
+    }
+    
     state.examStartedAt = 0;
     state.questionStartedAt = 0;
     state.currentQuestionId = "";
@@ -6205,6 +7002,9 @@ const StressTriggers = (() => {
     state.optionFeedbackActive = false;
     state.optionFeedbackQuestionId = "";
     state.optionFeedbackLastOption = "";
+    // Reset Q6 option feedback interception state
+    state.optionFeedbackInterceptionEnabled = false;
+    state.optionFeedbackInterceptionCount = 0;
     closeOptionFeedbackPopup();
     deactivateAllTriggers();
   }
@@ -6385,6 +7185,7 @@ const StressTriggers = (() => {
     isScreenBusyForPopup,
     requestFeedbackPulse: showFeedbackPulse,
     evaluateUserState,
+    currentUserState,
     setStage,
     onQuestionRendered,
     onOptionChange,
@@ -6393,6 +7194,7 @@ const StressTriggers = (() => {
     onOptionPointerDown,
     onOptionPointerUp,
     beginExamTimer,
+    stopExamTimer,
     onPopupsEntered,
     beforeSubmitDelay,
     afterSubmit,
@@ -6405,8 +7207,19 @@ const StressTriggers = (() => {
     recordFollowupAnswer,
     getFollowupAnswers,
     consumePostSubmitDelayMs,
+    // Q6 interception helpers
+    isOptionFeedbackInterceptionEnabled: () => state.optionFeedbackInterceptionEnabled,
+    getOptionFeedbackInterceptionCount: () => state.optionFeedbackInterceptionCount,
+    getOptionFeedbackMaxInterceptions: () => state.optionFeedbackMaxInterceptions,
+    incrementOptionFeedbackInterceptionCount: () => { state.optionFeedbackInterceptionCount++; },
+    // Timer helpers
+    timeUsedMs,
+    timeRemainingMs,
   };
 })();
+
+// Expose StressTriggers to window for access from other scripts
+window.StressTriggers = StressTriggers;
 
 // Socket -------------------------------------------------------------------
 function initSocket() {
@@ -6720,6 +7533,16 @@ function advanceAfterSubmit() {
     setTestHint("Last question saved. You can finish the test.");
     return;
   }
+  
+  // Cancel any pending triggers from the current question
+  cancelPendingTriggers();
+  
+  // Deactivate all active triggers from the current question
+  if (typeof StressTriggers !== 'undefined' && StressTriggers.deactivateAllTriggers) {
+    StressTriggers.deactivateAllTriggers();
+    console.log('[advanceAfterSubmit] Deactivated all active triggers');
+  }
+  
   testQuestionIndex += 1;
   renderTestQuestion();
 }
@@ -6759,6 +7582,12 @@ function applyAdaptiveQuestionDensity(q) {
       questionPanel.classList.add("size-compact");
     }
   });
+}
+
+function stripHardQuestionLabel(html) {
+  // Remove "HARD QUESTION:" label from question HTML
+  if (!html) return html;
+  return html.replace(/<strong>\s*HARD\s+QUESTION\s*:\s*<\/strong>\s*/gi, '');
 }
 
 function renderTestQuestion() {
@@ -6820,7 +7649,9 @@ function renderTestQuestion() {
   updateTestHintForQuestion(q);
   const parts = [];
   if (q.question_html) {
-    parts.push(stripEmbeddedOptionsFromQuestionHtml(q.question_html));
+    // Strip "HARD QUESTION:" label before rendering
+    const cleanedHtml = stripHardQuestionLabel(q.question_html);
+    parts.push(stripEmbeddedOptionsFromQuestionHtml(cleanedHtml));
   }
   ensureStemOptionsInQuestion(q, parts);
   if (Array.isArray(q.question_images)) {
@@ -7040,7 +7871,7 @@ function getQuestionTrigger(questionNumber) {
   console.log('[getQuestionTrigger] Trigger config:', triggerConfig);
   
   // Convert backend trigger name to frontend trigger name
-  // Backend: SPOTLIGHT_HUNT -> Frontend: spotlightHunt
+  // Backend: TORCHLIGHT_SPOTLIGHT -> Frontend: torchlightSpotlight
   const triggerName = triggerConfig.trigger_name;
   if (!triggerName) {
     console.log('[getQuestionTrigger] No trigger_name in config');
@@ -7069,6 +7900,16 @@ function getQuestionTrigger(questionNumber) {
 
 function gotoQuestion(delta) {
   if (!testQuestions.length) return;
+  
+  // Cancel any pending triggers from the previous question
+  cancelPendingTriggers();
+  
+  // Deactivate all active triggers from the previous question
+  if (typeof StressTriggers !== 'undefined' && StressTriggers.deactivateAllTriggers) {
+    StressTriggers.deactivateAllTriggers();
+    console.log('[gotoQuestion] Deactivated all active triggers');
+  }
+  
   testQuestionIndex = Math.min(
     Math.max(testQuestionIndex + delta, 0),
     testQuestions.length - 1
@@ -7130,10 +7971,49 @@ async function mutateQuestionAt(index) {
 }
 
 async function submitCurrentQuestion() {
+  console.log('[submitCurrentQuestion] Called');
+  
   if (!testQuestions.length) {
     setTestHint("Load questions first.");
     return;
   }
+  
+  // Q6 HARD_PEER_DOUBT: Intercept submission with option feedback popup (up to 2 times)
+  // Only intercept if we're actually on Q6 (question number 6)
+  const currentQuestionNumber = testQuestionIndex + 1;
+  
+  if (currentQuestionNumber === 6 &&
+      StressTriggers.isOptionFeedbackInterceptionEnabled() && 
+      StressTriggers.getOptionFeedbackInterceptionCount() < StressTriggers.getOptionFeedbackMaxInterceptions()) {
+    
+    const q = testQuestions[testQuestionIndex];
+    const picked = selectedOptions[q.question_id];
+    
+    if (picked) {
+      StressTriggers.incrementOptionFeedbackInterceptionCount();
+      const count = StressTriggers.getOptionFeedbackInterceptionCount();
+      const max = StressTriggers.getOptionFeedbackMaxInterceptions();
+      console.log(`[submitCurrentQuestion] Q6 Interception ${count}/${max}`);
+      
+      // Activate the trigger to set the flags
+      StressTriggers.activateTrigger('optionFeedbackPopups', {
+        userState: StressTriggers.currentUserState(),
+        force: true,
+        reason: `question_trigger:Q6:peer_doubt_interception`,
+        selectedOption: picked,
+        questionId: q.question_id,
+        interceptionNumber: count
+      });
+      
+      // Show the actual popup (maybeShowOptionFeedbackPopup is inside StressTriggers)
+      // We need to trigger it through option click
+      StressTriggers.onOptionClick(q.question_id, picked);
+      
+      // Don't proceed with submission
+      return;
+    }
+  }
+  
   await StressTriggers.beforeSubmitDelay();
   try {
     const q = testQuestions[testQuestionIndex];
@@ -7161,8 +8041,35 @@ async function submitCurrentQuestion() {
       answeredMap[q.question_id] = { selected: value, correct };
       updateSolutionButtonState();
       updateScoreMeta();
+      const lifelinesBeforeDecrement = _lifelines;
       if (!correct && _lifelines > 0) _lifelines -= 1;
+      console.log('[submitCurrentQuestion] Lifelines:', lifelinesBeforeDecrement, '→', _lifelines, 'Correct:', correct);
       updateLifelineState();
+      
+      // Check if test should end due to lifeline loss
+      if (_lifelines <= 0) {
+        console.log('[submitCurrentQuestion] All lifelines lost! Showing end screen');
+        
+        // Capture the time used at this moment
+        const timeUsedAtEnd = StressTriggers.timeUsedMs();
+        console.log('[submitCurrentQuestion] timeUsedAtEnd:', timeUsedAtEnd);
+        
+        // Cancel all pending triggers
+        cancelPendingTriggers();
+        
+        // Deactivate all active triggers immediately
+        if (typeof StressTriggers !== 'undefined' && StressTriggers.deactivateAllTriggers) {
+          StressTriggers.deactivateAllTriggers();
+          console.log('[submitCurrentQuestion] Deactivated all triggers');
+        }
+        
+        showLifelineLostBanner();
+        setTimeout(() => {
+          showTestEndScreen(timeUsedAtEnd);
+        }, 2000);
+        return; // Don't advance to next question
+      }
+      
       StressTriggers.noteAnswerOutcome(correct, hasAnswerKey);
       setTestHint("Answer saved.");
       const extraDelayMs = StressTriggers.consumePostSubmitDelayMs?.() || 0;
@@ -7196,6 +8103,31 @@ async function submitCurrentQuestion() {
     updateScoreMeta();
     if (!correct && _lifelines > 0) _lifelines -= 1;
     updateLifelineState();
+    
+    // Check if test should end due to lifeline loss
+    if (_lifelines <= 0) {
+      console.log('[submitCurrentQuestion] All lifelines lost! Showing end screen');
+      
+      // Capture the time used at this moment
+      const timeUsedAtEnd = StressTriggers.timeUsedMs();
+      console.log('[submitCurrentQuestion] timeUsedAtEnd:', timeUsedAtEnd);
+      
+      // Cancel all pending trigger timeouts
+      cancelPendingTriggers();
+      
+      // Deactivate all active triggers immediately
+      if (typeof StressTriggers !== 'undefined' && StressTriggers.deactivateAllTriggers) {
+        StressTriggers.deactivateAllTriggers();
+        console.log('[submitCurrentQuestion] Deactivated all triggers');
+      }
+      
+      showLifelineLostBanner();
+      setTimeout(() => {
+        showTestEndScreen(timeUsedAtEnd);
+      }, 2000);
+      return; // Don't advance to next question
+    }
+    
     renderResultStateForCurrentQuestion();
     StressTriggers.noteAnswerOutcome(correct, hasAnswerKey);
     setTestHint(correct ? "Correct answer." : "Wrong answer.");
@@ -7553,6 +8485,306 @@ function updateLifelineState() {
   } else {
     btnLifeline.disabled = false;
   }
+}
+
+function showLifelineLostBanner() {
+  const banner = document.createElement('div');
+  banner.style.cssText = `
+    position: fixed;
+    top: 60px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10000;
+    width: calc(100% - 40px);
+    max-width: 440px;
+    background: linear-gradient(135deg, rgba(120, 53, 15, 0.95), rgba(146, 64, 14, 0.95));
+    border: 1px solid rgba(217, 119, 6, 0.4);
+    border-radius: 12px;
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    animation: slideDown 0.3s ease;
+  `;
+  
+  banner.innerHTML = `
+    <div style="font-size: 24px;">💀</div>
+    <div style="
+      flex: 1;
+      font-size: 15px;
+      font-weight: 600;
+      color: #FEF3C7;
+      letter-spacing: 0.02em;
+    ">All lifelines lost!</div>
+  `;
+  
+  document.body.appendChild(banner);
+  
+  // Auto-remove after 2 seconds
+  setTimeout(() => {
+    banner.style.opacity = '0';
+    banner.style.transform = 'translateX(-50%) translateY(-10px)';
+    banner.style.transition = 'all 0.3s ease';
+    setTimeout(() => banner.remove(), 300);
+  }, 2000);
+}
+
+function showTestEndScreen(timeUsedMs) {
+  console.log('[showTestEndScreen] Called with timeUsedMs:', timeUsedMs);
+  
+  // Stop the exam timer immediately
+  if (StressTriggers && StressTriggers.stopExamTimer) {
+    StressTriggers.stopExamTimer();
+    console.log('[showTestEndScreen] Stopped exam timer');
+  }
+  
+  // Hide the timer element
+  const timerEl = document.getElementById('questionTimer');
+  if (timerEl) {
+    timerEl.style.display = 'none';
+  }
+  
+  // Calculate stats
+  const totalQuestions = testQuestions.length;
+  const correctCount = Object.values(answeredMap).filter(a => a.correct).length;
+  const accuracy = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0;
+  const lifelinesLeft = Math.max(0, _lifelines);
+  const lifelinesTotal = 3;
+  
+  // Validate the provided time - should be between 0 and 15 minutes
+  if (!timeUsedMs || timeUsedMs < 0 || timeUsedMs > 900000) {
+    console.warn('[showTestEndScreen] Invalid timeUsedMs:', timeUsedMs, '- using 0');
+    timeUsedMs = 0;
+  }
+  
+  const minutes = Math.floor(timeUsedMs / 60000);
+  const seconds = Math.floor((timeUsedMs % 60000) / 1000);
+  const timeUsedStr = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  
+  console.log('[showTestEndScreen] Final stats:', { totalQuestions, correctCount, accuracy, lifelinesLeft, timeUsedStr, timeUsedMs });
+  
+  // Calculate focus score (out of 100)
+  const focusScore = Math.min(100, Math.max(0, Math.round(accuracy * 0.7 + (lifelinesLeft / lifelinesTotal) * 30)));
+  
+  // Determine verdict
+  let verdict = "Lifelines gone. Lessons earned.";
+  if (lifelinesLeft > 0 && accuracy >= 80) {
+    verdict = "Strong focus. Keep it sharp.";
+  } else if (lifelinesLeft > 0 && accuracy >= 60) {
+    verdict = "Decent effort. Room to grow.";
+  } else if (lifelinesLeft > 0) {
+    verdict = "Focus wavered. Try again.";
+  }
+  
+  const overlay = document.createElement('div');
+  overlay.style.cssText = `
+    position: fixed;
+    inset: 0;
+    background: #0A0A0A;
+    z-index: 10001;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    animation: fadeIn 0.4s ease;
+  `;
+  
+  overlay.innerHTML = `
+    <style>
+      @keyframes fadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+      @keyframes slideDown {
+        from { transform: translateX(-50%) translateY(-20px); opacity: 0; }
+        to { transform: translateX(-50%) translateY(0); opacity: 1; }
+      }
+      .focus-score-ring {
+        width: 240px;
+        height: 240px;
+        position: relative;
+      }
+      .focus-score-ring svg {
+        transform: rotate(-90deg);
+      }
+      .focus-score-ring circle {
+        fill: none;
+        stroke-width: 12;
+      }
+      .focus-score-bg {
+        stroke: rgba(255, 255, 255, 0.1);
+      }
+      .focus-score-fill {
+        stroke: #F59E0B;
+        stroke-linecap: round;
+        stroke-dasharray: 628;
+        stroke-dashoffset: ${628 - (628 * focusScore / 100)};
+        transition: stroke-dashoffset 1.5s ease;
+      }
+      .breakdown-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 20px 24px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      }
+      .breakdown-row:last-child {
+        border-bottom: none;
+      }
+      .breakdown-label {
+        font-size: 16px;
+        color: rgba(255, 255, 255, 0.5);
+        font-weight: 400;
+      }
+      .breakdown-value {
+        font-size: 18px;
+        color: #FFFFFF;
+        font-weight: 600;
+      }
+      .breakdown-value.success {
+        color: #4ADE80;
+      }
+      .breakdown-value.danger {
+        color: #F87171;
+      }
+    </style>
+    
+    <div style="position: absolute; top: 20px; left: 20px; font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; color: rgba(255, 255, 255, 0.4); font-weight: 600;">FOCUSDOST</div>
+    
+    <button onclick="this.parentElement.remove()" style="
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      background: none;
+      border: none;
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 24px;
+      cursor: pointer;
+      padding: 8px;
+      line-height: 1;
+    ">×</button>
+    
+    <div style="text-align: center; margin-bottom: 40px;">
+      <div style="
+        font-size: 11px;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: #D4A574;
+        font-weight: 700;
+        margin-bottom: 32px;
+      ">FOCUS SCORE</div>
+      
+      <div class="focus-score-ring">
+        <svg width="240" height="240">
+          <circle class="focus-score-bg" cx="120" cy="120" r="100"></circle>
+          <circle class="focus-score-fill" cx="120" cy="120" r="100"></circle>
+        </svg>
+        <div style="
+          position: absolute;
+          inset: 0;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+        ">
+          <div style="font-size: 72px; font-weight: 700; color: #FFFFFF; line-height: 1;">${focusScore}</div>
+          <div style="font-size: 13px; color: rgba(255, 255, 255, 0.5); margin-top: 8px; letter-spacing: 0.1em; text-transform: uppercase;">OUT OF 100</div>
+        </div>
+      </div>
+    </div>
+    
+    <div style="margin-bottom: 40px; text-align: center;">
+      <div style="
+        font-size: 11px;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: #D4A574;
+        font-weight: 700;
+        margin-bottom: 12px;
+      ">VERDICT</div>
+      <div style="
+        font-size: 20px;
+        font-weight: 400;
+        color: #FFFFFF;
+        line-height: 1.4;
+      ">${verdict}</div>
+    </div>
+    
+    <div id="breakdown-toggle" style="
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.5);
+      font-style: italic;
+      cursor: pointer;
+      margin-bottom: 20px;
+      user-select: none;
+    ">tap for breakdown ↓</div>
+    
+    <div id="breakdown-panel" style="
+      width: 100%;
+      max-width: 440px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 16px;
+      overflow: hidden;
+      margin-bottom: 32px;
+      display: none;
+    ">
+      <div class="breakdown-row">
+        <div class="breakdown-label">Accuracy</div>
+        <div class="breakdown-value success">${accuracy}%</div>
+      </div>
+      <div class="breakdown-row">
+        <div class="breakdown-label">Correct</div>
+        <div class="breakdown-value">${correctCount} of ${totalQuestions}</div>
+      </div>
+      <div class="breakdown-row">
+        <div class="breakdown-label">Lifelines left</div>
+        <div class="breakdown-value ${lifelinesLeft === 0 ? 'danger' : ''}">${lifelinesLeft} of ${lifelinesTotal}</div>
+      </div>
+      <div class="breakdown-row">
+        <div class="breakdown-label">Time used</div>
+        <div class="breakdown-value">${timeUsedStr}</div>
+      </div>
+      <div class="breakdown-row">
+        <div class="breakdown-label">Distractions survived</div>
+        <div class="breakdown-value">0 of 0</div>
+      </div>
+    </div>
+    
+    <button onclick="window.location.href='/'" style="
+      width: 100%;
+      max-width: 440px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 12px;
+      color: #FFFFFF;
+      font-size: 16px;
+      font-weight: 600;
+      padding: 16px 24px;
+      cursor: pointer;
+      transition: all 0.2s;
+    " onmouseover="this.style.background='rgba(255, 255, 255, 0.08)'" onmouseout="this.style.background='rgba(255, 255, 255, 0.05)'">Home</button>
+  `;
+  
+  document.body.appendChild(overlay);
+  
+  // Toggle breakdown
+  const toggle = overlay.querySelector('#breakdown-toggle');
+  const panel = overlay.querySelector('#breakdown-panel');
+  let isExpanded = false;
+  
+  toggle.addEventListener('click', () => {
+    isExpanded = !isExpanded;
+    if (isExpanded) {
+      panel.style.display = 'block';
+      toggle.textContent = 'hide breakdown ↑';
+    } else {
+      panel.style.display = 'none';
+      toggle.textContent = 'tap for breakdown ↓';
+    }
+  });
 }
 
 function openSolutionModal() {
