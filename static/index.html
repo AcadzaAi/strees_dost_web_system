@@ -18,6 +18,15 @@
       </div>
       <div style="display: flex; gap: 12px; align-items: center;">
         <span id="userNameDisplay" style="font-size: 14px; color: rgba(255, 255, 255, 0.7);"></span>
+        <span id="sessionCounter" style="
+          font-size: 13px;
+          color: #334155;
+          background: rgba(59, 130, 246, 0.1);
+          padding: 4px 10px;
+          border-radius: 12px;
+          font-weight: 600;
+          display: none;
+        ">Sessions: 0</span>
         <button id="btnLogout" class="logout-btn" title="Logout" type="button" style="
           background: rgba(239, 68, 68, 0.1);
           border: 1px solid rgba(239, 68, 68, 0.3);
@@ -35,22 +44,7 @@
     </header>
 
     <main class="viewport">
-      <section class="stage active" id="stageName">
-        <div class="glass intro-card name-card">
-          <p class="eyebrow">Get started</p>
-          <h2>What should we call you?</h2>
-          <p>Enter your name to personalize the session.</p>
-          <label for="userName" class="label">Name</label>
-          <input id="userName" type="text" placeholder="Enter your name" />
-          <div class="row" id="nameStepRow">
-            <button id="btnNameNext" class="btn primary" type="button">Continue</button>
-          </div>
-
-          <div class="stage-hint" id="nameHint"></div>
-        </div>
-      </section>
-
-      <section class="stage" id="stageIntro">
+      <section class="stage active" id="stageIntro">
         <div class="intro-card story-card focus-screen">
           <div class="focus-shell" id="focusShell">
             <div class="focus-hero-card">

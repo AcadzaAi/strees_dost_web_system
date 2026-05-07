@@ -619,6 +619,7 @@ function setSessionUI(id, domains) {
 
 function syncUserUI() {
   const u = window.StressDostAuth?.getUser?.();
+  console.log('[syncUserUI] User data:', u);
   if (userChip) {
     userChip.textContent = u ? `${u.display_name} · ${String(u.user_id).slice(0, 8)}…` : "";
     userChip.style.display = u ? "inline-flex" : "none";
@@ -626,6 +627,21 @@ function syncUserUI() {
   if (hudUserLine) {
     if (!u) hudUserLine.textContent = "—";
     else hudUserLine.textContent = `${u.display_name} (${u.user_id})`;
+  }
+  // Set story prompt with user's name
+  if (u && u.display_name) {
+    setStoryPrompt(u.display_name);
+  }
+  // Update session counter
+  const sessionCounter = document.getElementById('sessionCounter');
+  console.log('[syncUserUI] Session counter element:', sessionCounter);
+  if (sessionCounter && u) {
+    const completedSessions = u.completed_sessions || 0;
+    console.log('[syncUserUI] Completed sessions:', completedSessions);
+    sessionCounter.textContent = `Sessions: ${completedSessions}`;
+    sessionCounter.style.setProperty('display', 'inline-block', 'important');
+  } else if (sessionCounter) {
+    sessionCounter.style.display = 'none';
   }
 }
 
@@ -709,7 +725,6 @@ function resetFlow() {
     btnSkip.disabled = false;
   }
   answerInput.value = "";
-  if (userNameInput) userNameInput.value = "";
   $("initialText").value = "";
   recordedAudioBlob = null;
   recordingMimeType = "audio/webm";
@@ -726,7 +741,8 @@ function resetFlow() {
   setHint("");
   setNameHint("");
   setIntroHint("");
-  setStoryPrompt("");
+  // Don't clear story prompt - it's set from user profile
+  // setStoryPrompt("");
   // Reset test question panel
   testQuestions = [];
   testQuestionIndex = 0;
@@ -753,7 +769,7 @@ function resetFlow() {
   if (popupOverlay) popupOverlay.innerHTML = "";
   log("reset_flow");
   setSessionUI(null, null);
-  showStage("name");
+  showStage("intro");
 }
 
 function summarizeFollowupThemes(followups) {
@@ -772,7 +788,8 @@ function summarizeFollowupThemes(followups) {
 async function buildDevilBriefPage() {
   const followups = StressTriggers.getFollowupAnswers ? StressTriggers.getFollowupAnswers() : [];
   const themes = summarizeFollowupThemes(followups);
-  const userName = (userNameInput?.value || "").trim() || "challenger";
+  const user = window.StressDostAuth?.getUser?.();
+  const userName = user?.display_name || "challenger";
 
   const planned = {
     trigger_count: 19,
@@ -882,19 +899,6 @@ async function buildDevilBriefPage() {
   if (devilHint) {
     devilHint.textContent = "";
   }
-}
-
-function proceedFromNameStep() {
-  const name = (userNameInput?.value || "").trim();
-  if (!name) {
-    setNameHint("Please enter your name first.");
-    userNameInput?.focus();
-    return;
-  }
-  setNameHint("");
-  setStoryPrompt(name);
-  showStage("intro");
-  $("initialText")?.focus();
 }
 
 async function startRecording() {
@@ -8513,13 +8517,6 @@ btnCloseHud?.addEventListener("click", () => toggleHud(false));
 
 // Events -------------------------------------------------------------------
 btnStart?.addEventListener("click", startSessionFlow);
-btnNameNext?.addEventListener("click", proceedFromNameStep);
-userNameInput?.addEventListener("keydown", (evt) => {
-  if (evt.key === "Enter") {
-    evt.preventDefault();
-    proceedFromNameStep();
-  }
-});
 btnRecord?.addEventListener("click", async () => {
   try {
     if (mediaRecorder && mediaRecorder.state === "recording") {
@@ -8538,8 +8535,17 @@ btnRestart?.addEventListener("click", resetFlow);
 btnReset?.addEventListener("click", resetFlow);
 btnAcceptChallenge?.addEventListener("click", acceptDevilChallenge);
 btnLogout?.addEventListener("click", () => {
-  window.StressDostAuth?.clearUser?.();
-  window.location.href = "/login";
+  if (confirm('Are you sure you want to logout?')) {
+    window.StressDostAuth?.clearUser?.();
+    // Clear localStorage
+    try {
+      localStorage.removeItem('sd_user');
+      localStorage.removeItem('sd_mood');
+    } catch (e) {
+      console.error('Failed to clear localStorage:', e);
+    }
+    window.location.href = "/login";
+  }
 });
 btnPrevQuestion?.addEventListener("click", () => gotoQuestion(-1));
 btnNextQuestion?.addEventListener("click", () => gotoQuestion(1));
@@ -9118,6 +9124,8 @@ async function showTestEndScreen(timeUsedMs) {
         user.completed_sessions = data.completed_sessions;
         window.StressDostAuth.setUser(user);
         console.log('[showTestEndScreen] Updated user completed_sessions to:', data.completed_sessions);
+        // Update UI to show new session count
+        syncUserUI();
       }
     } catch (err) {
       console.error('[showTestEndScreen] Failed to increment completed session:', err);
@@ -9435,6 +9443,36 @@ if (!window.StressDostAuth?.getUser?.()) {
   }
 } else {
   syncUserUI();
+  
+  // Show logout button, user name, and session counter if logged in
+  const user = window.StressDostAuth?.getUser?.();
+  console.log('[Init] User data for session counter:', user);
+  if (user && user.display_name) {
+    const userNameDisplay = document.getElementById('userNameDisplay');
+    if (userNameDisplay) {
+      userNameDisplay.textContent = user.display_name;
+    }
+    if (btnLogout) {
+      btnLogout.style.display = 'block';
+    }
+    
+    // Show session counter
+    const sessionCounter = document.getElementById('sessionCounter');
+    console.log('[Init] Session counter element:', sessionCounter);
+    if (sessionCounter) {
+      const completedSessions = user.completed_sessions || 0;
+      console.log('[Init] Completed sessions:', completedSessions);
+      sessionCounter.textContent = `Sessions: ${completedSessions}`;
+      sessionCounter.style.setProperty('display', 'inline-block', 'important');
+      console.log('[Init] Session counter display set to:', sessionCounter.style.display);
+      console.log('[Init] Session counter computed display:', window.getComputedStyle(sessionCounter).display);
+    } else {
+      console.error('[Init] Session counter element not found!');
+    }
+  } else {
+    console.log('[Init] No user or display_name, not showing session counter');
+  }
+  
   StressTriggers.attachGlobalListeners();
   // Dev panel removed for production
   resetFlow();
@@ -9465,35 +9503,3 @@ window.__stressApp = {
     pendingTestStart = params;
   },
 };
-
-
-// Logout functionality
-if (btnLogout) {
-  // Show logout button and user name if logged in
-  const user = window.StressDostAuth?.getUser?.();
-  if (user && user.display_name) {
-    const userNameDisplay = document.getElementById('userNameDisplay');
-    if (userNameDisplay) {
-      userNameDisplay.textContent = user.display_name;
-    }
-    btnLogout.style.display = 'block';
-  }
-  
-  btnLogout.addEventListener('click', () => {
-    if (confirm('Are you sure you want to logout?')) {
-      // Clear user data
-      window.StressDostAuth?.clearUser?.();
-      
-      // Clear localStorage
-      try {
-        localStorage.removeItem('sd_user');
-        localStorage.removeItem('sd_mood');
-      } catch (e) {
-        console.error('Failed to clear localStorage:', e);
-      }
-      
-      // Redirect to login page
-      window.location.href = '/login';
-    }
-  });
-}
