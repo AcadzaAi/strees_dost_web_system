@@ -7,6 +7,10 @@ import eventlet
 eventlet.monkey_patch()
 
 import sys
+import logging
+
+# Suppress eventlet socket errors
+logging.getLogger('gunicorn.error').setLevel(logging.CRITICAL)
 
 import os
 import sys
