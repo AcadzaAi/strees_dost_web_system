@@ -7139,6 +7139,8 @@ const StressTriggers = (() => {
     }
   }
 
+  // Dev panel completely removed for production
+  /*
   function mountDevPanel() {
     if (!enableDevTriggerPanel || !hudPanel) return;
     const existingPanel = document.getElementById("devTriggerPanel");
@@ -7242,6 +7244,7 @@ const StressTriggers = (() => {
     panel.appendChild(clearFollowupsBtn);
     hudPanel.appendChild(panel);
   }
+  */
 
   function attachGlobalListeners() {
     ["click", "keydown", "scroll", "pointerdown"].forEach((eventName) => {
@@ -7316,7 +7319,7 @@ const StressTriggers = (() => {
     noteAnswerOutcome,
     onReset,
     attachGlobalListeners,
-    mountDevPanel,
+    // mountDevPanel removed for production
     getTriggerNames,
     activateManualShowcaseTrigger,
     recordFollowupAnswer,
@@ -9424,7 +9427,7 @@ if (!window.StressDostAuth?.getUser?.()) {
 } else {
   syncUserUI();
   StressTriggers.attachGlobalListeners();
-  StressTriggers.mountDevPanel();
+  // Dev panel removed for production
   resetFlow();
   initSocket();
   setRecordButtonState();

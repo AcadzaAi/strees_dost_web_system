@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 # IMPORTANT: apply eventlet patches before anything else in server mode.
-# Skip for CLI/Flask commands (flask, alembic) to avoid monkey-patch noise during migrations.
+# For gunicorn with eventlet worker, always apply monkey patch
+import eventlet
+eventlet.monkey_patch()
+
 import sys
-if not any("flask" in arg for arg in sys.argv) and not any("alembic" in arg for arg in sys.argv):
-    import eventlet
-    eventlet.monkey_patch()
 
 import os
 import sys
