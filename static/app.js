@@ -9139,6 +9139,15 @@ async function showTestEndScreen(timeUsedMs) {
       toggle.textContent = 'tap for breakdown ↓';
     }
   });
+  
+  // Home button handler
+  const homeBtn = overlay.querySelector('button');
+  if (homeBtn) {
+    homeBtn.addEventListener('click', () => {
+      overlay.remove();
+      window.location.href = '/';
+    });
+  }
 }
 
 function openSolutionModal() {
