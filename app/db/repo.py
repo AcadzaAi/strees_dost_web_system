@@ -5,8 +5,9 @@ from ..extensions import db
 from .models import Session
 
 
-def create_session(raw_initial_text: str) -> Session:
+def create_session(raw_initial_text: str, user_id: str | None = None) -> Session:
     session = Session(
+        user_id=user_id,
         raw_initial_text=raw_initial_text,
         history=[{"role": "user", "text": raw_initial_text}],
         active_domains=[],

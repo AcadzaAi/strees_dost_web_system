@@ -266,69 +266,210 @@ class QuestionIDLoader:
             return list(self.question_ids)
         return random.sample(self.question_ids, count)
 
-    def get_test_ids(self, subject: str = None, topics: list = None) -> List[str]:
-        """Get 7 unique test IDs filtered by subject/topics with graceful fallback.
+    def get_test_ids(self, subject: str = None, topics: list = None, is_new_user: bool = True) -> List[str]:
+        """Get 7 unique test IDs: 2 hard + 5 medium, filtered by subject/chapter.
         
-        Priority: topic-matching → same-subject fill → all questions fill.
-        Aims for 2 hard + 5 easy/medium but adapts when pools are small.
+        For new users (first session):
+        - Q1: Medium, Q2: Hard, Q3-Q5: Medium, Q6: Hard, Q7: Medium
+        
+        For returning users:
+        - Q1: Always Medium (never hard)
+        - Q2-Q7: Random mix of 2 hard + 4 medium
+        
+        Priority: 
+        1. Try to get 2 hard + 5 medium from matching chapter
+        2. If not enough, fill from same subject
+        3. If still not enough, fill from any questions
+        
+        Returns list of 7 question IDs.
         """
         TARGET = 7
+        HARD_COUNT = 2
+        MEDIUM_COUNT = 5
+        
         if not self.enriched_data:
             return self.get_random_ids(TARGET)
 
-        # ---- Build pools ----
-        subject_pool = self.enriched_data  # all questions
-        topic_pool: list[dict] = []
+        # ---- Build pools by difficulty ----
+        chapter_pool_hard: list[dict] = []
+        chapter_pool_medium: list[dict] = []
+        subject_pool_hard: list[dict] = []
+        subject_pool_medium: list[dict] = []
+        all_pool_hard: list[dict] = []
+        all_pool_medium: list[dict] = []
 
-        if subject:
-            subject_pool = [
-                q for q in self.enriched_data
-                if (q.get("subject") or "").lower() == subject.lower()
-            ]
-
-        if topics and subject_pool:
-            topic_lower = [t.lower() for t in topics]
-            for q in subject_pool:
+        # Categorize all questions
+        for q in self.enriched_data:
+            level = (q.get("level") or "").upper()
+            is_hard = level == "HARD"
+            is_medium = level == "MEDIUM"
+            
+            # Check if matches subject
+            matches_subject = False
+            if subject:
+                q_subject = (q.get("subject") or "").lower()
+                matches_subject = q_subject == subject.lower()
+            
+            # Check if matches chapter (from topics list)
+            matches_chapter = False
+            if topics and matches_subject:
+                q_chapter = (q.get("chapter") or "").lower()
+                topic_lower = [t.lower() for t in topics]
+                # Check if chapter matches any topic
+                if q_chapter in topic_lower:
+                    matches_chapter = True
+                # Also check concepts/sub_concepts
                 q_topics: set[str] = set()
-                if q.get("chapter"):
-                    q_topics.add(q["chapter"].lower())
                 if q.get("concepts"):
                     q_topics.update(c.lower() for c in q["concepts"].split("|"))
                 if q.get("sub_concepts"):
                     q_topics.update(c.lower() for c in q["sub_concepts"].split("|"))
                 if any(t in q_topics for t in topic_lower):
-                    topic_pool.append(q)
+                    matches_chapter = True
+            
+            # Add to appropriate pools
+            if matches_chapter:
+                if is_hard:
+                    chapter_pool_hard.append(q)
+                elif is_medium:
+                    chapter_pool_medium.append(q)
+            
+            if matches_subject:
+                if is_hard:
+                    subject_pool_hard.append(q)
+                elif is_medium:
+                    subject_pool_medium.append(q)
+            
+            if is_hard:
+                all_pool_hard.append(q)
+            elif is_medium:
+                all_pool_medium.append(q)
 
-        # ---- Select with dedup ----
-        selected: list[dict] = []
+        logger.info(
+            "Pools - Chapter: %d hard, %d medium | Subject: %d hard, %d medium | All: %d hard, %d medium",
+            len(chapter_pool_hard), len(chapter_pool_medium),
+            len(subject_pool_hard), len(subject_pool_medium),
+            len(all_pool_hard), len(all_pool_medium)
+        )
+
+        # ---- Select questions with dedup ----
+        selected_hard: list[dict] = []
+        selected_medium: list[dict] = []
         seen_ids: set[str] = set()
 
-        def _add(items: list[dict], count: int) -> None:
-            """Add up to `count` unique items from `items` into selected."""
+        def _add(items: list[dict], target_list: list[dict], count: int) -> None:
+            """Add up to `count` unique items from `items` into target_list."""
             available = [q for q in items if q["question_id"] not in seen_ids]
             pick = random.sample(available, min(count, len(available)))
             for q in pick:
-                selected.append(q)
+                target_list.append(q)
                 seen_ids.add(q["question_id"])
 
-        # Step 1: grab all topic-matching questions (up to TARGET)
-        if topic_pool:
-            _add(topic_pool, TARGET)
-            logger.info("Topic pool gave %d questions", len(selected))
+        # Step 1: Try to get hard questions from chapter → subject → all
+        if len(selected_hard) < HARD_COUNT and chapter_pool_hard:
+            _add(chapter_pool_hard, selected_hard, HARD_COUNT - len(selected_hard))
+            logger.info("Chapter pool gave %d hard questions", len(selected_hard))
+        
+        if len(selected_hard) < HARD_COUNT and subject_pool_hard:
+            _add(subject_pool_hard, selected_hard, HARD_COUNT - len(selected_hard))
+            logger.info("Subject pool filled to %d hard questions", len(selected_hard))
+        
+        if len(selected_hard) < HARD_COUNT and all_pool_hard:
+            _add(all_pool_hard, selected_hard, HARD_COUNT - len(selected_hard))
+            logger.info("Global pool filled to %d hard questions", len(selected_hard))
 
-        # Step 2: fill remaining from subject pool
-        if len(selected) < TARGET and subject_pool:
-            _add(subject_pool, TARGET - len(selected))
-            logger.info("Subject pool filled to %d questions", len(selected))
+        # Step 2: Try to get medium questions from chapter → subject → all
+        if len(selected_medium) < MEDIUM_COUNT and chapter_pool_medium:
+            _add(chapter_pool_medium, selected_medium, MEDIUM_COUNT - len(selected_medium))
+            logger.info("Chapter pool gave %d medium questions", len(selected_medium))
+        
+        if len(selected_medium) < MEDIUM_COUNT and subject_pool_medium:
+            _add(subject_pool_medium, selected_medium, MEDIUM_COUNT - len(selected_medium))
+            logger.info("Subject pool filled to %d medium questions", len(selected_medium))
+        
+        if len(selected_medium) < MEDIUM_COUNT and all_pool_medium:
+            _add(all_pool_medium, selected_medium, MEDIUM_COUNT - len(selected_medium))
+            logger.info("Global pool filled to %d medium questions", len(selected_medium))
 
-        # Step 3: fill from everything if still short
-        if len(selected) < TARGET:
-            _add(self.enriched_data, TARGET - len(selected))
-            logger.info("Global pool filled to %d questions", len(selected))
+        # Step 3: If still short, fill with any remaining questions
+        all_remaining = [q for q in self.enriched_data if q["question_id"] not in seen_ids]
+        needed = TARGET - len(selected_hard) - len(selected_medium)
+        if needed > 0 and all_remaining:
+            pick = random.sample(all_remaining, min(needed, len(all_remaining)))
+            for q in pick:
+                level = (q.get("level") or "").upper()
+                if level == "HARD":
+                    selected_hard.append(q)
+                else:
+                    selected_medium.append(q)
+                seen_ids.add(q["question_id"])
+            logger.info("Filled remaining %d questions from all pool", len(pick))
 
-        # Shuffle and return IDs
-        random.shuffle(selected)
-        return [q["question_id"] for q in selected]
+        # Step 4: Arrange questions based on user type
+        final_questions: list[dict] = []
+        
+        # Shuffle both pools
+        random.shuffle(selected_hard)
+        random.shuffle(selected_medium)
+        
+        if is_new_user:
+            # NEW USER: Fixed positions - Q2 and Q6 are hard
+            # Q1(M), Q2(H), Q3(M), Q4(M), Q5(M), Q6(H), Q7(M)
+            medium_idx = 0
+            hard_idx = 0
+            
+            for i in range(TARGET):
+                if i == 1 or i == 5:  # Q2 or Q6 (0-indexed: 1 and 5)
+                    if hard_idx < len(selected_hard):
+                        final_questions.append(selected_hard[hard_idx])
+                        hard_idx += 1
+                    elif medium_idx < len(selected_medium):
+                        final_questions.append(selected_medium[medium_idx])
+                        medium_idx += 1
+                else:
+                    if medium_idx < len(selected_medium):
+                        final_questions.append(selected_medium[medium_idx])
+                        medium_idx += 1
+                    elif hard_idx < len(selected_hard):
+                        final_questions.append(selected_hard[hard_idx])
+                        hard_idx += 1
+            
+            logger.info(
+                "NEW USER - Fixed positions: Q1=%s, Q2=%s, Q3=%s, Q4=%s, Q5=%s, Q6=%s, Q7=%s",
+                final_questions[0].get("level") if len(final_questions) > 0 else "N/A",
+                final_questions[1].get("level") if len(final_questions) > 1 else "N/A",
+                final_questions[2].get("level") if len(final_questions) > 2 else "N/A",
+                final_questions[3].get("level") if len(final_questions) > 3 else "N/A",
+                final_questions[4].get("level") if len(final_questions) > 4 else "N/A",
+                final_questions[5].get("level") if len(final_questions) > 5 else "N/A",
+                final_questions[6].get("level") if len(final_questions) > 6 else "N/A"
+            )
+        else:
+            # RETURNING USER: Q1 always medium, Q2-Q7 random mix
+            # Ensure Q1 is medium
+            if selected_medium:
+                final_questions.append(selected_medium.pop(0))
+            elif selected_hard:
+                # Fallback: use hard if no medium available
+                final_questions.append(selected_hard.pop(0))
+            
+            # Mix remaining questions randomly for Q2-Q7
+            remaining = selected_medium + selected_hard
+            random.shuffle(remaining)
+            final_questions.extend(remaining[:6])  # Add 6 more questions
+            
+            logger.info(
+                "RETURNING USER - Random mix: Q1=%s, Q2=%s, Q3=%s, Q4=%s, Q5=%s, Q6=%s, Q7=%s",
+                final_questions[0].get("level") if len(final_questions) > 0 else "N/A",
+                final_questions[1].get("level") if len(final_questions) > 1 else "N/A",
+                final_questions[2].get("level") if len(final_questions) > 2 else "N/A",
+                final_questions[3].get("level") if len(final_questions) > 3 else "N/A",
+                final_questions[4].get("level") if len(final_questions) > 4 else "N/A",
+                final_questions[5].get("level") if len(final_questions) > 5 else "N/A",
+                final_questions[6].get("level") if len(final_questions) > 6 else "N/A"
+            )
+
+        return [q["question_id"] for q in final_questions]
 
     def get_all_ids(self) -> List[str]:
         return self.question_ids
@@ -568,13 +709,19 @@ def load_test_questions():
     # Do not cache this route: fallback responses should not persist across retries.
     subject = None
     topics = []
+    is_new_user = True  # Default to new user
     
     if request.method == "POST":
         data = request.get_json(force=True, silent=True) or {}
         subject = data.get("subject")
         topics = data.get("topics") or []
+        # Check if user is new based on completed_sessions count
+        user_profile = data.get("user_profile") or {}
+        completed_sessions = user_profile.get("completed_sessions", 0)
+        is_new_user = completed_sessions == 0
+        logger.info("User type: %s (completed_sessions=%d)", "NEW" if is_new_user else "RETURNING", completed_sessions)
 
-    question_ids = question_loader.get_test_ids(subject=subject, topics=topics)
+    question_ids = question_loader.get_test_ids(subject=subject, topics=topics, is_new_user=is_new_user)
     if not question_ids:
         fallback = _local_fallback_questions(count=7)
         return jsonify(
@@ -609,6 +756,7 @@ def load_test_questions():
             "status": "success",
             "questions": formatted,
             "total_questions": len(formatted),
+            "is_new_user": is_new_user,
             "timestamp": datetime.utcnow().isoformat(),
         }
     )
@@ -661,11 +809,13 @@ def get_trigger_plan():
     Request body:
     {
         "user_profile": {
-            "name": "John",  // Empty if new user
-            "test_count": 0,  // 0 for new user
+            "name": "John",  # Empty if new user
+            "test_count": 0,  # 0 for new user
+            "completed_sessions": 0,
             "last_test_date": "2026-05-01",
-            "previous_triggers": ["TORCHLIGHT_SPOTLIGHT", "HARD_FOG", ...]  // From last test
-        }
+            "previous_triggers": ["TORCHLIGHT_SPOTLIGHT", "HARD_FOG", ...]  # From last test
+        },
+        "question_difficulties": ["MEDIUM", "HARD", "MEDIUM", ...]  # Optional: difficulty level for each question
     }
     
     Response:
@@ -687,31 +837,48 @@ def get_trigger_plan():
             },
             ...
         ],
-        "medium_questions": [...],  // 5 medium trigger configs
-        "hard_questions": [...]     // 2 hard trigger configs
+        "medium_questions": [...],  # 5 medium trigger configs
+        "hard_questions": [...]     # 2 hard trigger configs
     }
     """
     try:
         body = request.get_json(force=True, silent=True) or {}
         user_profile = body.get("user_profile") or {}
+        question_difficulties = body.get("question_difficulties")  # List of HARD/MEDIUM for each question
         
         # Extract previous triggers if available
         previous_triggers = user_profile.get("previous_triggers")
         
+        # Log the request for debugging
+        logger.info(
+            "trigger_plan request: user_profile=%s, question_difficulties=%s",
+            user_profile,
+            question_difficulties
+        )
+        
         # Generate test plan
-        plan = get_full_test_plan(user_profile, previous_triggers)
+        plan = get_full_test_plan(user_profile, previous_triggers, question_difficulties)
         
         logger.info(
-            "trigger_plan: user_type=%s medium=%d hard=%d",
+            "trigger_plan response: user_type=%s medium=%d hard=%d difficulties=%s",
             plan["user_type"],
             plan["medium_count"],
             plan["hard_count"],
+            question_difficulties,
         )
         
-        return jsonify({
+        response = jsonify({
             "status": "success",
+            "timestamp": datetime.utcnow().isoformat(),
             **plan,
         })
+        
+        # Add no-cache headers to prevent browser caching
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        
+        return response
     
     except Exception as exc:
         logger.exception("trigger_plan failed: %s", exc)

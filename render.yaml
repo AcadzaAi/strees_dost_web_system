@@ -1,29 +1,44 @@
 services:
   - type: web
-    name: stree-dost
+    name: stress-dost
     runtime: python
     env: python
     plan: free
     pythonVersion: 3.12
     buildCommand: pip install -r requirements.txt && python -m flask db upgrade
-    startCommand: gunicorn --worker-class eventlet -w 1 -b 0.0.0.0:${PORT:-5002} wsgi:app
+    startCommand: gunicorn --worker-class eventlet -w 1 --timeout 120 -b 0.0.0.0:${PORT:-10000} wsgi:app
     autoDeploy: true
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
       - key: PORT
-        value: 5002
+        generateValue: true
+      - key: FLASK_ENV
+        value: production
       - key: OPENAI_API_KEY
+        sync: false
+      - key: ACADZA_API_URL
+        value: https://api.acadza.in/question/details
+      - key: ACADZA_COURSE
+        sync: false
+      - key: ACADZA_AUTH
+        sync: false
+      - key: ACADZA_API_KEY
         sync: false
       - key: DATABASE_URL
         sync: false
       - key: SOCKETIO_CORS_ALLOWED_ORIGINS
         value: "*"
       - key: MIN_QUESTIONS
-        value: "2"
+        value: "7"
       - key: MAX_QUESTIONS
-        value: "2"
+        value: "7"
       - key: MAX_DOMAIN_QUESTIONS
-        value: "2"
+        value: "7"
+      - key: QUESTION_IDS_CSV
+        value: /opt/render/project/src/data/question_ids_enriched.csv
     disk:
       name: sqlite-data
-      mountPath: /opt/render/project/.render-data
+      mountPath: /opt/render/project/src/instance
       sizeGB: 1
+

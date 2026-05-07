@@ -13,6 +13,7 @@ from .api.academic_routes import bp as academic_bp
 from .api.trigger_routes import bp as trigger_bp
 from .api.ui_routes import bp as ui_bp
 from .api.extract_routes import bp as extract_bp
+from .api.user_routes import bp as user_bp
 from .api.question_routes import init_question_service
 from .config import Config
 from .extensions import db, migrate, socketio
@@ -40,6 +41,7 @@ def create_app():
     app.register_blueprint(health_bp)
     app.register_blueprint(trigger_bp)
     app.register_blueprint(extract_bp)
+    app.register_blueprint(user_bp)
     init_question_service(app)
 
     return app

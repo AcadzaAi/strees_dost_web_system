@@ -41,24 +41,36 @@ class QuestionTriggerDecisionEngine:
         New user = no saved name or first time taking test.
         
         Args:
-            user_profile: Dict with keys like 'name', 'test_count', 'last_test_date'
+            user_profile: Dict with keys like 'name', 'test_count', 'completed_sessions', 'last_test_date'
             
         Returns:
             True if new user, False if returning user
         """
         if not user_profile:
+            logger.info("is_new_user: No user_profile provided → NEW USER")
             return True
         
         # Check if name is saved
         name = user_profile.get("name", "").strip()
         if not name:
+            logger.info("is_new_user: No name saved → NEW USER")
             return True
         
-        # Check if user has taken test before
+        # Check if user has taken test before (check both test_count and completed_sessions)
         test_count = user_profile.get("test_count", 0)
-        if test_count == 0:
+        completed_sessions = user_profile.get("completed_sessions", 0)
+        
+        logger.info(
+            "is_new_user: name='%s', test_count=%d, completed_sessions=%d",
+            name, test_count, completed_sessions
+        )
+        
+        # User is new if both are 0
+        if test_count == 0 and completed_sessions == 0:
+            logger.info("is_new_user: Both counts are 0 → NEW USER")
             return True
         
+        logger.info("is_new_user: Has previous sessions → RETURNING USER")
         return False
 
     def get_trigger_sequence_for_new_user(self) -> List[Dict]:
@@ -84,86 +96,123 @@ class QuestionTriggerDecisionEngine:
     def get_trigger_sequence_for_returning_user(
         self,
         previous_triggers: Optional[List[str]] = None,
+        question_difficulties: Optional[List[str]] = None,
     ) -> List[Dict]:
         """Get randomized trigger sequence for returning users.
         
-        Constraints:
-        - Q1: Never hard (only medium triggers)
-        - Q2-Q7: Completely random (hard can appear on Q2, Q3, Q4, Q5, Q6)
-        - Exactly 2 hard questions total
-        - Exactly 5 medium questions total
-        - Avoid immediate repetition from previous test if possible
+        For returning users:
+        - Q1: Always Medium (never hard)
+        - Q2-Q7: Random mix of 2 hard + 4 medium questions
+        - Hard questions get Q2 or Q6 trigger definitions randomly
+        - Medium questions get other trigger definitions randomly
+        - Each question maintains its complete trigger cycle
         
         Args:
             previous_triggers: List of trigger names from user's last test
+            question_difficulties: List of difficulty levels for each question (HARD/MEDIUM)
             
         Returns:
             List of 7 trigger configs in randomized order
         """
         # Prepare pools
-        available_hard = self.hard_triggers.copy()
-        available_medium = self.medium_triggers.copy()
+        available_hard_triggers = self.hard_triggers.copy()
+        available_medium_triggers = self.medium_triggers.copy()
         
         # Avoid immediate repetition if possible
         if previous_triggers:
             last_trigger = previous_triggers[-1] if previous_triggers else None
-            if last_trigger in available_hard and len(available_hard) > 1:
+            if last_trigger in available_hard_triggers and len(available_hard_triggers) > 1:
                 # Deprioritize last hard trigger
-                available_hard = [t for t in available_hard if t != last_trigger]
-                available_hard.append(last_trigger)  # Add to end
-            if last_trigger in available_medium and len(available_medium) > 1:
+                available_hard_triggers = [t for t in available_hard_triggers if t != last_trigger]
+                available_hard_triggers.append(last_trigger)  # Add to end
+            if last_trigger in available_medium_triggers and len(available_medium_triggers) > 1:
                 # Deprioritize last medium trigger
-                available_medium = [t for t in available_medium if t != last_trigger]
-                available_medium.append(last_trigger)  # Add to end
+                available_medium_triggers = [t for t in available_medium_triggers if t != last_trigger]
+                available_medium_triggers.append(last_trigger)  # Add to end
         
         # Shuffle pools
-        random.shuffle(available_hard)
-        random.shuffle(available_medium)
-        
-        # Q1: Always medium (never hard)
-        q1_trigger = available_medium[0]
-        remaining_medium = available_medium[1:]
-        
-        # Select 2 hard questions for Q2-Q7
-        hard_positions = random.sample(range(2, 8), 2)  # Pick 2 positions from [2,3,4,5,6,7]
-        hard_positions.sort()
+        random.shuffle(available_hard_triggers)
+        random.shuffle(available_medium_triggers)
         
         # Build sequence
         sequence = []
-        hard_idx = 0
-        medium_idx = 0
+        hard_trigger_idx = 0
+        medium_trigger_idx = 0
         
-        for q_num in range(1, 8):
-            if q_num == 1:
-                # Q1: Always medium
-                trigger_name = q1_trigger
-                is_hard = False
-            elif q_num in hard_positions:
-                # Q2-Q7: Hard question
-                trigger_name = available_hard[hard_idx]
-                hard_idx += 1
-                is_hard = True
-            else:
-                # Q2-Q7: Medium question
-                trigger_name = remaining_medium[medium_idx]
-                medium_idx += 1
-                is_hard = False
+        # If question_difficulties provided, use them to determine which questions are hard
+        if question_difficulties and len(question_difficulties) == 7:
+            logger.info("Using provided question difficulties: %s", question_difficulties)
+            for q_num in range(1, 8):
+                is_hard_question = question_difficulties[q_num - 1].upper() == "HARD"
+                
+                # Q1 should never be hard
+                if q_num == 1 and is_hard_question:
+                    logger.warning("Q1 marked as HARD but forcing to MEDIUM")
+                    is_hard_question = False
+                
+                if is_hard_question:
+                    # Hard question gets a hard trigger (Q2 or Q6 trigger definition)
+                    trigger_name = available_hard_triggers[hard_trigger_idx % len(available_hard_triggers)]
+                    hard_trigger_idx += 1
+                else:
+                    # Medium question gets a medium trigger
+                    trigger_name = available_medium_triggers[medium_trigger_idx % len(available_medium_triggers)]
+                    medium_trigger_idx += 1
+                
+                meta = QUESTION_TRIGGER_META[trigger_name]
+                sequence.append({
+                    "question_number": q_num,
+                    "trigger_name": trigger_name,
+                    "difficulty": meta["difficulty"],
+                    "intensity": meta["intensity"],
+                    "description": meta["description"],
+                    "is_hard": is_hard_question,
+                    "is_meta_question": meta.get("is_meta_question", False),
+                })
+        else:
+            # Fallback: Random positioning (old logic)
+            logger.info("No question difficulties provided, using random positioning")
+            # Q1: Always medium (never hard)
+            q1_trigger = available_medium_triggers[0]
+            remaining_medium = available_medium_triggers[1:]
             
-            meta = QUESTION_TRIGGER_META[trigger_name]
-            sequence.append({
-                "question_number": q_num,
-                "trigger_name": trigger_name,
-                "difficulty": meta["difficulty"],
-                "intensity": meta["intensity"],
-                "description": meta["description"],
-                "is_hard": is_hard,
-                "is_meta_question": meta.get("is_meta_question", False),
-            })
+            # Select 2 hard questions for Q2-Q7
+            hard_positions = random.sample(range(2, 8), 2)  # Pick 2 positions from [2,3,4,5,6,7]
+            hard_positions.sort()
+            
+            hard_idx = 0
+            medium_idx = 0
+            
+            for q_num in range(1, 8):
+                if q_num == 1:
+                    # Q1: Always medium
+                    trigger_name = q1_trigger
+                    is_hard = False
+                elif q_num in hard_positions:
+                    # Q2-Q7: Hard question
+                    trigger_name = available_hard_triggers[hard_idx]
+                    hard_idx += 1
+                    is_hard = True
+                else:
+                    # Q2-Q7: Medium question
+                    trigger_name = remaining_medium[medium_idx]
+                    medium_idx += 1
+                    is_hard = False
+                
+                meta = QUESTION_TRIGGER_META[trigger_name]
+                sequence.append({
+                    "question_number": q_num,
+                    "trigger_name": trigger_name,
+                    "difficulty": meta["difficulty"],
+                    "intensity": meta["intensity"],
+                    "description": meta["description"],
+                    "is_hard": is_hard,
+                    "is_meta_question": meta.get("is_meta_question", False),
+                })
         
         logger.info(
-            "Generated returning user sequence: hard_positions=%s triggers=%s",
-            hard_positions,
-            [t["trigger_name"] for t in sequence],
+            "Generated returning user sequence: triggers=%s",
+            [f"Q{t['question_number']}:{t['trigger_name']}({'H' if t['is_hard'] else 'M'})" for t in sequence],
         )
         
         return sequence
@@ -208,12 +257,14 @@ class QuestionTriggerDecisionEngine:
         self,
         user_profile: Dict,
         previous_triggers: Optional[List[str]] = None,
+        question_difficulties: Optional[List[str]] = None,
     ) -> Dict:
         """Generate complete test plan with all 7 triggers.
         
         Args:
             user_profile: User profile dict
             previous_triggers: List of trigger names from user's last test
+            question_difficulties: List of difficulty levels for each question (HARD/MEDIUM)
             
         Returns:
             Dict with test plan including:
@@ -230,7 +281,7 @@ class QuestionTriggerDecisionEngine:
         if is_new:
             sequence = self.get_trigger_sequence_for_new_user()
         else:
-            sequence = self.get_trigger_sequence_for_returning_user(previous_triggers)
+            sequence = self.get_trigger_sequence_for_returning_user(previous_triggers, question_difficulties)
         
         # Split into medium and hard
         medium_questions = [t for t in sequence if not t["is_hard"]]
@@ -316,17 +367,19 @@ def get_trigger_for_question(
 def get_full_test_plan(
     user_profile: Dict,
     previous_triggers: Optional[List[str]] = None,
+    question_difficulties: Optional[List[str]] = None,
 ) -> Dict:
     """Generate complete test plan with all 7 triggers.
     
     Args:
         user_profile: User profile dict
         previous_triggers: List of trigger names from user's last test
+        question_difficulties: List of difficulty levels for each question (HARD/MEDIUM)
         
     Returns:
         Dict with complete test plan
     """
-    return _decision_engine.get_full_test_plan(user_profile, previous_triggers)
+    return _decision_engine.get_full_test_plan(user_profile, previous_triggers, question_difficulties)
 
 
 def is_new_user(user_profile: Dict) -> bool:

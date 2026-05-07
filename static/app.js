@@ -8,6 +8,7 @@ const stageEls = {
   subjectSelection: $("stageSubjectSelection"),
   topicSelection: $("stageTopicSelection"),
   devil: $("stageDevil"),
+  fullscreen: $("stageFullscreen"),
   popups: $("stagePopups"),
 };
 
@@ -798,22 +799,28 @@ async function buildDevilBriefPage() {
     brief = null;
   }
 
+  // Helper function to capitalize first letter of a sentence
+  function capitalizeFirstLetter(str) {
+    if (!str) return str;
+    return str.charAt(0).toUpperCase() + str.slice(1);
+  }
+
   const devilName = brief?.devil_name || "Lucifer the Tempter";
   const intro = brief?.intro || `I designed your focus test, ${userName}.`;
   const taunt = (Array.isArray(brief?.challenge_lines) && brief.challenge_lines[0])
-    ? brief.challenge_lines[0]
+    ? capitalizeFirstLetter(brief.challenge_lines[0])
     : "Dare you think you can outsmart the flames of the underworld? Let's see if you burn or rise!";
   const problems = Array.isArray(brief?.problems) && brief.problems.length
-    ? brief.problems
-    : themes.map((t) => t);
-  const warningLine = brief?.taunt
+    ? brief.problems.map(p => capitalizeFirstLetter(p))
+    : themes.map((t) => capitalizeFirstLetter(t));
+  const warningLine = capitalizeFirstLetter(brief?.taunt)
     || "Face the flames and prove your mettle, or be consumed by your own hesitation!";
 
   // Build a summary from followup text
   const firstAnswer = followups[0]?.answer || "";
   const insightSummary = firstAnswer
-    ? `stress related to ${firstAnswer.toLowerCase().substring(0, 80)}`
-    : "stress related to your academics";
+    ? `Stress related to ${firstAnswer.toLowerCase().substring(0, 80)}`
+    : "Stress related to your academics";
 
   // Fill new HTML
   if (devilTitle) devilTitle.textContent = `Meet ${devilName}`;
@@ -2045,16 +2052,16 @@ const StressTriggers = (() => {
       overlay.innerHTML = `
         <div class="hard-question-center">
           <div class="hard-question-icon">⚡</div>
-          <div class="hard-question-eyebrow">HARD QUESTION</div>
-          <div class="hard-question-title">30 seconds. One trap.</div>
-          <div class="hard-question-accent">Keep your focus.</div>
+          <div class="hard-question-eyebrow">HARD QUESTION AHEAD</div>
+          <div class="hard-question-title">You have 30 seconds.</div>
+          <div class="hard-question-accent">And a trap.</div>
           <div class="hard-question-box">
             <div class="hard-question-box-icon">🕷️</div>
-            <div class="hard-question-box-title">Something will shift.</div>
-            <div class="hard-question-box-sub">We will not tell you when.</div>
-            <div class="hard-question-box-foot">Read carefully. Answer anyway.</div>
+            <div class="hard-question-box-title">Something's going to happen.</div>
+            <div class="hard-question-box-sub">We're not telling you what.</div>
+            <div class="hard-question-box-foot">Figure it out. Answer anyway.</div>
           </div>
-          <div class="hard-question-footnote">Starting now...</div>
+          <div class="hard-question-footnote">Starting in a moment...</div>
         </div>
       `;
     } else if (kind === "fail-wrong") {
@@ -2144,6 +2151,11 @@ const StressTriggers = (() => {
       if (!state.hardQuestionChallenge || state.hardQuestionChallenge.questionId !== challenge.questionId) return;
       challenge.introOverlay?.remove();
       challenge.introOverlay = null;
+      
+      // Show the question now that intro overlay is dismissed
+      if (questionStem) questionStem.style.visibility = 'visible';
+      if (questionOptions) questionOptions.style.visibility = 'visible';
+      
       challenge.deadlineAt = Date.now() + 30000;
 
       const timerEl = document.getElementById("questionTimer");
@@ -2692,7 +2704,7 @@ const StressTriggers = (() => {
           <span data-role="coach"></span>
         </div>
         <div class="confirm-actions">
-          <button type="button" class="btn ghost small" data-role="recheck">Recheck</button>
+          <button type="button" class="btn ghost small option-feedback-recheck-btn" data-role="recheck" style="color: #1A202C; border-color: #CBD5E0; background: rgba(255, 255, 255, 0.9);">Recheck</button>
           <button type="button" class="btn primary small" data-role="lock">Lock Answer</button>
         </div>
       </div>
@@ -3849,12 +3861,12 @@ const StressTriggers = (() => {
 
     let posX = startRect.left;
     let posY = startRect.top;
-    let velX = 1.98;
-    let velY = 1.44;
-    const bounceRetention = 0.94;
-    const minSpeed = 1.8;
-    const maxSpeed = 2.95;
-    const steerStrength = 0.14;
+    let velX = 4.5;
+    let velY = 4.2;
+    const bounceRetention = 0.96;
+    const minSpeed = 4.2;
+    const maxSpeed = 7.5;
+    const steerStrength = 0.18;
     const arriveDistance = 10;
     const motionScale = 0.9;
     const motionWidth = Math.round(startRect.width * motionScale);
@@ -3914,7 +3926,7 @@ const StressTriggers = (() => {
       tag.style.left = `${Math.round(x)}px`;
       tag.style.top = `${Math.round(y)}px`;
       focusTrail.appendChild(tag);
-      setTimeout(() => tag.remove(), 1200);
+      setTimeout(() => tag.remove(), 200);
     }
 
     function applyMotionStyles() {
@@ -5051,6 +5063,27 @@ const StressTriggers = (() => {
     let fogElement = null;
     let stressCountdown = null;
     let countdownInterval = null; // Store interval reference for cleanup
+    const triggerQuestionId = state.currentQuestionId; // Store the question ID when trigger starts
+    let isCleanedUp = false; // Flag to prevent actions after cleanup
+    
+    // Monitor for question changes and cleanup immediately
+    const questionChangeMonitor = setInterval(() => {
+      if (state.currentQuestionId !== triggerQuestionId && !isCleanedUp) {
+        console.log('[triggerHardFog] Question changed detected by monitor - cleaning up immediately');
+        isCleanedUp = true;
+        clearInterval(questionChangeMonitor);
+        
+        // Clear all timers
+        timers.forEach(t => clearTimeout(t));
+        if (countdownInterval) clearInterval(countdownInterval);
+        
+        // Remove all elements
+        const overlays = document.querySelectorAll('.stress-difficulty-check-overlay');
+        overlays.forEach(el => el.remove());
+        if (fogElement) fogElement.remove();
+        if (stressCountdown) stressCountdown.remove();
+      }
+    }, 100); // Check every 100ms
     
     const overlay = document.createElement('div');
     overlay.className = 'stress-difficulty-check-overlay';
@@ -5112,9 +5145,22 @@ const StressTriggers = (() => {
     };
     
     const continueSequence = () => {
+      // Check if we're still on the same question
+      if (state.currentQuestionId !== triggerQuestionId) {
+        console.log('[triggerHardFog] Question changed, stopping sequence');
+        overlay.remove();
+        return;
+      }
+      
       overlay.remove();
       
       timers.push(setTimeout(() => {
+        // Check again before showing warning
+        if (state.currentQuestionId !== triggerQuestionId) {
+          console.log('[triggerHardFog] Question changed, stopping at warning');
+          return;
+        }
+        
         const warningOverlay = document.createElement('div');
         warningOverlay.className = 'stress-difficulty-check-overlay';
         warningOverlay.innerHTML = `
@@ -5127,6 +5173,13 @@ const StressTriggers = (() => {
         document.body.appendChild(warningOverlay);
         
         timers.push(setTimeout(() => {
+          // Check again before showing countdown
+          if (state.currentQuestionId !== triggerQuestionId) {
+            console.log('[triggerHardFog] Question changed, stopping at countdown');
+            warningOverlay.remove();
+            return;
+          }
+          
           warningOverlay.remove();
           
           stressCountdown = document.createElement('div');
@@ -5137,6 +5190,15 @@ const StressTriggers = (() => {
           stressCountdown.textContent = `⏱️ ${timeLeft}s`;
           
           countdownInterval = setInterval(() => {
+            // Check if question changed during countdown
+            if (state.currentQuestionId !== triggerQuestionId) {
+              console.log('[triggerHardFog] Question changed during countdown, stopping');
+              clearInterval(countdownInterval);
+              if (stressCountdown) stressCountdown.remove();
+              if (fogElement) fogElement.remove();
+              return;
+            }
+            
             timeLeft--;
             if (timeLeft <= 0) {
               clearInterval(countdownInterval);
@@ -5152,6 +5214,12 @@ const StressTriggers = (() => {
           }, 1000);
           
           timers.push(setTimeout(() => {
+            // Check if question changed before applying fog
+            if (state.currentQuestionId !== triggerQuestionId) {
+              console.log('[triggerHardFog] Question changed, not applying fog');
+              return;
+            }
+            
             fogElement = document.createElement('div');
             fogElement.className = 'trigger-fog-overlay';
             
@@ -5181,11 +5249,23 @@ const StressTriggers = (() => {
     return {
       durationMs: 0,
       cleanup: () => {
+        console.log('[triggerHardFog] Cleanup called - clearing', timers.length, 'timers');
+        isCleanedUp = true;
+        clearInterval(questionChangeMonitor);
         timers.forEach(t => clearTimeout(t));
-        if (countdownInterval) clearInterval(countdownInterval);
+        if (countdownInterval) {
+          console.log('[triggerHardFog] Clearing countdown interval');
+          clearInterval(countdownInterval);
+        }
         overlay.remove();
-        if (fogElement) fogElement.remove();
-        if (stressCountdown) stressCountdown.remove();
+        if (fogElement) {
+          console.log('[triggerHardFog] Removing fog element');
+          fogElement.remove();
+        }
+        if (stressCountdown) {
+          console.log('[triggerHardFog] Removing countdown element');
+          stressCountdown.remove();
+        }
       },
     };
   }
@@ -5496,11 +5576,18 @@ const StressTriggers = (() => {
       console.log('[triggerAccuracyTest] User clicked Yes - activating heartbeat shake');
       overlay.remove();
       
-      // Deactivate the accuracyTest trigger first to allow heartbeat to activate
-      console.log('[triggerAccuracyTest] Deactivating accuracyTest to allow heartbeat');
-      deactivateTrigger('accuracyTest');
+      // Remove accuracyTest from active map WITHOUT calling cleanup
+      // This allows heartbeatVibration to activate (max 1 active trigger)
+      // but keeps our state intact (isCleanedUp stays false)
+      if (active.has('accuracyTest')) {
+        const entry = active.get('accuracyTest');
+        // Clear any timers but don't call cleanup
+        (entry.timers || []).forEach((timerId) => clearTimeout(timerId));
+        active.delete('accuracyTest');
+        console.log('[triggerAccuracyTest] Removed accuracyTest from active map (without cleanup)');
+      }
       
-      // Small delay to ensure deactivation completes
+      // Small delay to ensure overlay is removed
       setTimeout(() => {
         // Activate heartbeat vibration trigger
         // Note: The system caps duration at 20 seconds max, so we use that
@@ -6417,7 +6504,11 @@ const StressTriggers = (() => {
         // Q2 → HARD_FOG (with pre-sequence)
         // Pre-sequence: difficultyCheckPrompt → 2.5s pause → hardQuestion (activateHardQuestionChallenge) → includes 30s timer + fog
         else if (triggerInfo.name === 'hardFog') {
-          delayMs = 6000;
+          // Hide question immediately for Q2
+          if (questionStem) questionStem.style.visibility = 'hidden';
+          if (questionOptions) questionOptions.style.visibility = 'hidden';
+          
+          delayMs = 0; // Show difficulty check instantly
           const timeoutId1 = setTimeout(() => {
             console.log(`[onQuestionRendered] Starting Q2 pre-sequence: difficultyCheckPrompt`);
             console.log(`[onQuestionRendered] state.feedbackPromptOpen:`, state.feedbackPromptOpen);
@@ -6570,7 +6661,11 @@ const StressTriggers = (() => {
         // Q6 → HARD_PEER_DOUBT (with pre-sequence + interception)
         // Same pre-sequence as Q2: difficultyCheckPrompt → 2.5s pause → hardQuestion challenge
         else if (triggerInfo.name === 'hardPeerDoubt') {
-          delayMs = 6000;
+          // Hide question immediately for Q6
+          if (questionStem) questionStem.style.visibility = 'hidden';
+          if (questionOptions) questionOptions.style.visibility = 'hidden';
+          
+          delayMs = 0; // Show difficulty check instantly
           setTimeout(() => {
             console.log(`[onQuestionRendered] Starting Q6 pre-sequence: difficultyCheckPrompt`);
             
@@ -6769,6 +6864,28 @@ const StressTriggers = (() => {
       state.examStartedAt = Date.now();
       console.log('[beginExamTimer] Exam started at:', state.examStartedAt, 'Date:', new Date(state.examStartedAt).toISOString());
       state.stressBudget = STRESS_BUDGET_MAX;
+      
+      // Increment total_sessions when test actually starts
+      const user = window.StressDostAuth?.getUser();
+      if (user && user.user_id) {
+        console.log('[beginExamTimer] Incrementing session count for user:', user.user_id);
+        fetch(`/api/user/${user.user_id}/session-start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        })
+        .then(res => res.json())
+        .then(data => {
+          console.log('[beginExamTimer] Session started:', data);
+          // Update local storage with new session count
+          if (user) {
+            user.total_sessions = data.total_sessions;
+            window.StressDostAuth.setUser(user);
+          }
+        })
+        .catch(err => {
+          console.error('[beginExamTimer] Failed to increment session:', err);
+        });
+      }
     } else {
       console.log('[beginExamTimer] Exam already started at:', state.examStartedAt, 'Date:', new Date(state.examStartedAt).toISOString());
     }
@@ -7759,10 +7876,17 @@ async function loadTestQuestions() {
   try {
     let payload = {};
 
+    // Get user profile for question selection
+    const user = window.StressDostAuth?.getUser?.();
+    const userProfile = {
+      completed_sessions: user?.completed_sessions || 0,
+      total_sessions: user?.total_sessions || 0
+    };
+
     // Use stored metadata if available (skips the /debug roundtrip)
     if (_prefetchMeta) {
       console.log("[loadTestQuestions] using prefetched meta:", _prefetchMeta);
-      payload = _prefetchMeta;
+      payload = { ..._prefetchMeta, user_profile: userProfile };
       _prefetchMeta = null;
     } else if (sessionId) {
       // Fallback: fetch meta from debug endpoint
@@ -7771,13 +7895,18 @@ async function loadTestQuestions() {
         const meta = dbg?.meta || {};
         payload = {
           subject: meta.selected_subject || null,
-          topics: meta.selected_topics || []
+          topics: meta.selected_topics || [],
+          user_profile: userProfile
         };
       } catch (err) {
         log("session_debug_error", err);
+        payload = { user_profile: userProfile };
       }
+    } else {
+      payload = { user_profile: userProfile };
     }
 
+    console.log("[loadTestQuestions] User profile:", userProfile);
     const data = await postJSON("/api/questions/load-test-questions", payload);
 
     testQuestions = data.questions || [];
@@ -7819,26 +7948,35 @@ async function loadTestQuestions() {
 
 async function fetchQuestionTriggerPlan() {
   try {
-    // Get user profile from localStorage
-    const userName = localStorage.getItem('userName') || '';
-    const testCount = parseInt(localStorage.getItem('testCount')) || 0;
+    // Get user from auth system
+    const user = window.StressDostAuth?.getUser?.();
+    
+    // Get previous triggers from localStorage
     const previousTriggers = JSON.parse(localStorage.getItem('previousTriggers') || '[]');
     
     const userProfile = {
-      name: userName,
-      test_count: testCount,
+      name: user?.display_name || '',
+      test_count: user?.completed_sessions || 0,
+      completed_sessions: user?.completed_sessions || 0,  // Send both fields for backend compatibility
       previous_triggers: previousTriggers
     };
     
+    // Extract question difficulties from loaded questions
+    const questionDifficulties = testQuestions.map(q => (q.level || 'MEDIUM').toUpperCase());
+    
     console.log('[fetchQuestionTriggerPlan] Fetching trigger plan for user:', userProfile);
+    console.log('[fetchQuestionTriggerPlan] Question difficulties:', questionDifficulties);
     
     const response = await postJSON('/api/questions/trigger-plan', {
-      user_profile: userProfile
+      user_profile: userProfile,
+      question_difficulties: questionDifficulties
     });
     
     questionTriggerPlan = response;
     console.log('[fetchQuestionTriggerPlan] Trigger plan received:', questionTriggerPlan);
     console.log('[fetchQuestionTriggerPlan] Sequence:', questionTriggerPlan?.sequence);
+    console.log('[fetchQuestionTriggerPlan] User type:', questionTriggerPlan?.user_type);
+    console.log('[fetchQuestionTriggerPlan] Is new user:', questionTriggerPlan?.is_new_user);
     
     // Store for next test
     if (response.sequence && Array.isArray(response.sequence)) {
@@ -8333,50 +8471,33 @@ async function acceptDevilChallenge() {
   const autoTopics  = decision?.autoPickedTopics  || null;
   console.log("[acceptDevilChallenge] autoSubject:", autoSubject, "autoTopics:", autoTopics);
 
-  // ── Branch 1: both subject AND topics filled → skip both, straight to test ──
+  // Only show fullscreen if we have both subject AND topics (ready to start test)
   if (autoSubject && autoTopics) {
-    try {
-      await postJSON(`/api/session/${sessionId}/meta`, {
-        selected_subject: autoSubject,
-        selected_topics: autoTopics,
-      });
-    } catch (_) {}
-
-    // Store meta so loadTestQuestions skips the /debug roundtrip
-    startQuestionPrefetch(autoSubject, autoTopics);
-
-    if (devilHint) devilHint.textContent = "Challenge accepted. Entering test arena...";
-    if (btnAcceptChallenge) btnAcceptChallenge.disabled = true;
-    StressTriggers.beginExamTimer();
-    showStage("popups");
-
-    // Await questions first — Eventlet can't handle concurrent POST requests well
-    await loadTestQuestions();
-
-    try {
-      const data = await postJSON(`/session/${sessionId}/start-simulation`, {});
-      log("start_simulation", data);
-      if (popupSummary) popupSummary.textContent = "Pressure simulation is live. Keep your focus.";
-    } catch (err) {
-      log("simulation_error", err.message || String(err));
-      if (popupSummary) popupSummary.textContent = "Could not start popup simulation.";
+    // Store the test parameters for later (after fullscreen)
+    pendingTestStart = { autoSubject, autoTopics };
+    
+    // Show fullscreen requirement stage
+    showStage("fullscreen");
+    
+    // Reset fullscreen status
+    if (fullscreenStatus) {
+      fullscreenStatus.textContent = 'Please enter fullscreen mode to continue';
+      fullscreenStatus.className = 'fullscreen-status error';
     }
-    StressTriggers.onPopupsEntered();
-    if (btnAcceptChallenge) btnAcceptChallenge.disabled = false;
     return;
   }
 
-  // ── Branch 2: subject filled, topics null → skip subject, show topic/chapter screen ──
+  // If subject is known but topics are not, go to topic selection
   if (autoSubject && !autoTopics) {
     console.log("[acceptDevilChallenge] subject known, topics unknown → chapter screen");
     await window.academicTopics?.loadTopicsForSubject?.(autoSubject, sessionId);
     return;
   }
 
-  // ── Branch 3: subject null → show subject selection screen ──
-  console.log("[acceptDevilChallenge] subject unknown → subject selection screen");
+  // If no subject, go to subject selection
+  console.log("[acceptDevilChallenge] no subject → subject screen");
   showStage("subjectSelection");
-  window.academicTopics?.initializeSubjectSelection?.(sessionId, null);
+  await window.academicTopics?.initializeSubjectSelection?.(sessionId, null);
 }
 
 // HUD ----------------------------------------------------------------------
@@ -8422,6 +8543,211 @@ btnLogout?.addEventListener("click", () => {
 btnPrevQuestion?.addEventListener("click", () => gotoQuestion(-1));
 btnNextQuestion?.addEventListener("click", () => gotoQuestion(1));
 btnReloadQuestions?.addEventListener("click", () => loadTestQuestions());
+
+// Fullscreen Management
+const btnEnterFullscreen = document.getElementById('btnEnterFullscreen');
+const fullscreenStatus = document.getElementById('fullscreenStatus');
+let isTestActive = false;
+let fullscreenWarningOverlay = null;
+
+function isFullscreen() {
+  return !!(document.fullscreenElement || document.webkitFullscreenElement || 
+            document.mozFullScreenElement || document.msFullscreenElement);
+}
+
+function enterFullscreen() {
+  const elem = document.documentElement;
+  if (elem.requestFullscreen) {
+    return elem.requestFullscreen();
+  } else if (elem.webkitRequestFullscreen) {
+    return elem.webkitRequestFullscreen();
+  } else if (elem.mozRequestFullScreen) {
+    return elem.mozRequestFullScreen();
+  } else if (elem.msRequestFullscreen) {
+    return elem.msRequestFullscreen();
+  }
+  return Promise.reject(new Error('Fullscreen not supported'));
+}
+
+function showFullscreenWarning() {
+  // Remove existing warning if any
+  if (fullscreenWarningOverlay) {
+    fullscreenWarningOverlay.remove();
+  }
+
+  // Create warning overlay
+  fullscreenWarningOverlay = document.createElement('div');
+  fullscreenWarningOverlay.style.cssText = `
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.95);
+    z-index: 99999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(10px);
+  `;
+
+  fullscreenWarningOverlay.innerHTML = `
+    <div style="
+      background: white;
+      border-radius: 20px;
+      padding: 48px;
+      max-width: 500px;
+      text-align: center;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    ">
+      <div style="font-size: 64px; margin-bottom: 20px;">⚠️</div>
+      <h2 style="
+        font-size: 28px;
+        font-weight: 700;
+        color: #1A202C;
+        margin: 0 0 16px 0;
+      ">Fullscreen Mode Required</h2>
+      <p style="
+        font-size: 16px;
+        line-height: 1.6;
+        color: #4A5568;
+        margin: 0 0 32px 0;
+      ">
+        You have exited fullscreen mode. The test is paused.<br/>
+        Please return to fullscreen mode to continue.
+      </p>
+      <button id="btnReturnFullscreen" style="
+        width: 100%;
+        padding: 16px 32px;
+        font-size: 16px;
+        font-weight: 600;
+        border-radius: 12px;
+        background: linear-gradient(135deg, #6366f1, #7c3aed);
+        border: none;
+        color: white;
+        cursor: pointer;
+        box-shadow: 0 4px 16px rgba(124, 58, 237, 0.3);
+      ">Return to Fullscreen</button>
+    </div>
+  `;
+
+  document.body.appendChild(fullscreenWarningOverlay);
+
+  // Add click handler to return button
+  const btnReturn = fullscreenWarningOverlay.querySelector('#btnReturnFullscreen');
+  btnReturn?.addEventListener('click', async () => {
+    try {
+      await enterFullscreen();
+    } catch (err) {
+      console.error('[Fullscreen] Error returning to fullscreen:', err);
+    }
+  });
+}
+
+function hideFullscreenWarning() {
+  if (fullscreenWarningOverlay) {
+    fullscreenWarningOverlay.remove();
+    fullscreenWarningOverlay = null;
+  }
+}
+
+function updateFullscreenStatus() {
+  const inFullscreen = isFullscreen();
+  
+  // Handle fullscreen requirement stage
+  if (fullscreenStatus) {
+    if (inFullscreen) {
+      fullscreenStatus.textContent = '✓ Fullscreen mode active - Starting test...';
+      fullscreenStatus.className = 'fullscreen-status success';
+      // Auto-proceed to test after entering fullscreen
+      setTimeout(() => {
+        proceedToTest();
+      }, 1000);
+    } else {
+      fullscreenStatus.textContent = 'Please enter fullscreen mode to continue';
+      fullscreenStatus.className = 'fullscreen-status error';
+    }
+  }
+
+  // Handle during test
+  if (isTestActive) {
+    if (inFullscreen) {
+      hideFullscreenWarning();
+    } else {
+      showFullscreenWarning();
+    }
+  }
+}
+
+btnEnterFullscreen?.addEventListener('click', async () => {
+  try {
+    await enterFullscreen();
+    updateFullscreenStatus();
+  } catch (err) {
+    console.error('[Fullscreen] Error:', err);
+    if (fullscreenStatus) {
+      fullscreenStatus.textContent = '✗ Could not enter fullscreen. Please try F11 or try again.';
+      fullscreenStatus.className = 'fullscreen-status error';
+    }
+  }
+});
+
+// Listen for fullscreen changes
+document.addEventListener('fullscreenchange', updateFullscreenStatus);
+document.addEventListener('webkitfullscreenchange', updateFullscreenStatus);
+document.addEventListener('mozfullscreenchange', updateFullscreenStatus);
+document.addEventListener('MSFullscreenChange', updateFullscreenStatus);
+
+// Store the original acceptDevilChallenge logic
+let pendingTestStart = null;
+
+async function proceedToTest() {
+  if (!pendingTestStart) return;
+  
+  const { autoSubject, autoTopics } = pendingTestStart;
+  
+  // Mark test as active to monitor fullscreen
+  isTestActive = true;
+  
+  // Continue with the original test start logic
+  if (autoSubject && autoTopics) {
+    try {
+      await postJSON(`/api/session/${sessionId}/meta`, {
+        selected_subject: autoSubject,
+        selected_topics: autoTopics,
+      });
+    } catch (_) {}
+
+    startQuestionPrefetch(autoSubject, autoTopics);
+
+    if (devilHint) devilHint.textContent = "Challenge accepted. Entering test arena...";
+    StressTriggers.beginExamTimer();
+    showStage("popups");
+
+    await loadTestQuestions();
+
+    try {
+      const data = await postJSON(`/session/${sessionId}/start-simulation`, {});
+      log("start_simulation", data);
+      if (popupSummary) popupSummary.textContent = "Pressure simulation is live. Keep your focus.";
+    } catch (err) {
+      log("simulation_error", err.message || String(err));
+      if (popupSummary) popupSummary.textContent = "Could not start popup simulation.";
+    }
+    StressTriggers.onPopupsEntered();
+    pendingTestStart = null;
+    return;
+  }
+
+  if (autoSubject && !autoTopics) {
+    console.log("[proceedToTest] subject known, topics unknown → chapter screen");
+    await window.academicTopics?.loadTopicsForSubject?.(autoSubject, sessionId);
+    pendingTestStart = null;
+    return;
+  }
+
+  console.log("[proceedToTest] no subject → subject screen");
+  showStage("subjectSelection");
+  await window.academicTopics?.initializeSubjectSelection?.(sessionId, null);
+  pendingTestStart = null;
+}
 
 let _lifelines = 3;  // top-level lifeline counter (state.lifelines is inside the IIFE)
 
@@ -8530,8 +8856,12 @@ function showLifelineLostBanner() {
   }, 2000);
 }
 
-function showTestEndScreen(timeUsedMs) {
+async function showTestEndScreen(timeUsedMs) {
   console.log('[showTestEndScreen] Called with timeUsedMs:', timeUsedMs);
+  
+  // Mark test as inactive - stop monitoring fullscreen
+  isTestActive = false;
+  hideFullscreenWarning();
   
   // Stop the exam timer immediately
   if (StressTriggers && StressTriggers.stopExamTimer) {
@@ -8769,6 +9099,29 @@ function showTestEndScreen(timeUsedMs) {
   `;
   
   document.body.appendChild(overlay);
+  
+  // Increment completed_sessions when test ends (await to ensure it completes)
+  const user = window.StressDostAuth?.getUser();
+  if (user && user.user_id) {
+    console.log('[showTestEndScreen] Incrementing completed session count for user:', user.user_id);
+    try {
+      const response = await fetch(`/api/user/${user.user_id}/session-complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await response.json();
+      console.log('[showTestEndScreen] Session completed:', data);
+      
+      // Update local storage with new completed session count
+      if (user && data.completed_sessions !== undefined) {
+        user.completed_sessions = data.completed_sessions;
+        window.StressDostAuth.setUser(user);
+        console.log('[showTestEndScreen] Updated user completed_sessions to:', data.completed_sessions);
+      }
+    } catch (err) {
+      console.error('[showTestEndScreen] Failed to increment completed session:', err);
+    }
+  }
   
   // Toggle breakdown
   const toggle = overlay.querySelector('#breakdown-toggle');
@@ -9098,4 +9451,39 @@ window.__stressApp = {
   getUserId: () => window.StressDostAuth?.getUserId?.() ?? null,
   buildDevilBriefPage,
   showStage,
+  setPendingTestStart: (params) => {
+    pendingTestStart = params;
+  },
 };
+
+
+// Logout functionality
+if (btnLogout) {
+  // Show logout button and user name if logged in
+  const user = window.StressDostAuth?.getUser?.();
+  if (user && user.display_name) {
+    const userNameDisplay = document.getElementById('userNameDisplay');
+    if (userNameDisplay) {
+      userNameDisplay.textContent = user.display_name;
+    }
+    btnLogout.style.display = 'block';
+  }
+  
+  btnLogout.addEventListener('click', () => {
+    if (confirm('Are you sure you want to logout?')) {
+      // Clear user data
+      window.StressDostAuth?.clearUser?.();
+      
+      // Clear localStorage
+      try {
+        localStorage.removeItem('sd_user');
+        localStorage.removeItem('sd_mood');
+      } catch (e) {
+        console.error('Failed to clear localStorage:', e);
+      }
+      
+      // Redirect to login page
+      window.location.href = '/login';
+    }
+  });
+}

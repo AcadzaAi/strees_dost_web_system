@@ -16,7 +16,22 @@
           <h1>FOCUS DOST <span>(v1.0)</span></h1>
         </div>
       </div>
-      <button id="hudToggle" class="live-pill" title="Show control room" type="button"><span></span>Live</button>
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <span id="userNameDisplay" style="font-size: 14px; color: rgba(255, 255, 255, 0.7);"></span>
+        <button id="btnLogout" class="logout-btn" title="Logout" type="button" style="
+          background: rgba(239, 68, 68, 0.1);
+          border: 1px solid rgba(239, 68, 68, 0.3);
+          color: #ef4444;
+          padding: 6px 12px;
+          border-radius: 6px;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s;
+          display: none;
+        " onmouseover="this.style.background='rgba(239, 68, 68, 0.2)'" onmouseout="this.style.background='rgba(239, 68, 68, 0.1)'">Logout</button>
+        <button id="hudToggle" class="live-pill" title="Show control room" type="button"><span></span>Live</button>
+      </div>
     </header>
 
     <main class="viewport">
@@ -295,6 +310,42 @@
           <div hidden>
             <ul id="devilDesign"></ul>
             <div id="devilBlueprint"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Fullscreen Requirement Stage -->
+      <section class="stage" id="stageFullscreen">
+        <div class="pop-card">
+          <div class="fullscreen-modal">
+            <div class="fullscreen-modal-icon">🖥️</div>
+            <h2 class="fullscreen-modal-title">Fullscreen Mode Required</h2>
+            <p class="fullscreen-modal-description">
+              To ensure the best test experience and prevent distractions, you must enter fullscreen mode before starting the test.
+            </p>
+            
+            <div class="fullscreen-requirement-box">
+              <div class="fullscreen-requirement-item">
+                <span class="requirement-icon">✓</span>
+                <span>Eliminates distractions</span>
+              </div>
+              <div class="fullscreen-requirement-item">
+                <span class="requirement-icon">✓</span>
+                <span>Maintains focus</span>
+              </div>
+              <div class="fullscreen-requirement-item">
+                <span class="requirement-icon">✓</span>
+                <span>Fair testing environment</span>
+              </div>
+            </div>
+
+            <button id="btnEnterFullscreen" class="btn primary fullscreen-btn" type="button">
+              Enter Fullscreen & Continue
+            </button>
+            
+            <p class="fullscreen-status" id="fullscreenStatus"></p>
+            
+            <p class="fullscreen-hint">Press F11 or click the button above to enter fullscreen mode</p>
           </div>
         </div>
       </section>

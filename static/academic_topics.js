@@ -379,21 +379,17 @@
         window.__stressApp.startQuestionPrefetch(selectedSubject, selectedChapters);
       }
 
-      // Start the actual test
+      // Store test parameters for after fullscreen
+      if (window.__stressApp?.setPendingTestStart) {
+        window.__stressApp.setPendingTestStart({
+          autoSubject: selectedSubject,
+          autoTopics: topics
+        });
+      }
+
+      // Show fullscreen requirement stage
       const show = window.__stressApp?.showStage;
-      if (show) show("popups");
-
-      // Begin exam timer
-      if (window.StressTriggers?.beginExamTimer) window.StressTriggers.beginExamTimer();
-
-      // Await questions first — Eventlet can't handle concurrent POST requests well
-      if (window.__stressApp?.loadTestQuestions) await window.__stressApp.loadTestQuestions();
-
-      // Then start simulation
-      try {
-        await postJSON(`/session/${sessionId}/start-simulation`, {});
-      } catch (_) {}
-      if (window.StressTriggers?.onPopupsEntered) window.StressTriggers.onPopupsEntered();
+      if (show) show("fullscreen");
 
     } catch (e) {
       console.error("commitAndGo:", e);

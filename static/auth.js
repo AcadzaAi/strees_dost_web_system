@@ -32,8 +32,14 @@
       user_id: user_id,
       display_name: display_name,
       logged_in_at: new Date().toISOString(),
+      completed_sessions: profile.completed_sessions || 0,
+      total_sessions: profile.total_sessions || 0,
     };
     if (mood) rec.mood = mood.slice(0, 80);
+    // Preserve any additional fields from profile
+    if (profile.is_new_user !== undefined) rec.is_new_user = profile.is_new_user;
+    if (profile.stats) rec.stats = profile.stats;
+    if (profile.preferences) rec.preferences = profile.preferences;
     localStorage.setItem(KEY, JSON.stringify(rec));
     return rec;
   }
