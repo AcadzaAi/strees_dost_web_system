@@ -219,19 +219,20 @@ Output strict JSON only:
     "intro": "...",
     "taunt": "...",
     "problems": ["...", "..."],
-    "design_points": ["...", "...", "..."],
+    "design_points": ["..."],
     "challenge_lines": ["..."]
 }
 
 Rules:
 - Keep tone creative and dramatic, but not abusive.
-- Problems: Maximum 2 items, each under 80 chars. MUST be directly based on the user's actual follow-up answers. Do not make up generic stress points.
-- Challenge_lines: Only 1 line, under 100 chars. Make it dramatic but relevant to their specific situation.
+- Problems: Maximum 2 items, each under 80 chars. These should be OBSERVATIONS about the user's actual situation/stress, NOT challenges or questions. State what you noticed from their answers (e.g., "You mentioned struggling with time management", "Your focus drops when multiple tasks pile up"). Do NOT ask questions or challenge them here.
+- Design_points: Only 1 line, under 100 chars. Brief summary of what triggers/strategies we planned based on their problems.
+- Challenge_lines: Only 1 line, under 100 chars. This is where you can be dramatic and challenging.
 - Intro: One sentence under 120 chars, referencing their actual responses.
 - Taunt: One sentence under 100 chars, connected to what they shared.
 - Do not mention medical diagnosis.
-- If user gave minimal/unclear answers, keep problems general but concise (max 2 lines).
-- Every statement must connect to their actual input - no generic filler about "fire", "darkness" unless relevant to what they said.
+- If user gave minimal/unclear answers, keep problems general but as observations, not questions.
+- Problems = what you observed. Design_points = what we planned (1 line only). Challenge_lines = the dare.
 """
 
 
@@ -864,7 +865,7 @@ def devil_brief():
                 "intro": str(parsed.get("intro") or "I studied your responses and designed this test around your pressure points.")[:260],
                 "taunt": str(parsed.get("taunt") or "Accept my challenge. I doubt you can beat me.")[:220],
                 "problems": [str(x)[:80] for x in problems[:2] if str(x).strip()],
-                "design_points": [str(x)[:120] for x in design_points[:5] if str(x).strip()],
+                "design_points": [str(x)[:100] for x in design_points[:1] if str(x).strip()],
                 "challenge_lines": [str(x)[:100] for x in challenge_lines[:1] if str(x).strip()],
                 "source": "ai",
             }
@@ -877,13 +878,11 @@ def devil_brief():
                 "intro": "I shaped this test from your answers: where you hesitate, where panic rises.",
                 "taunt": "Accept my challenge. I know your weak moments; prove me wrong.",
                 "problems": [
-                    "You lose speed when doubt appears.",
-                    "Distractions steal attention at critical moments.",
+                    "Your speed drops when doubt creeps in.",
+                    "Distractions pull your attention at critical moments.",
                 ],
                 "design_points": [
-                    "Wrong answers trigger pressure responses.",
-                    "Hesitation patterns trigger decision traps.",
-                    "Time pressure increases near key transitions.",
+                    "Triggers activate on wrong answers, hesitation, and idle patterns.",
                 ],
                 "challenge_lines": [
                     "Accept this challenge and hold your focus.",

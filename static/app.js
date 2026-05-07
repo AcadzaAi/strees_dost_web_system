@@ -862,12 +862,7 @@ async function buildDevilBriefPage() {
   // Still fill hidden panels for data purposes
   const designPoints = Array.isArray(brief?.design_points) && brief.design_points.length
     ? brief.design_points
-    : [
-      "Every trigger is activated by interaction signals, not random timers.",
-      "Only one trigger can run at a time with strict timeout control.",
-      "Wrong answers and hesitation now directly shape pressure style.",
-      "AI selects the next trigger based on your live behavior.",
-    ];
+    : ["Triggers activate on wrong answers, hesitation, and idle patterns."];
 
   if (devilDesign) {
     devilDesign.innerHTML = "";
