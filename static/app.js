@@ -142,9 +142,7 @@ const manualStressTriggerMode = true;
 const enableDevTriggerPanel =
   manualStressTriggerMode &&
   (window.location.hostname === "localhost" ||
-    window.location.hostname === "127.0.0.1" ||
-    window.location.search.includes("devTriggers=1") ||
-    window.location.search.includes("debug=1"));
+    window.location.hostname === "127.0.0.1");
 
 const DEV_FALLBACK_QUESTIONS = [
   {
