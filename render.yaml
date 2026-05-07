@@ -6,7 +6,7 @@ services:
     plan: free
     pythonVersion: 3.12
     buildCommand: pip install -r requirements.txt && python create_instance_dir.py && ls -la data/ && echo "QUESTION_IDS_CSV=$QUESTION_IDS_CSV" && python init_db.py
-    startCommand: gunicorn --worker-class eventlet -w 1 --timeout 120 -b 0.0.0.0:${PORT:-10000} wsgi:app
+    startCommand: gunicorn --worker-class eventlet -w 1 --timeout 300 -b 0.0.0.0:${PORT:-10000} wsgi:app
     autoDeploy: true
     envVars:
       - key: PYTHON_VERSION
