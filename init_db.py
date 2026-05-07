@@ -5,6 +5,7 @@ from app.extensions import db
 app = create_app()
 
 with app.app_context():
-    # Create all tables
+    # Drop all existing tables and recreate them
+    db.drop_all()
     db.create_all()
-    print("✓ Database tables created successfully")
+    print("✓ Database tables dropped and recreated successfully")
