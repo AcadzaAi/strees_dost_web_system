@@ -37,8 +37,4 @@ services:
         value: "7"
       - key: QUESTION_IDS_CSV
         value: /opt/render/project/src/data/question_ids_enriched.csv
-    disk:
-      name: sqlite-data
-      mountPath: /opt/render/project/src/instance
-      sizeGB: 1
 
