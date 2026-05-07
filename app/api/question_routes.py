@@ -793,10 +793,18 @@ def prefetch_batch():
 
 @question_bp.route("/stats", methods=["GET"])
 def get_stats():
+    import os
+    csv_exists = os.path.exists(QUESTIONS_CSV_PATH)
+    enriched_path = QUESTIONS_CSV_PATH.replace(".csv", "_enriched.csv")
+    enriched_exists = os.path.exists(enriched_path)
+    
     return jsonify(
         {
             "total_questions_available": len(question_loader.question_ids),
             "csv_path": QUESTIONS_CSV_PATH,
+            "csv_exists": csv_exists,
+            "enriched_path": enriched_path,
+            "enriched_exists": enriched_exists,
             "sample_ids": question_loader.get_random_ids(5),
         }
     )
