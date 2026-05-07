@@ -10,7 +10,11 @@ from sqlalchemy.ext.mutable import MutableDict, MutableList
 
 from ..extensions import db
 
-USE_SQLITE = (os.getenv("DATABASE_URL") or "").startswith("sqlite")
+USE_SQLITE = (
+    (os.getenv("DATABASE_URL") or "").startswith("sqlite") or
+    (os.getenv("SQLALCHEMY_DATABASE_URI") or "").startswith("sqlite") or
+    not os.getenv("DATABASE_URL")  # Default to SQLite if no DATABASE_URL set
+)
 
 if USE_SQLITE:
     UUIDType = db.String(36)

@@ -32,6 +32,8 @@ def create_app():
     # Dev-time safety: if a persistent SQLite file exists, ensure optional columns
     # added in later iterations exist so the app doesn't 500 during session writes.
     with app.app_context():
+        # Create tables if they don't exist
+        db.create_all()
         ensure_sessions_academic_columns()
 
     app.register_blueprint(ui_bp)
