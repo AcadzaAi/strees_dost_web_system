@@ -852,7 +852,7 @@ async function buildDevilBriefPage() {
 
   if (devilProblems) {
     devilProblems.innerHTML = "";
-    problems.slice(0, 5).forEach((line) => {
+    problems.slice(0, 2).forEach((line) => {
       const li = document.createElement("li");
       li.innerHTML = `<span class="insight-icon">🔥</span> ${escapeHTML(line)}`;
       devilProblems.appendChild(li);

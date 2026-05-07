@@ -210,7 +210,7 @@ Output constraints:
 
 
 DEVIL_BRIEF_PROMPT = """
-You are writing a dramatic but useful pre-test briefing from a devil persona.
+You are writing a creative, dramatic pre-test briefing from a devil persona.
 Use student follow-up answers and planned trigger policy context.
 
 Output strict JSON only:
@@ -218,16 +218,20 @@ Output strict JSON only:
     "devil_name": "...",
     "intro": "...",
     "taunt": "...",
-    "problems": ["...", "...", "..."],
+    "problems": ["...", "..."],
     "design_points": ["...", "...", "..."],
-    "challenge_lines": ["...", "..."]
+    "challenge_lines": ["..."]
 }
 
 Rules:
-- Keep tone creative and cinematic, but not abusive.
-- Problems must be specific to follow-up themes when available.
-- Keep each bullet under 120 chars.
+- Keep tone creative and dramatic, but not abusive.
+- Problems: Maximum 2 items, each under 80 chars. MUST be directly based on the user's actual follow-up answers. Do not make up generic stress points.
+- Challenge_lines: Only 1 line, under 100 chars. Make it dramatic but relevant to their specific situation.
+- Intro: One sentence under 120 chars, referencing their actual responses.
+- Taunt: One sentence under 100 chars, connected to what they shared.
 - Do not mention medical diagnosis.
+- If user gave minimal/unclear answers, keep problems general but concise (max 2 lines).
+- Every statement must connect to their actual input - no generic filler about "fire", "darkness" unless relevant to what they said.
 """
 
 
@@ -859,9 +863,9 @@ def devil_brief():
                 "devil_name": str(parsed.get("devil_name") or "The Invigilator Devil")[:80],
                 "intro": str(parsed.get("intro") or "I studied your responses and designed this test around your pressure points.")[:260],
                 "taunt": str(parsed.get("taunt") or "Accept my challenge. I doubt you can beat me.")[:220],
-                "problems": [str(x)[:120] for x in problems[:5] if str(x).strip()],
+                "problems": [str(x)[:80] for x in problems[:2] if str(x).strip()],
                 "design_points": [str(x)[:120] for x in design_points[:5] if str(x).strip()],
-                "challenge_lines": [str(x)[:120] for x in challenge_lines[:3] if str(x).strip()],
+                "challenge_lines": [str(x)[:100] for x in challenge_lines[:1] if str(x).strip()],
                 "source": "ai",
             }
         )
@@ -870,11 +874,10 @@ def devil_brief():
         return jsonify(
             {
                 "devil_name": "The Invigilator Devil",
-                "intro": "I shaped this test from your answers: where you hesitate, where panic rises, where focus slips.",
+                "intro": "I shaped this test from your answers: where you hesitate, where panic rises.",
                 "taunt": "Accept my challenge. I know your weak moments; prove me wrong.",
                 "problems": [
                     "You lose speed when doubt appears.",
-                    "You overthink after one hard question.",
                     "Distractions steal attention at critical moments.",
                 ],
                 "design_points": [
@@ -884,7 +887,6 @@ def devil_brief():
                 ],
                 "challenge_lines": [
                     "Accept this challenge and hold your focus.",
-                    "Beat the devil by beating your own panic.",
                 ],
                 "source": "fallback",
             }
