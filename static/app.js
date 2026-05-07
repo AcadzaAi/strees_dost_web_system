@@ -138,7 +138,7 @@ function cancelPendingTriggers() {
 }
 const disableStressMode = false;
 const stressDebug = true;
-const manualStressTriggerMode = true;
+const manualStressTriggerMode = false;
 const enableDevTriggerPanel =
   manualStressTriggerMode &&
   (window.location.hostname === "localhost" ||
