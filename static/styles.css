@@ -394,10 +394,10 @@ textarea {
 .qa-shell {
   width: min(900px, 100%);
   margin: 0 auto;
-  padding: 24px 18px 32px;
+  padding: 28px 22px 36px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
 }
 
 .qa-topbar {
@@ -405,44 +405,63 @@ textarea {
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 12px;
-  color: rgba(255, 255, 255, 0.8);
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .qa-back {
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: rgba(255, 255, 255, 0.06);
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.05);
   color: #f8fafc;
   cursor: pointer;
+  font-size: 18px;
+  transition: background 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+}
+.qa-back:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(248, 211, 132, 0.45);
+  transform: translateX(-2px);
 }
 
 .qa-title {
   text-align: center;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   color: #f8fafc;
+  letter-spacing: 0.04em;
 }
 
 .qa-count {
   font-size: 12px;
-  color: rgba(248, 211, 132, 0.85);
+  font-weight: 700;
+  color: rgba(248, 211, 132, 0.95);
+  background: rgba(248, 211, 132, 0.08);
+  border: 1px solid rgba(248, 211, 132, 0.22);
+  padding: 4px 10px;
+  border-radius: 999px;
+  letter-spacing: 0.05em;
 }
 
 .qa-progress {
+  position: relative;
   width: 100%;
-  height: 3px;
+  height: 5px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.07);
   overflow: hidden;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 
 .qa-progress span {
   display: block;
   height: 100%;
   width: 100%;
-  background: linear-gradient(90deg, #f3c26a, #b98cff);
+  background: linear-gradient(90deg, #f3c26a 0%, #f6b94c 45%, #b98cff 100%);
+  box-shadow: 0 0 12px rgba(246, 185, 76, 0.55);
+  transition: width 0.6s cubic-bezier(0.22, 0.61, 0.36, 1);
+  border-radius: 999px;
 }
 
 #stageIntro.active {
@@ -1080,27 +1099,37 @@ textarea:focus {
 }
 
 .qa-meta {
-  font-size: 13px;
-  color: rgba(248, 211, 132, 0.9);
-  margin-bottom: 8px;
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 10px;
+  padding: 6px 14px 6px 8px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(248, 211, 132, 0.14), rgba(185, 140, 255, 0.10));
+  border: 1px solid rgba(248, 211, 132, 0.32);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28), inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: #fde9b6;
+  margin-bottom: 18px;
+  width: max-content;
+  max-width: 100%;
 }
 
 .qa-emoji {
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   font-size: 14px;
-  background: rgba(98, 82, 160, 0.35);
-  color: #e2d7ff;
+  background: linear-gradient(135deg, rgba(246, 185, 76, 0.95), rgba(185, 140, 255, 0.85));
+  color: #1a1206;
   letter-spacing: 0;
+  box-shadow: 0 0 0 2px rgba(20, 16, 12, 0.85), 0 0 12px rgba(246, 185, 76, 0.45);
+  animation: qaEmojiSpin 14s linear infinite;
 }
 
 .qa-emoji svg {
@@ -1112,69 +1141,211 @@ textarea:focus {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+
+@keyframes qaEmojiSpin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
 .qa-question {
-  font-size: 22px;
-  line-height: 1.4;
-  margin-bottom: 18px;
+  font-size: 24px;
+  line-height: 1.45;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  margin-bottom: 22px;
   color: #f8fafc;
+  background: linear-gradient(180deg, #ffffff 0%, #d8d3c2 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-wrap: balance;
 }
 
 .qa-card {
+  position: relative;
   width: 100%;
   margin: 0;
-  padding: 28px 32px 30px;
-  border-radius: 20px;
-  background: linear-gradient(160deg, rgba(20, 16, 12, 0.95), rgba(12, 10, 8, 0.98));
-  border: 1px solid rgba(248, 211, 132, 0.18);
-  box-shadow: 0 24px 56px rgba(6, 6, 6, 0.45);
+  padding: 32px 36px 32px;
+  border-radius: 24px;
+  background:
+    radial-gradient(120% 80% at 0% 0%, rgba(246, 185, 76, 0.08), transparent 60%),
+    radial-gradient(120% 80% at 100% 100%, rgba(185, 140, 255, 0.10), transparent 60%),
+    linear-gradient(160deg, rgba(22, 18, 14, 0.96), rgba(10, 9, 8, 0.99));
+  border: 1px solid rgba(248, 211, 132, 0.22);
+  box-shadow:
+    0 32px 72px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(255, 255, 255, 0.03) inset,
+    0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  overflow: hidden;
+  transform-origin: center top;
+  will-change: transform, opacity, filter;
+}
+
+.qa-card::before {
+  /* Soft animated highlight that travels across the top of the card. */
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: -10%;
+  right: -10%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(248, 211, 132, 0.65), transparent);
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.qa-card::after {
+  /* Faint corner glow; gives the card depth without being noisy. */
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(246, 185, 76, 0.12), transparent 40%);
+  pointer-events: none;
+  mix-blend-mode: screen;
+  opacity: 0.6;
+}
+
+/* Zoom-in / zoom-out entrance for each new follow-up question. */
+@keyframes qaCardEnter {
+  0% {
+    opacity: 0;
+    transform: scale(0.92) translateY(10px);
+    filter: blur(6px);
+  }
+  55% {
+    opacity: 1;
+    transform: scale(1.02) translateY(0);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+    filter: blur(0);
+  }
+}
+
+.qa-card.qa-card-enter {
+  animation: qaCardEnter 0.55s cubic-bezier(0.22, 0.9, 0.32, 1.1) both;
+}
+
+@keyframes qaQuestionRise {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.qa-card.qa-card-enter .qa-meta { animation: qaQuestionRise 0.5s 0.05s ease-out both; }
+.qa-card.qa-card-enter .qa-question { animation: qaQuestionRise 0.55s 0.12s ease-out both; }
+.qa-card.qa-card-enter .qa-help,
+.qa-card.qa-card-enter .label,
+.qa-card.qa-card-enter textarea,
+.qa-card.qa-card-enter .row { animation: qaQuestionRise 0.5s 0.18s ease-out both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .qa-card.qa-card-enter,
+  .qa-card.qa-card-enter * {
+    animation: none !important;
+  }
+  .qa-emoji { animation: none; }
 }
 
 #stageQA .label {
-  color: #f8fafc;
+  color: rgba(248, 250, 252, 0.85);
   font-weight: 600;
+  letter-spacing: 0.04em;
+  font-size: 13px;
+  margin-bottom: 8px;
+  display: block;
 }
 
 .qa-card textarea {
   min-height: 160px;
   border-radius: 16px;
-  border-color: rgba(248, 211, 132, 0.22);
+  border: 1px solid rgba(248, 211, 132, 0.22);
   background: rgba(10, 9, 8, 0.7);
   color: #f8fafc;
-  box-shadow: inset 0 0 0 1px rgba(248, 211, 132, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(248, 211, 132, 0.06), inset 0 2px 6px rgba(0, 0, 0, 0.35);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  font-size: 15px;
+  line-height: 1.55;
+  padding: 14px 16px;
+}
+
+.qa-card textarea::placeholder {
+  color: rgba(248, 250, 252, 0.35);
 }
 
 .qa-card textarea:focus {
   border-color: rgba(248, 211, 132, 0.75);
-  box-shadow: 0 0 0 4px rgba(248, 211, 132, 0.2);
+  background: rgba(14, 12, 10, 0.85);
+  box-shadow:
+    0 0 0 4px rgba(248, 211, 132, 0.18),
+    inset 0 0 0 1px rgba(248, 211, 132, 0.18),
+    inset 0 2px 6px rgba(0, 0, 0, 0.35);
 }
 
 .qa-help {
-  margin: 12px 0 18px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(88, 102, 160, 0.28);
-  color: rgba(235, 242, 255, 0.8);
-  font-size: 12px;
+  margin: 14px 0 22px;
+  padding: 11px 14px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(88, 102, 160, 0.22), rgba(185, 140, 255, 0.12));
+  border: 1px solid rgba(185, 140, 255, 0.18);
+  color: rgba(235, 242, 255, 0.82);
+  font-size: 12.5px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  line-height: 1.45;
 }
 
 .qa-help-icon {
-  font-size: 14px;
+  font-size: 15px;
+  filter: drop-shadow(0 0 4px rgba(246, 185, 76, 0.6));
 }
 
 #stageQA .btn.primary {
   background: linear-gradient(90deg, #f3c26a, #f6b94c);
   color: #1a1206;
-  box-shadow: 0 14px 30px rgba(246, 185, 76, 0.3);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 12px 24px;
+  border-radius: 12px;
+  box-shadow: 0 14px 30px rgba(246, 185, 76, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
+}
+
+#stageQA .btn.primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.05);
+  box-shadow: 0 18px 38px rgba(246, 185, 76, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+#stageQA .btn.primary:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 8px 18px rgba(246, 185, 76, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.4);
 }
 
 #stageQA .btn.primary:disabled {
-  background: rgba(255, 255, 255, 0.12);
-  color: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.4);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
   filter: none;
+}
+
+#stageQA .btn.ghost {
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(248, 250, 252, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  padding: 12px 20px;
+  font-weight: 600;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+
+#stageQA .btn.ghost:hover {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(248, 211, 132, 0.4);
+  transform: translateY(-1px);
 }
 
 .row { display: flex; gap: 12px; flex-wrap: wrap; }
@@ -7383,10 +7554,18 @@ a.login-btn-wide {
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(6px);
+  /* Heavier white veil + stronger blur so the question is visibly obscured. */
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   z-index: 10;
   pointer-events: none;
+  animation: triggerFogPulse 2.4s ease-in-out infinite;
+}
+
+@keyframes triggerFogPulse {
+  0%, 100% { opacity: 0.94; }
+  50%      { opacity: 1; }
 }
 
 /* FOCUS callout */
@@ -7414,4 +7593,222 @@ a.login-btn-wide {
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.7; }
+}
+
+/* ==========================================================================
+   Mobile / responsive overrides
+   These come last on purpose so they win over the older scattered
+   breakpoints earlier in this file. Targets phones (<=768px) and small
+   phones (<=480px).
+   ========================================================================== */
+
+@media (max-width: 768px) {
+  html, body { font-size: 15px; }
+
+  .app-shell {
+    height: 100dvh;
+    min-height: 100dvh;
+    overflow: auto;
+  }
+
+  .top-bar {
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    min-height: 56px;
+    gap: 8px;
+    row-gap: 6px;
+  }
+  .top-bar h1 { font-size: 12px; }
+  .top-bar h1 span { display: none; }
+  .app-brand { gap: 8px; min-width: 0; }
+  .brand-mark { width: 30px; height: 30px; font-size: 15px; }
+
+  /* Right-hand cluster of header controls */
+  .top-bar > div[style*="display: flex"] {
+    gap: 8px !important;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  #userNameDisplay {
+    max-width: 110px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px !important;
+  }
+  #sessionCounter { font-size: 11px !important; padding: 3px 8px !important; }
+  #btnLogout { font-size: 12px !important; padding: 4px 10px !important; }
+
+  .viewport,
+  main.viewport {
+    padding: 12px;
+  }
+
+  /* Generic stage cards */
+  .intro-card,
+  .glass.intro-card,
+  .focus-screen,
+  .focus-shell,
+  .focus-hero-card,
+  .qa-shell,
+  .qa-card,
+  .subject-card,
+  .topic-card,
+  .pop-card {
+    width: 100%;
+    max-width: 100%;
+    padding: 16px;
+    border-radius: 16px;
+    box-shadow: 0 6px 20px rgba(15, 23, 42, 0.08);
+  }
+
+  .focus-content {
+    flex-direction: column;
+  }
+  .focus-input textarea,
+  #initialText,
+  #answerInput {
+    min-height: 110px;
+    font-size: 15px;
+  }
+  .mic-btn { width: 40px; height: 40px; font-size: 18px; }
+
+  .story-actions,
+  .row,
+  .subject-actions,
+  .confirm-actions {
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+  }
+  .row .btn,
+  .story-actions .btn,
+  .subject-actions .btn,
+  .confirm-actions .btn {
+    width: 100%;
+  }
+
+  /* QA stage */
+  .qa-topbar {
+    padding: 8px 4px;
+    gap: 6px;
+  }
+  .qa-title { font-size: 14px; }
+  .qa-count { font-size: 12px; }
+  .qa-question { font-size: 17px; line-height: 1.35; }
+  .qa-help { font-size: 12px; }
+
+  /* Subject / topic option grids → single column */
+  .subject-options,
+  .topic-options {
+    grid-template-columns: 1fr !important;
+    gap: 10px;
+  }
+  .subject-option { padding: 12px; }
+
+  /* Test card (popups stage) */
+  .test-card { padding: 12px; border-radius: 14px; }
+  .test-topbar {
+    flex-wrap: wrap;
+    gap: 8px;
+    row-gap: 6px;
+  }
+  .test-timer-pill { font-size: 13px; padding: 4px 10px; }
+  .test-finish { font-size: 12px; padding: 6px 10px; }
+  .test-head { gap: 8px; }
+  .test-head-main { flex-wrap: wrap; gap: 8px; }
+  .q-count { font-size: 12px; }
+  .q-type-select { font-size: 12px; padding: 4px 8px; max-width: 140px; }
+  .q-subject { font-size: 11px; }
+
+  .question-toolbar { flex-wrap: wrap; gap: 6px; }
+  .question-pill { font-size: 12px; padding: 6px 10px; }
+  .question-stem { font-size: 15px; line-height: 1.45; }
+  .question-zoom { width: 30px; height: 30px; font-size: 14px; }
+
+  .options-grid {
+    grid-template-columns: 1fr !important;
+    gap: 10px;
+  }
+
+  .integer-panel { gap: 10px; }
+  .keypad {
+    grid-template-columns: repeat(3, 1fr) !important;
+    gap: 8px;
+  }
+  .keypad button {
+    height: 44px;
+    font-size: 18px;
+  }
+  .keypad-actions { flex-direction: column; gap: 8px; }
+  .keypad-actions .btn { width: 100%; }
+
+  .test-submit { padding: 0; }
+  .test-submit .btn { width: 100%; }
+
+  /* HUD / control room — drawer style on mobile */
+  .hud-panel {
+    width: 92vw !important;
+    max-width: 360px;
+    right: 0;
+    top: 0;
+    height: 100dvh;
+  }
+
+  /* Binary A/B overlay */
+  .binary-overlay { padding: 16px; }
+  .binary-card { padding: 18px; max-width: 92vw; }
+  .binary-question { font-size: 17px; }
+  .binary-actions { flex-direction: column; gap: 10px; }
+  .binary-btn { width: 100%; }
+
+  /* Confirm + solution modals */
+  .confirm-modal { padding: 16px; }
+  .confirm-card,
+  .solution-card { width: 100%; max-width: 92vw; padding: 18px; }
+
+  /* Loading screen tightening */
+  .loading-screen { padding: 18px; }
+  .loading-copy h2 { font-size: 22px; }
+  .neural-field svg { width: 100%; height: auto; }
+
+  /* Devil stage (kept in DOM but no longer in flow) — make it safe just in case */
+  .devil-brief-card,
+  .devil-brief-redesign { padding: 16px; }
+  .devil-hero-row { flex-direction: column; align-items: center; text-align: center; }
+  .devil-avatar-img { font-size: 48px; }
+  .devil-cta { width: 100%; }
+}
+
+@media (max-width: 480px) {
+  html, body { font-size: 14px; }
+
+  .top-bar { padding: 6px 10px; min-height: 52px; }
+  .brand-mark { width: 26px; height: 26px; font-size: 14px; }
+  .top-bar h1 { font-size: 11px; letter-spacing: 0.12em; }
+
+  .viewport, main.viewport { padding: 10px; }
+
+  .intro-card,
+  .glass.intro-card,
+  .focus-shell,
+  .focus-hero-card,
+  .qa-card,
+  .pop-card,
+  .test-card { padding: 14px; border-radius: 14px; }
+
+  .focus-input textarea,
+  #initialText,
+  #answerInput { min-height: 100px; font-size: 14px; }
+
+  .question-stem { font-size: 14px; }
+  .keypad button { height: 40px; font-size: 16px; }
+  .qa-question { font-size: 16px; }
+
+  /* Trigger fog should still feel present, but the existing rule already covers it. */
+}
+
+/* Touch devices: trigger overlays sit above scrollable content; ensure they never block legit input on the test card. */
+@media (pointer: coarse) {
+  .trigger-fog-overlay { pointer-events: none; }
 }

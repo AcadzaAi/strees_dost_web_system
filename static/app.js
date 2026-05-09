@@ -700,6 +700,15 @@ function setQuestionUI(data) {
       '</svg></span><span>FOLLOW-UP QUESTION</span>';
   }
   $("questionText").textContent = data.question || "Your next question will bloom here.";
+
+  // Replay the zoom-in/out entrance animation each time a new follow-up arrives.
+  const qaCardEl = document.querySelector("#stageQA .qa-card");
+  if (qaCardEl) {
+    qaCardEl.classList.remove("qa-card-enter");
+    void qaCardEl.offsetWidth;
+    qaCardEl.classList.add("qa-card-enter");
+  }
+
   if (btnSkip) {
     btnSkip.hidden = totalAsked < 3;
     btnSkip.disabled = false;
@@ -8431,7 +8440,6 @@ async function handleCompletion() {
       popupSummary.textContent = "Pressure simulation is ready. Accept challenge to begin.";
     }
 
-    // Fetch conversation history from server.
     let initialText = "";
     let conversationHistory = [];
     try {
@@ -8441,25 +8449,22 @@ async function handleCompletion() {
       console.log("[handleCompletion] initialText:", initialText?.substring(0, 80), "history entries:", conversationHistory.length);
     } catch (e) { console.warn("[handleCompletion] debug fetch failed:", e); }
 
-    // Fire extraction AND devil-brief build in parallel.
-    // Devil brief shows FIRST, extraction resolves in background.
+    // Devil/explainer card was removed from the flow. We still build the
+    // brief silently (some downstream code may read its data) but never show
+    // the stage. Wait for the academic-topics extraction so we can route
+    // straight to subject selection / fullscreen via acceptDevilChallenge.
     const extractionPromise = window.academicTopics?.decideAndStore?.(sessionId, initialText, conversationHistory);
-    await buildDevilBriefPage();
+    try { await buildDevilBriefPage(); } catch (e) { console.warn("[handleCompletion] devil brief build failed:", e); }
 
-    // Show the devil brief immediately.
-    showStage("devil");
-
-    // Wait for extraction to finish (it may already be done).
     const decision = await extractionPromise;
     console.log("[handleCompletion] extraction decision:", JSON.stringify(decision));
-
-    // Store the decision so acceptDevilChallenge can use it.
     window.__academicDecision = decision || null;
 
+    await acceptDevilChallenge();
   } catch (err) {
-    // Fallback: show devil page anyway
-    showStage("devil");
+    console.error("[handleCompletion] error, falling through to subject selection:", err);
     window.__academicDecision = null;
+    try { await acceptDevilChallenge(); } catch (_) { showStage("subjectSelection"); }
   }
 }
 

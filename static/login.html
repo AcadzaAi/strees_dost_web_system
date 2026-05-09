@@ -15,6 +15,87 @@
       display: flex;
       flex-direction: column;
     }
+
+    /* ---- Intro video overlay shown after name entry ---- */
+    .intro-video-stage {
+      position: fixed;
+      inset: 0;
+      background: radial-gradient(circle at top, #0b1024 0%, #05060d 70%);
+      z-index: 9999;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .intro-video-stage.is-active { display: flex; }
+
+    .intro-video-skip {
+      position: absolute;
+      top: 18px;
+      right: 18px;
+      background: rgba(255, 255, 255, 0.1);
+      color: #fff;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      padding: 8px 18px;
+      border-radius: 999px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      backdrop-filter: blur(10px);
+      transition: background 0.2s, transform 0.2s;
+      z-index: 2;
+    }
+    .intro-video-skip:hover {
+      background: rgba(255, 255, 255, 0.22);
+      transform: translateY(-1px);
+    }
+
+    .intro-video-frame {
+      width: min(960px, 96vw);
+      aspect-ratio: 16 / 9;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.08);
+      background: #000;
+    }
+    .intro-video-frame iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      display: block;
+    }
+
+    .intro-video-caption {
+      margin-top: 18px;
+      color: rgba(255, 255, 255, 0.78);
+      font-size: 14px;
+      text-align: center;
+      max-width: 720px;
+      line-height: 1.5;
+    }
+    .intro-video-caption strong { color: #fff; }
+
+    .intro-video-continue {
+      margin-top: 16px;
+      background: linear-gradient(120deg, #ff6cab, #8561f9);
+      color: #fff;
+      border: 0;
+      padding: 12px 28px;
+      border-radius: 999px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 12px 30px rgba(133, 97, 249, 0.45);
+    }
+    .intro-video-continue:hover { transform: translateY(-1px); }
+
+    @media (max-width: 640px) {
+      .intro-video-stage { padding: 14px; }
+      .intro-video-skip { top: 12px; right: 12px; padding: 6px 14px; font-size: 13px; }
+      .intro-video-caption { font-size: 13px; }
+      .intro-video-continue { padding: 10px 22px; font-size: 14px; }
+    }
   </style>
 </head>
 <body>
@@ -35,6 +116,26 @@
     </section>
   </main>
 
+  <!-- Intro video overlay (Synthesia embed) -->
+  <div id="introVideoStage" class="intro-video-stage" aria-hidden="true">
+    <button id="introVideoSkip" class="intro-video-skip" type="button" aria-label="Skip intro video">Skip ›</button>
+    <div class="intro-video-frame">
+      <iframe
+        id="introVideoFrame"
+        src=""
+        title="Mastering Focus Under Pressure"
+        loading="lazy"
+        allow="autoplay; fullscreen; encrypted-media"
+        allowfullscreen
+        referrerpolicy="strict-origin-when-cross-origin"></iframe>
+    </div>
+    <p class="intro-video-caption">
+      <strong>Mastering Focus Under Pressure.</strong>
+      A quick walkthrough of how Focus Dost works. Click <strong>Skip</strong> at any time.
+    </p>
+    <button id="introVideoContinue" class="intro-video-continue" type="button">Continue to your session</button>
+  </div>
+
   <script src="/auth.js"></script>
   <script>
     (function () {
@@ -42,23 +143,53 @@
       var nameInput = document.getElementById("displayName");
       var hint = document.getElementById("loginHint");
 
+      var videoStage    = document.getElementById("introVideoStage");
+      var videoFrame    = document.getElementById("introVideoFrame");
+      var btnSkipVideo  = document.getElementById("introVideoSkip");
+      var btnContVideo  = document.getElementById("introVideoContinue");
+
+      var SYNTHESIA_EMBED_URL =
+        "https://share.synthesia.io/embeds/videos/34ab6da8-fecf-419f-a34c-115a92d721b1";
+
       if (!window.StressDostAuth) return;
 
-      // If already logged in, redirect to home
       if (window.StressDostAuth.getUser()) {
         window.location.replace("/");
         return;
       }
 
+      function goHome() {
+        if (videoFrame) { try { videoFrame.src = "about:blank"; } catch (_) {} }
+        window.location.href = "/";
+      }
+
+      function showIntroVideo() {
+        if (!videoStage || !videoFrame) { goHome(); return; }
+        videoFrame.src = SYNTHESIA_EMBED_URL;
+        videoStage.classList.add("is-active");
+        videoStage.setAttribute("aria-hidden", "false");
+        if (btnSkipVideo) btnSkipVideo.focus();
+      }
+
+      if (btnSkipVideo) btnSkipVideo.addEventListener("click", goHome);
+      if (btnContVideo) btnContVideo.addEventListener("click", goHome);
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape" && videoStage && videoStage.classList.contains("is-active")) {
+          goHome();
+        }
+      });
+
       function submitProfile() {
         if (hint) hint.textContent = "";
         var display_name = (nameInput || {}).value || "";
-        
+
         if (!display_name.trim()) {
           if (hint) hint.textContent = "Please enter your name";
           return;
         }
-        
+
+        if (btnNext) { btnNext.disabled = true; btnNext.textContent = "Just a sec…"; }
+
         console.log('[Login] Checking profile for:', display_name.trim());
         fetch("/api/user/login", {
           method: "POST",
@@ -70,10 +201,10 @@
           console.log('[Login] API response:', data);
           if (data.error) {
             if (hint) hint.textContent = data.error;
+            if (btnNext) { btnNext.disabled = false; btnNext.textContent = "Continue"; }
             return;
           }
-          
-          // Store user profile data
+
           window.StressDostAuth.setUser({
             user_id: data.user_id,
             display_name: data.name,
@@ -81,13 +212,14 @@
             completed_sessions: data.completed_sessions,
             is_new_user: data.is_new_user
           });
-          
-          console.log('[Login] User saved, redirecting to home');
-          window.location.href = "/";
+
+          console.log('[Login] User saved, showing intro video');
+          showIntroVideo();
         })
         .catch(err => {
           console.error('[Login] Network error:', err);
           if (hint) hint.textContent = "Network error. Please try again.";
+          if (btnNext) { btnNext.disabled = false; btnNext.textContent = "Continue"; }
         });
       }
 
@@ -96,7 +228,7 @@
       }
 
       if (nameInput) {
-        nameInput.addEventListener("keypress", function(e) {
+        nameInput.addEventListener("keypress", function (e) {
           if (e.key === "Enter") {
             e.preventDefault();
             submitProfile();

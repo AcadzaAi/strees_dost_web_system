@@ -25,7 +25,7 @@ def _sqlite_table_columns(table_name: str) -> set[str]:
 
 
 def ensure_sessions_academic_columns() -> None:
-    """Ensure new academic topic columns exist on SQLite `sessions` table.
+    """Ensure newly added optional columns exist on SQLite `sessions` table.
 
     This is a minimal compatibility shim for dev environments. In production
     you should run migrations instead.
@@ -38,7 +38,6 @@ def ensure_sessions_academic_columns() -> None:
     try:
         cols = _sqlite_table_columns("sessions")
     except Exception as exc:  # pragma: no cover
-        # Table might not exist yet (first run)
         logger.debug("sqlite schema check skipped: %s", exc)
         return
 
@@ -49,6 +48,10 @@ def ensure_sessions_academic_columns() -> None:
         to_add.append(("academic_topics_subject", "VARCHAR(50)"))
     if "academic_topics_topics" not in cols:
         to_add.append(("academic_topics_topics", "TEXT"))
+    # `user_id` was introduced when the user-profile feature landed; older
+    # local SQLite files predate it and need a manual ALTER.
+    if "user_id" not in cols:
+        to_add.append(("user_id", "VARCHAR(36)"))
 
     if not to_add:
         return
