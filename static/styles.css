@@ -7029,16 +7029,37 @@ a.login-btn-wide {
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(255, 255, 255, 0.75);
-  backdrop-filter: blur(4px);
+  background: 
+    radial-gradient(circle at 15% 25%, rgba(255, 255, 255, 0.8) 0%, transparent 2%),
+    radial-gradient(circle at 85% 35%, rgba(255, 255, 255, 0.7) 0%, transparent 1.5%),
+    radial-gradient(circle at 45% 65%, rgba(255, 255, 255, 0.9) 0%, transparent 1%),
+    radial-gradient(circle at 70% 80%, rgba(255, 255, 255, 0.6) 0%, transparent 2%),
+    radial-gradient(circle at 25% 90%, rgba(255, 255, 255, 0.8) 0%, transparent 1.5%),
+    radial-gradient(circle at 60% 15%, rgba(255, 255, 255, 0.7) 0%, transparent 1%),
+    linear-gradient(180deg, #f8f9fa 0%, #ffffff 50%, #f8f9fa 100%);
+  background-size: 100% 100%;
   z-index: 10;
   pointer-events: none;
-  animation: fogPulse 3s ease-in-out infinite;
+  animation: fogGlitter 4s ease-in-out infinite;
 }
 
-@keyframes fogPulse {
-  0%, 100% { opacity: 0.75; }
-  50% { opacity: 0.85; }
+@keyframes fogGlitter {
+  0%, 100% { 
+    opacity: 1;
+    filter: brightness(1);
+  }
+  25% { 
+    opacity: 1;
+    filter: brightness(1.05);
+  }
+  50% { 
+    opacity: 1;
+    filter: brightness(1);
+  }
+  75% { 
+    opacity: 1;
+    filter: brightness(1.03);
+  }
 }
 
 .stress-meta-question {
@@ -7554,18 +7575,44 @@ a.login-btn-wide {
   left: 0;
   width: 100%;
   height: 100%;
-  /* Heavier white veil + stronger blur so the question is visibly obscured. */
-  background: rgba(255, 255, 255, 0.94);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  /* Completely opaque fog with subtle glitter sparkles */
+  background: 
+    radial-gradient(circle at 20% 30%, rgba(255, 255, 255, 0.9) 0%, transparent 1.5%),
+    radial-gradient(circle at 80% 20%, rgba(255, 255, 255, 0.8) 0%, transparent 1%),
+    radial-gradient(circle at 35% 70%, rgba(255, 255, 255, 0.85) 0%, transparent 1.2%),
+    radial-gradient(circle at 65% 85%, rgba(255, 255, 255, 0.7) 0%, transparent 1.5%),
+    radial-gradient(circle at 50% 45%, rgba(255, 255, 255, 0.9) 0%, transparent 1%),
+    radial-gradient(circle at 10% 60%, rgba(255, 255, 255, 0.75) 0%, transparent 1.3%),
+    radial-gradient(circle at 90% 55%, rgba(255, 255, 255, 0.8) 0%, transparent 1%),
+    radial-gradient(circle at 40% 15%, rgba(255, 255, 255, 0.85) 0%, transparent 1.2%),
+    linear-gradient(180deg, #fafafa 0%, #ffffff 30%, #ffffff 70%, #fafafa 100%);
+  background-size: 100% 100%;
   z-index: 10;
   pointer-events: none;
-  animation: triggerFogPulse 2.4s ease-in-out infinite;
+  animation: triggerFogGlitter 3.5s ease-in-out infinite;
 }
 
-@keyframes triggerFogPulse {
-  0%, 100% { opacity: 0.94; }
-  50%      { opacity: 1; }
+@keyframes triggerFogGlitter {
+  0%, 100% { 
+    opacity: 1;
+    filter: brightness(1);
+  }
+  20% { 
+    opacity: 1;
+    filter: brightness(1.06);
+  }
+  40% { 
+    opacity: 1;
+    filter: brightness(1);
+  }
+  60% { 
+    opacity: 1;
+    filter: brightness(1.04);
+  }
+  80% { 
+    opacity: 1;
+    filter: brightness(1);
+  }
 }
 
 /* FOCUS callout */

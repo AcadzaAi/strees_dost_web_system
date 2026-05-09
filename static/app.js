@@ -1521,20 +1521,9 @@ const StressTriggers = (() => {
   }
 
   function mountDevilTopBanner(lines) {
+    // Disabled in production - no devil banners shown
     const banner = document.createElement("div");
-    banner.className = "stress-heart-devil-banner";
-    banner.setAttribute("role", "status");
-    banner.setAttribute("aria-live", "polite");
-    banner.innerHTML = `
-      <div class="avatar" aria-hidden="true">😈</div>
-      <div class="bubble">
-        <strong>${escapeHTML(lines?.title || "Devil Notice")}</strong>
-        <span>${escapeHTML(lines?.lead || "Stay focused.")}</span>
-        <em>${escapeHTML(lines?.challenge || "Can you hold your nerve?")}</em>
-        ${lines?.taunt ? `<small>${escapeHTML(lines.taunt)}</small>` : ""}
-      </div>
-    `;
-    document.body.appendChild(banner);
+    banner.style.display = "none";
     return banner;
   }
 
@@ -4220,44 +4209,8 @@ const StressTriggers = (() => {
   }
 
   function showDevToast(message, options = {}) {
-    const toast = document.createElement("div");
-    applyInlineStyles(toast, {
-      position: "fixed",
-      left: "50%",
-      bottom: "28px",
-      transform: "translateX(-50%)",
-      zIndex: "13020",
-      maxWidth: "min(680px, 92vw)",
-      background: options.background || "rgba(10, 25, 47, 0.95)",
-      color: options.color || "#e7f5ff",
-      border: options.border || "1px solid rgba(100,255,218,0.38)",
-      borderRadius: "14px",
-      boxShadow: "0 12px 32px rgba(0,0,0,0.35)",
-      padding: "12px 16px",
-      fontSize: "0.95rem",
-      letterSpacing: "0.01em",
-      textAlign: "center",
-      backdropFilter: "blur(12px)",
-      WebkitBackdropFilter: "blur(12px)",
-      opacity: "0",
-      transition: "opacity 220ms ease, transform 220ms ease",
-    });
-    toast.textContent = String(message || "");
-    document.body.appendChild(toast);
-    requestAnimationFrame(() => {
-      toast.style.opacity = "1";
-      toast.style.transform = "translateX(-50%) translateY(-6px)";
-    });
-    const life = Math.max(1200, Number(options.durationMs || 2800));
-    const timer = setTimeout(() => {
-      toast.style.opacity = "0";
-      toast.style.transform = "translateX(-50%) translateY(0px)";
-      setTimeout(() => toast.remove(), 250);
-    }, life);
-    return () => {
-      clearTimeout(timer);
-      toast.remove();
-    };
+    // Disabled in production - no toast notifications shown
+    return () => {}; // Return empty cleanup function
   }
 
   function showFocusCoach(message, options = {}) {
