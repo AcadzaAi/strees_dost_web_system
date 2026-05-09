@@ -8402,10 +8402,7 @@ async function handleCompletion() {
       console.log("[handleCompletion] initialText:", initialText?.substring(0, 80), "history entries:", conversationHistory.length);
     } catch (e) { console.warn("[handleCompletion] debug fetch failed:", e); }
 
-    // Devil/explainer card was removed from the flow. We still build the
-    // brief silently (some downstream code may read its data) but never show
-    // the stage. Wait for the academic-topics extraction so we can route
-    // straight to subject selection / fullscreen via acceptDevilChallenge.
+    // Build devil brief page and show it
     const extractionPromise = window.academicTopics?.decideAndStore?.(sessionId, initialText, conversationHistory);
     try { await buildDevilBriefPage(); } catch (e) { console.warn("[handleCompletion] devil brief build failed:", e); }
 
@@ -8413,7 +8410,8 @@ async function handleCompletion() {
     console.log("[handleCompletion] extraction decision:", JSON.stringify(decision));
     window.__academicDecision = decision || null;
 
-    await acceptDevilChallenge();
+    // Show the devil stage
+    showStage("devil");
   } catch (err) {
     console.error("[handleCompletion] error, falling through to subject selection:", err);
     window.__academicDecision = null;
