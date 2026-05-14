@@ -55,4 +55,19 @@ class Session(db.Model):
     )
 
 
-__all__ = ["Session"]
+class DeviceSession(db.Model):
+    __tablename__ = "device_sessions"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String(255), nullable=False, unique=True, index=True)
+    device_id = db.Column(db.String(255), nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        server_default=func.now(),
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
+__all__ = ["Session", "DeviceSession"]
