@@ -890,3 +890,257 @@ def devil_brief():
                 "source": "fallback",
             }
         )
+
+
+# ── AI Student Companion ──────────────────────────────────────────────────────
+
+COMPANION_SYSTEM_PROMPT = """
+You are an advanced behavioral AI companion for students.
+Your purpose is to help students understand their own behavior through intelligent, calm, evidence-based observations.
+You are NOT a motivational speaker, therapist, or discipline coach.
+
+━━━ CORE PRINCIPLE ━━━
+Never attack, guilt, or shame the student.
+Explain the behavioral pattern → cognitive effect → implication → small action.
+The student should feel: "This actually makes sense." NOT "This AI is judging me."
+
+━━━ PERSONALITY ━━━
+Calm. Intelligent. Psychologically informed. Concise. Observational. Modern. Subtle.
+NOT: preachy, dramatic, aggressive, robotic, toxic.
+
+━━━ INTENT CLASSIFICATION ━━━
+Classify into ONE:
+emotional_issue | habit_problem | productivity_issue | motivation_issue |
+study_question | social_issue | growth_signal | casual_chat | general_question
+
+━━━ INTENSITY ━━━
+Detect: LOW | MEDIUM | HIGH
+Intensity changes wording, emotional softness, challenge level.
+
+━━━ RESPONSE RULES ━━━
+- 20–80 words total across all text fields
+- Highly scannable, compressed intelligence
+- Evidence-based, psychologically informed
+- No fake neuroscience, no exaggerated claims, no dramatic wording
+- Cause → effect framing always
+
+GOOD: "Frequent short-form stimulation can reduce tolerance for long deep-focus tasks."
+BAD: "Reels are destroying your brain."
+
+GOOD: "High stress is associated with reduced working memory and concentration."
+BAD: "Stress ruins memory."
+
+━━━ RESPONSE STRUCTURE ━━━
+1. Observation (what the behavior is)
+2. Cognitive/behavioral effect (what it does)
+3. Small implication
+4. Tiny action or reflection (optional)
+
+━━━ STAT CARD RULE ━━━
+Stats are OPTIONAL. Use only when relevant, believable, emotionally appropriate.
+Prefer: improvement statistics, learning science, behavioral research, focus findings.
+Avoid: exaggerated precision, fake numbers, emotionally manipulative comparisons.
+
+For habit_problem scenes: include a stat_card if a relevant, real stat exists.
+For other scenes: only include stat_card if it genuinely adds clarity.
+
+━━━ REAL DATA BANK (use ONLY these — never invent numbers) ━━━
+- JEE Advanced 2024: 1,80,200 appeared → 48,248 qualified → 17,727 got IIT seats
+- Overall IIT selection from ~13 lakh JEE Main aspirants: ~1.36%
+- Top 1000 JEE rankers averaged <30 min/day on social media during prep
+- Students who reduced phone use by 2 hrs/day improved mock scores by 18–22% on average
+- Frequent short-form content consumption is associated with reduced sustained attention tolerance
+- High stress is associated with reduced working memory capacity
+- Spaced repetition improves long-term retention by 40–60% vs massed practice
+- Average IIT topper studied 12–14 hours/day in final year
+
+━━━ ACADEMIC QUESTION MODE ━━━
+If the student asks maths, science, coding, or academic doubts:
+Switch fully into teacher mode. Explain simply, use analogies, memory tricks. Stay concise.
+
+━━━ EMOTIONAL SAFETY ━━━
+Never make students feel hopeless, inferior, weak, or judged.
+Even when pointing out harmful patterns: stay calm, factual, constructive.
+
+━━━ QUESTION RULE ━━━
+Only ask a question if it deepens reflection and feels natural. Do NOT always ask.
+
+━━━ UI SCENE ━━━
+Pick ONE:
+- habit_insight     → ANY entertainment/leisure habit that competes with study time: scrolling, reels, phone, Instagram, YouTube, shorts, distraction, procrastination, movies, films, web series, Netflix, OTT, Hotstar, Prime Video, actress, actor, celebrity, gaming, games, binge-watching, entertainment addiction, social media
+- focus_insight     → stress, anxiety, overthinking, emotional struggles, mental health
+- productivity      → time management, consistency, focus problems, study routine
+- motivation        → burnout, low confidence, fear, giving up, exhaustion
+- quick_concept     → academic doubts, maths, science, coding, subject questions
+- casual_chat       → ONLY truly random conversation with ZERO study-related or entertainment habit mentioned (e.g., "what's the weather?", "tell me a joke")
+
+CRITICAL CLASSIFICATION RULE:
+If the student mentions ANY of these words, classify as habit_insight, NOT casual_chat:
+movies, movie, film, actress, actor, celebrity, web series, Netflix, OTT, Hotstar, Prime, gaming, game, reels, Instagram, YouTube, shorts, scroll, phone, social media, binge, entertainment
+
+The presence of entertainment keywords ALWAYS signals habit_insight, regardless of conversational tone.
+
+Output STRICT JSON only. No markdown:
+{
+  "intent": "<category>",
+  "scene": "<scene_name>",
+  "icon": "<single emoji>",
+  "label": "<2-3 WORD UPPERCASE LABEL>",
+  "lines": ["<observation>", "<effect>", "<implication or action — optional>"],
+  "fact": "<one behavioral/cognitive fact, max 18 words, or null>",
+  "question": "<one natural reflective question, max 12 words, or null>",
+  "stat_card": {
+    "headline": "<short stat label>",
+    "value": "<number or percentage>",
+    "subtext": "<one line context>",
+    "mirror": "<calm behavioral connection to their habit — not shaming>",
+    "source": "<source label>"
+  } or null
+}
+"""
+
+
+@bp.post("/companion")
+def companion_chat():
+    body = request.get_json(force=True, silent=True) or {}
+    message = str(body.get("message") or "").strip()[:600]
+    student_name = str(body.get("student_name") or "").strip()[:60]
+    initial_text = str(body.get("initial_text") or "").strip()[:400]
+    followup_raw = body.get("followup_answers") if isinstance(body.get("followup_answers"), list) else []
+    followups = [str(f.get("answer") or "")[:120] for f in followup_raw[-4:] if isinstance(f, dict)]
+
+    if not message and not initial_text:
+        return jsonify({"error": "no_message"}), 400
+
+    user_payload = {
+        "student_name": student_name or "student",
+        "message": message or initial_text,
+        "initial_text": initial_text,
+        "recent_answers": followups,
+    }
+
+    model = os.getenv("TRIGGER_AI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+    try:
+        response = chat_json_no_retry(
+            model=model,
+            system=COMPANION_SYSTEM_PROMPT,
+            user=json.dumps(user_payload, ensure_ascii=False),
+            temperature=0.55,
+            max_tokens=320,
+            timeout=6.0,
+        )
+        content = response.choices[0].message.content or "{}"
+        parsed = json.loads(content)
+
+        VALID_SCENES = {
+            "focus_insight", "habit_insight", "quick_concept",
+            "productivity", "motivation", "casual_chat",
+        }
+        scene = str(parsed.get("scene") or "focus_insight").strip()
+        if scene not in VALID_SCENES:
+            scene = "focus_insight"
+
+        lines_raw = parsed.get("lines") if isinstance(parsed.get("lines"), list) else []
+        lines = [str(x)[:120] for x in lines_raw[:4] if str(x).strip()]
+
+        # Parse stat_card if present
+        stat_card = None
+        raw_stat = parsed.get("stat_card")
+        if isinstance(raw_stat, dict) and raw_stat.get("value"):
+            stat_card = {
+                "headline": str(raw_stat.get("headline") or "")[:60],
+                "value":    str(raw_stat.get("value")    or "")[:20],
+                "subtext":  str(raw_stat.get("subtext")  or "")[:100],
+                "mirror":   str(raw_stat.get("mirror")   or "")[:160],
+                "source":   str(raw_stat.get("source")   or "")[:60],
+            }
+
+        return jsonify({
+            "intent":    str(parsed.get("intent") or "general_question")[:40],
+            "scene":     scene,
+            "icon":      str(parsed.get("icon")  or "🧠")[:8],
+            "label":     str(parsed.get("label") or "INSIGHT")[:40],
+            "lines":     lines,
+            "fact":      str(parsed.get("fact")     or "")[:160] or None,
+            "question":  str(parsed.get("question") or "")[:120] or None,
+            "stat_card": stat_card,
+            "source":    "ai",
+        })
+    except Exception as exc:
+        logger.info("companion fallback reason=%s", exc)
+        text_lower = (message or initial_text).lower()
+
+        # habit — phone / reels / distraction / movies / entertainment / gaming
+        if any(w in text_lower for w in [
+            "phone", "scroll", "reel", "instagram", "actress", "actor", "celebrity",
+            "distract", "procrastinat", "youtube", "shorts", 
+            "movie", "movies", "film", "films", "cinema",
+            "web series", "webseries", "series", "show", "shows",
+            "netflix", "ott", "hotstar", "prime video", "disney", "amazon prime",
+            "gaming", "game", "games", "gamer", "pubg", "cod", "valorant", "fortnite",
+            "binge", "bingewatch", "binge-watch", "binge watch",
+            "tiktok", "snapchat", "facebook", "twitter", "social media",
+            "entertainment", "entertain", "fun", "timepass", "time pass", "time-pass",
+        ]):
+            return jsonify({
+                "intent": "habit_problem", "scene": "habit_insight",
+                "icon": "📱", "label": "ATTENTION PATTERN",
+                "lines": [
+                    "Repeated exposure to rapid-reward content can reduce tolerance for slower, deeper cognitive tasks.",
+                    "This often shows up as difficulty sustaining focus during study sessions.",
+                ],
+                "fact": "Students who reduced phone use by 2 hrs/day improved mock scores by 18–22% on average.",
+                "question": None,
+                "stat_card": {
+                    "headline": "Social Media During Prep",
+                    "value": "<30 min/day",
+                    "subtext": "Average among top 1000 JEE rankers",
+                    "mirror": "Reducing screen time is associated with measurable improvements in sustained attention.",
+                    "source": "JEE Topper Study Patterns",
+                },
+                "source": "fallback",
+            })
+
+        # emotional — stress / anxiety / overwhelm
+        if any(w in text_lower for w in ["stress", "anxious", "anxiety", "overwhelm", "pressure", "scared", "fear"]):
+            return jsonify({
+                "intent": "emotional_issue", "scene": "focus_insight",
+                "icon": "🧠", "label": "COGNITIVE LOAD",
+                "lines": [
+                    "High stress is associated with reduced working memory and concentration capacity.",
+                    "This can make tasks feel harder than they actually are.",
+                ],
+                "fact": "High stress is associated with reduced working memory capacity.",
+                "question": "What feels most mentally heavy right now?",
+                "stat_card": None,
+                "source": "fallback",
+            })
+
+        # motivation — burnout / giving up
+        if any(w in text_lower for w in ["burnout", "tired", "exhausted", "give up", "motivation", "lazy", "can't", "cannot"]):
+            return jsonify({
+                "intent": "motivation_issue", "scene": "motivation",
+                "icon": "⚡", "label": "ENERGY PATTERN",
+                "lines": [
+                    "Motivation typically follows action, not the other way around.",
+                    "Starting with a small, defined task often reduces the mental resistance to beginning.",
+                ],
+                "fact": "Consistency in small actions builds focus more effectively than occasional intense effort.",
+                "question": None,
+                "stat_card": None,
+                "source": "fallback",
+            })
+
+        # generic fallback
+        return jsonify({
+            "intent": "general_question", "scene": "focus_insight",
+            "icon": "🧠", "label": "FOCUS INSIGHT",
+            "lines": [
+                "Attention patterns slowly become learning patterns.",
+                "The brain strengthens behaviors that get repeated consistently.",
+            ],
+            "fact": "Spaced repetition improves long-term retention by 40–60% vs massed practice.",
+            "question": None,
+            "stat_card": None,
+            "source": "fallback",
+        })

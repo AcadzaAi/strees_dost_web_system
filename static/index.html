@@ -60,7 +60,11 @@
             <div class="focus-content">
               <div class="focus-composer">
                 <div class="focus-input">
-                  <textarea id="initialText" rows="4" placeholder="Phone, noise, sleepy, wandering thoughts..."></textarea>
+                  <div class="inline-suggest-shell">
+                    <textarea id="initialText" rows="4" placeholder="Phone, noise, sleepy, wandering thoughts..." autocomplete="off"></textarea>
+                    <div id="inlineSuggestGhost" class="inline-suggest-ghost" aria-hidden="true"></div>
+                    <span id="inlineSuggestHint" class="inline-suggest-hint" aria-hidden="true"></span>
+                  </div>
                   <button id="btnRecord" class="mic-btn" type="button" aria-label="Record voice">🎙</button>
                 </div>
                 <div class="story-actions">
@@ -68,11 +72,6 @@
                 </div>
                 <div class="stage-hint" id="introHint"></div>
               </div>
-
-              <aside class="suggestion-wrap" id="suggestionWrap" hidden>
-                <div class="suggestion-label">Suggestions</div>
-                <div class="suggestion-list" id="suggestionList"></div>
-              </aside>
             </div>
           </div>
         </div>

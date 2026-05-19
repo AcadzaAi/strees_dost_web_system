@@ -31,8 +31,6 @@ const introHintEl = $("introHint");
 const storyPromptEl = $("storyPrompt");
 const hintBox = $("hintBox");
 const popupSummary = null;
-const suggestionWrap = $("suggestionWrap");
-const suggestionList = $("suggestionList");
 
 // Academic topics elements
 const subjectOptions = $("subjectOptions");
@@ -135,6 +133,11 @@ function cancelPendingTriggers() {
   console.log('[cancelPendingTriggers] Cancelling', pendingTriggerTimeouts.length, 'pending triggers');
   pendingTriggerTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
   pendingTriggerTimeouts = [];
+  // Also clean up any persistent Q3 flip if still active
+  const shell = document.querySelector(".app-shell");
+  if (shell && shell.dataset.psyqFlipActive === "1") {
+    shell._psyqFlipCleanup?.();
+  }
 }
 const disableStressMode = false;
 const stressDebug = true;
@@ -726,7 +729,7 @@ function resetFlow() {
   sessionId = null;
   currentDomain = null;
   currentSlot = null;
-  setSuggestions([]);
+  clearGhost();
   btnAnswer.disabled = true;
   btnAnswer.hidden = true;
   if (btnSkip) {
@@ -3143,6 +3146,345 @@ const StressTriggers = (() => {
       },
     };
   }
+
+  // ── AI Student Companion Card (shown before Q1 torchlightSpotlight) ───────
+  // Uses the same hard-question-fullscreen pattern — one single screen,
+  // insight + stat (when relevant) combined, minimal layout.
+
+  async function showCompanionCard(onComplete) {
+    // Prevent double-trigger with global activation guard
+    if (showCompanionCard._active) {
+      console.warn("[showCompanionCard] Already active, skipping duplicate call");
+      return;
+    }
+    showCompanionCard._active = true;
+
+    const studentName = window.StressDostAuth?.getUser?.()?.display_name || "";
+    const initialText = lastAnswerEcho || $("initialText")?.value || "";
+    const followupAnswers = (state.followupAnswers || []).slice(-4);
+
+    console.log("[showCompanionCard] Starting — initialText:", initialText.substring(0, 50));
+
+    // Scene → background gradient (mirrors hard-question-fullscreen palette)
+    const SCENE_BG = {
+      habit_insight: "radial-gradient(circle at 50% 30%, rgba(120,53,15,0.55), rgba(0,0,0,0.96) 68%), linear-gradient(180deg,rgba(2,8,23,0.98),rgba(0,0,0,0.98))",
+      focus_insight: "radial-gradient(circle at 50% 30%, rgba(14,60,110,0.5), rgba(0,0,0,0.95) 68%), linear-gradient(180deg,rgba(2,8,23,0.98),rgba(0,0,0,0.98))",
+      motivation:    "radial-gradient(circle at 50% 30%, rgba(127,29,29,0.5), rgba(0,0,0,0.95) 68%), linear-gradient(180deg,rgba(8,4,8,0.98),rgba(0,0,0,0.98))",
+      productivity:  "radial-gradient(circle at 50% 30%, rgba(6,78,59,0.45), rgba(0,0,0,0.95) 68%), linear-gradient(180deg,rgba(2,8,23,0.98),rgba(0,0,0,0.98))",
+      quick_concept: "radial-gradient(circle at 50% 30%, rgba(14,60,110,0.5), rgba(0,0,0,0.95) 68%), linear-gradient(180deg,rgba(2,8,23,0.98),rgba(0,0,0,0.98))",
+      casual_chat:   "radial-gradient(circle at 50% 30%, rgba(49,46,129,0.45), rgba(0,0,0,0.95) 68%), linear-gradient(180deg,rgba(2,8,23,0.98),rgba(0,0,0,0.98))",
+    };
+
+    // Scene → eyebrow accent colour
+    const SCENE_COLOR = {
+      habit_insight: "rgba(251,191,36,0.95)",
+      focus_insight: "rgba(167,139,250,0.95)",
+      motivation:    "rgba(248,113,113,0.95)",
+      productivity:  "rgba(52,211,153,0.95)",
+      quick_concept: "rgba(96,165,250,0.95)",
+      casual_chat:   "rgba(167,139,250,0.95)",
+    };
+
+    // Show fullscreen overlay immediately (loading state)
+    const overlay = document.createElement("div");
+    overlay.className = "hard-question-fullscreen is-intro";
+    overlay.style.background = SCENE_BG.focus_insight;
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.innerHTML = `
+      <div class="hard-question-center" style="animation:none;">
+        <div class="hard-question-icon" style="animation:none;font-size:32px;">
+          <span class="cmp-loading-dot"></span>
+          <span class="cmp-loading-dot"></span>
+          <span class="cmp-loading-dot"></span>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    // Fetch AI response
+    let data = null;
+    try {
+      const resp = await fetch("/api/triggers/companion", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: initialText,
+          student_name: studentName,
+          initial_text: initialText,
+          followup_answers: followupAnswers,
+        }),
+        signal: AbortSignal.timeout(7000),
+      });
+      if (resp.ok) {
+        data = await resp.json();
+        console.log("[showCompanionCard] AI response — scene:", data.scene, "source:", data.source);
+      } else {
+        console.warn("[showCompanionCard] API error:", resp.status);
+      }
+    } catch (err) {
+      console.warn("[showCompanionCard] Fetch failed:", err.message);
+    }
+
+    // Fallback
+    if (!data || !data.scene) {
+      console.log("[showCompanionCard] Using fallback response");
+      data = {
+        scene: "focus_insight", icon: "🧠", label: "FOCUS PATTERN",
+        lines: ["Your brain is already processing more than you realise."],
+        fact: "The brain consolidates learning during rest, not just during study.",
+        question: "What would make this session feel like a win?",
+        stat_card: null,
+      };
+    }
+
+    const bg    = SCENE_BG[data.scene]    || SCENE_BG.focus_insight;
+    const color = SCENE_COLOR[data.scene] || SCENE_COLOR.focus_insight;
+    overlay.style.background = bg;
+
+    // Build stat box HTML (only when stat_card present)
+    const sc = data.stat_card;
+    const statHTML = sc ? `
+      <div class="cmp-stat-box">
+        <div class="cmp-stat-headline">${escapeHTML(String(sc.headline))}</div>
+        <div class="cmp-stat-value">${escapeHTML(String(sc.value))}</div>
+        <div class="hard-question-box-sub">${escapeHTML(String(sc.subtext || ""))}</div>
+        <div class="hard-question-box-foot">${escapeHTML(String(sc.mirror || ""))}</div>
+        ${sc.source ? `<div class="cmp-stat-source">${escapeHTML(String(sc.source))}</div>` : ""}
+      </div>` : "";
+
+    // Build lines as a single accent line (keep it minimal — max 1 line shown)
+    const mainLine = (data.lines && data.lines[0]) ? escapeHTML(String(data.lines[0])) : "";
+    const factLine = data.fact ? escapeHTML(String(data.fact)) : "";
+
+    // Render the full screen with staggered fade-in
+    overlay.innerHTML = `
+      <div class="hard-question-center" style="opacity:0;transition:opacity 400ms ease;">
+        <div class="hard-question-icon cmp-icon-glow" style="animation:none;">${escapeHTML(String(data.icon || "🧠"))}</div>
+        <div class="hard-question-eyebrow cmp-eyebrow-shimmer" style="color:${color};">${escapeHTML(String(data.label || "INSIGHT"))}</div>
+        ${mainLine ? `<div class="hard-question-title cmp-fade-in-1" style="font-size:clamp(20px,3vw,28px);margin-bottom:4px;opacity:0;">${mainLine}</div>` : ""}
+        ${factLine && !sc ? `<div class="hard-question-accent cmp-fade-in-2" style="font-size:clamp(14px,2vw,18px);margin-bottom:16px;opacity:0;">${factLine}</div>` : ""}
+        ${statHTML}
+        ${data.question ? `<div class="hard-question-footnote cmp-fade-in-3" style="font-style:italic;color:rgba(203,213,225,0.85);opacity:0;">💭 ${escapeHTML(String(data.question))}</div>` : ""}
+        <button class="cmp-fs-btn cmp-btn-glow cmp-fade-in-4" id="cmpFsBtn" type="button" style="opacity:0;">I'm ready →</button>
+      </div>
+    `;
+
+    // Trigger staggered fade-in
+    requestAnimationFrame(() => {
+      const center = overlay.querySelector(".hard-question-center");
+      if (center) center.style.opacity = "1";
+      
+      // Staggered fade-in for elements
+      setTimeout(() => {
+        const el1 = overlay.querySelector(".cmp-fade-in-1");
+        if (el1) {
+          el1.style.transition = "opacity 500ms ease, transform 500ms ease";
+          el1.style.opacity = "1";
+        }
+      }, 200);
+      
+      setTimeout(() => {
+        const el2 = overlay.querySelector(".cmp-fade-in-2");
+        if (el2) {
+          el2.style.transition = "opacity 500ms ease, transform 500ms ease";
+          el2.style.opacity = "1";
+        }
+      }, 400);
+      
+      setTimeout(() => {
+        const el3 = overlay.querySelector(".cmp-fade-in-3");
+        if (el3) {
+          el3.style.transition = "opacity 500ms ease";
+          el3.style.opacity = "1";
+        }
+      }, 600);
+      
+      setTimeout(() => {
+        const el4 = overlay.querySelector(".cmp-fade-in-4");
+        if (el4) {
+          el4.style.transition = "opacity 500ms ease";
+          el4.style.opacity = "1";
+        }
+      }, 800);
+    });
+
+    // Dismiss handler with double-trigger protection
+    let dismissed = false;
+    const dismiss = () => {
+      if (dismissed) return;
+      dismissed = true;
+      clearTimeout(autoTimer);
+      showCompanionCard._active = false; // Release global lock
+      
+      console.log("[showCompanionCard] Dismissing, calling onComplete");
+      overlay.style.opacity = "0";
+      overlay.style.transition = "opacity 280ms ease";
+      setTimeout(() => { 
+        overlay.remove(); 
+        if (onComplete) onComplete(); 
+      }, 300);
+    };
+
+    // Auto-dismiss after 15s (reduced from 20s for better pacing)
+    const autoTimer = setTimeout(dismiss, 15000);
+
+    // Button click listener
+    const btn = overlay.querySelector("#cmpFsBtn");
+    if (btn) btn.addEventListener("click", dismiss);
+  }
+
+  // ── Personalized "You Said This" Quiz (shown before Q3 screenFlip) ────────
+
+  /**
+   * Extract the single most emotionally resonant keyword from the user's
+   * initial text + follow-up answers, then return a reflection sentence and
+   * a psychologically connected yes/no question.
+   */
+  function buildPersonalizedQuizPrompt() {
+    const initialRaw = lastAnswerEcho || $("initialText")?.value || "";
+    const followups  = (state.followupAnswers || []).map(f => f.answer || "").join(" ");
+    const combined   = (initialRaw + " " + followups).toLowerCase();
+
+    // Keyword → { reflection, question }
+    const patterns = [
+      {
+        words: ["stress", "stressed", "pressure", "overwhelm"],
+        reflection: "You mentioned that stress sometimes affects your concentration.",
+        question:   "Do you think that still happens even when you try to stay alert?",
+      },
+      {
+        words: ["distract", "distraction", "phone", "scroll", "reel", "notification"],
+        reflection: "You said distractions can break your focus during important tasks.",
+        question:   "Do you believe your brain fully adapts to distractions — or just ignores them?",
+      },
+      {
+        words: ["focus", "concentrate", "concentration", "attention"],
+        reflection: "You mentioned difficulty maintaining focus when it matters most.",
+        question:   "Would you say that affects your accuracy more than you realise?",
+      },
+      {
+        words: ["overthink", "overthinking", "mind", "thought", "mental"],
+        reflection: "You mentioned that overthinking sometimes slows you down.",
+        question:   "Do you think your mind notices every small detail — even under pressure?",
+      },
+      {
+        words: ["tired", "fatigue", "sleep", "exhausted", "drain"],
+        reflection: "You said mental fatigue can affect how clearly you process things.",
+        question:   "Do you believe you notice every small visual change around you?",
+      },
+      {
+        words: ["miss", "detail", "mistake", "error", "overlook"],
+        reflection: "You mentioned that you occasionally miss small details while multitasking.",
+        question:   "Do you think your brain adapts to distractions… or just ignores them?",
+      },
+      {
+        words: ["exam", "test", "paper", "deadline", "marks", "score"],
+        reflection: "You mentioned that exam pressure sometimes clouds your thinking.",
+        question:   "Do you think that still affects your accuracy more than you realise?",
+      },
+    ];
+
+    for (const p of patterns) {
+      if (p.words.some(w => combined.includes(w))) {
+        return { reflection: p.reflection, question: p.question };
+      }
+    }
+
+    // Generic fallback
+    return {
+      reflection: "You mentioned that stress sometimes affects your concentration.",
+      question:   "Do you think that still happens even when you try to stay alert?",
+    };
+  }
+
+  /**
+   * Show the full personalized quiz overlay.
+   * Calls onComplete() after the user dismisses the response popup.
+   */
+  function showPersonalizedQuiz(onComplete) {
+    const { reflection, question } = buildPersonalizedQuizPrompt();
+
+    const overlay = document.createElement("div");
+    overlay.className = "psyq-overlay";
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("role", "dialog");
+
+    overlay.innerHTML = `
+      <div class="psyq-card" id="psyqCard">
+        <div class="psyq-header">
+          <span class="psyq-icon">🧠</span>
+          <span class="psyq-label">Focus Pattern Detected</span>
+        </div>
+        <p class="psyq-reflection" id="psyqReflection"></p>
+        <div class="psyq-divider"></div>
+        <p class="psyq-question" id="psyqQuestion" style="opacity:0;transition:opacity 400ms ease;"></p>
+        <div class="psyq-actions" id="psyqActions" style="opacity:0;pointer-events:none;transition:opacity 350ms ease;">
+          <button class="psyq-btn psyq-btn-yes" id="psyqYes" type="button">Yes, it does</button>
+          <button class="psyq-btn psyq-btn-no"  id="psyqNo"  type="button">Not really</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add("psyq-overlay--visible"));
+
+    const card       = overlay.querySelector("#psyqCard");
+    const reflEl     = overlay.querySelector("#psyqReflection");
+    const questionEl = overlay.querySelector("#psyqQuestion");
+    const actionsEl  = overlay.querySelector("#psyqActions");
+    const yesBtn     = overlay.querySelector("#psyqYes");
+    const noBtn      = overlay.querySelector("#psyqNo");
+
+    // Typewriter for reflection text
+    let charIdx = 0;
+    const typeInterval = setInterval(() => {
+      reflEl.textContent = reflection.slice(0, ++charIdx);
+      if (charIdx >= reflection.length) {
+        clearInterval(typeInterval);
+        setTimeout(() => {
+          questionEl.style.opacity = "1";
+          questionEl.textContent   = question;
+          setTimeout(() => {
+            actionsEl.style.opacity      = "1";
+            actionsEl.style.pointerEvents = "auto";
+          }, 280);
+        }, 500);
+      }
+    }, 26);
+
+    function showResponse(isYes) {
+      yesBtn.disabled = true;
+      noBtn.disabled  = true;
+
+      const icon  = isYes ? "🎯" : "🔍";
+      const title = isYes ? "That aligns with your earlier responses." : "Interesting.";
+      const body  = isYes
+        ? "Even users who answer 'No' show similar focus patterns during testing."
+        : "Self-perception and actual attention patterns don't always match.";
+      const cta   = isYes ? "Continue →" : "Start Test →";
+
+      card.innerHTML = `
+        <div class="psyq-response">
+          <div class="psyq-response-icon">${icon}</div>
+          <p class="psyq-response-title">${title}</p>
+          <p class="psyq-response-body">${body}</p>
+          <button class="psyq-btn psyq-btn-cta" id="psyqCta" type="button">${cta}</button>
+        </div>
+      `;
+      card.classList.add("psyq-card--response");
+
+      overlay.querySelector("#psyqCta").addEventListener("click", () => {
+        overlay.classList.remove("psyq-overlay--visible");
+        setTimeout(() => { overlay.remove(); onComplete?.(); }, 300);
+      });
+    }
+
+    yesBtn.addEventListener("click", () => showResponse(true));
+    noBtn.addEventListener("click",  () => showResponse(false));
+  }
+
+  // ── End Personalized Quiz ─────────────────────────────────────────────────
 
   function triggerScreenFlip(ctx) {
     const shell = getAppShell();
@@ -6443,18 +6785,22 @@ const StressTriggers = (() => {
         // Different delays and sequences for different triggers per specifications
         let delayMs = 5000; // Default 5 seconds
         
-        // Q1 → TORCHLIGHT_SPOTLIGHT
-        // Fires 6 seconds after Q1 loads
+        // Q1 → COMPANION CARD → TORCHLIGHT_SPOTLIGHT
+        // Shows AI companion insight card 7s after Q1 loads.
+        // Torchlight fires immediately after the student dismisses the card.
         if (triggerInfo.name === 'torchlightSpotlight') {
-          delayMs = 6000;
+          delayMs = 7000;
           const timeoutId = setTimeout(() => {
-            console.log(`[onQuestionRendered] Activating Q1 trigger: torchlightSpotlight`);
-            activateTrigger('torchlightSpotlight', {
-              userState: currentUserState(),
-              force: true,
-              reason: `question_trigger:Q${questionNumber}:torchlightSpotlight`,
-              intensity: 'mild',
-              questionNumber: questionNumber
+            console.log(`[onQuestionRendered] Showing companion card before Q1 torchlightSpotlight`);
+            showCompanionCard(() => {
+              console.log(`[onQuestionRendered] Companion dismissed — activating torchlightSpotlight`);
+              activateTrigger('torchlightSpotlight', {
+                userState: currentUserState(),
+                force: true,
+                reason: `question_trigger:Q${questionNumber}:torchlightSpotlight`,
+                intensity: 'mild',
+                questionNumber: questionNumber,
+              });
             });
           }, delayMs);
           pendingTriggerTimeouts.push(timeoutId);
@@ -6538,22 +6884,49 @@ const StressTriggers = (() => {
           pendingTriggerTimeouts.push(timeoutId1);
         }
         
-        // Q3 → SCREEN_FLIP
-        // Fires 5 seconds after Q3 loads. Flips 180°, stays 5s, flips back, waits 5s, repeats 5 times
+        // Q3 → PERSONALIZED QUIZ → SCREEN_FLIP (cycles every 5s until answer submitted)
+        // Shows "You Said This" reflection quiz 3s after Q3 loads.
+        // After quiz is dismissed: screen flips 180°, stays 5s, flips back, waits 5s, repeats
+        // indefinitely until the student submits their answer.
         else if (triggerInfo.name === 'screenFlip') {
-          delayMs = 5000;
+          delayMs = 3000;
           const timeoutId = setTimeout(() => {
-            console.log(`[onQuestionRendered] Activating Q3 trigger: screenFlip with 5 flip cycles`);
-            activateTrigger('screenFlip', {
-              userState: currentUserState(),
-              force: true,
-              reason: `question_trigger:Q${questionNumber}:screenFlip`,
-              intensity: 'strong',
-              questionNumber: questionNumber,
-              flipCycles: 5, // 5 total flips
-              flipDuration: 5000, // Stay flipped for 5s
-              waitDuration: 5000, // Wait 5s between flips
-              permanentFinalState: true // Final flip state stays permanently
+            console.log(`[onQuestionRendered] Showing personalized quiz before Q3 screenFlip`);
+            showPersonalizedQuiz(() => {
+              console.log(`[onQuestionRendered] Quiz dismissed — starting persistent flip cycle`);
+              const shell = document.querySelector(".app-shell");
+              if (!shell) return;
+
+              // Mark active so cleanup hooks know to stop it
+              shell.dataset.psyqFlipActive = "1";
+
+              let isFlipped = false;
+              let flipCycleTimer = null;
+
+              function doFlipCycle() {
+                if (shell.dataset.psyqFlipActive !== "1") return;
+                if (!isFlipped) {
+                  // Flip the screen
+                  shell.classList.add("stress-screen-flip");
+                  isFlipped = true;
+                  flipCycleTimer = setTimeout(doFlipCycle, 5000); // stay flipped 5s
+                } else {
+                  // Flip back
+                  shell.classList.remove("stress-screen-flip");
+                  isFlipped = false;
+                  flipCycleTimer = setTimeout(doFlipCycle, 5000); // wait 5s then flip again
+                }
+              }
+
+              // Store cleanup on the element so submitAnswer / cancelPendingTriggers can stop it
+              shell._psyqFlipCleanup = () => {
+                clearTimeout(flipCycleTimer);
+                shell.classList.remove("stress-screen-flip");
+                delete shell.dataset.psyqFlipActive;
+                delete shell._psyqFlipCleanup;
+              };
+
+              doFlipCycle(); // start immediately
             });
           }, delayMs);
           pendingTriggerTimeouts.push(timeoutId);
@@ -8269,7 +8642,7 @@ async function startSessionFlow() {
 
     setSessionUI(data.session_id, data.active_domains);
     joinSessionRoom(data.session_id);
-    setSuggestions([]);
+    clearGhost();
 
     await fetchNextQuestion("Finding the first question…");
   } catch (err) {
@@ -8317,6 +8690,12 @@ async function submitAnswer() {
   // CRITICAL: Deactivate all triggers immediately when user submits
   // This prevents triggers from overlapping with the next question
   StressTriggers.deactivateAllTriggers();
+
+  // Remove persistent Q3 screen flip on answer submit
+  const shell = document.querySelector(".app-shell");
+  if (shell && shell.dataset.psyqFlipActive === "1") {
+    shell._psyqFlipCleanup?.();
+  }
   
   if (!sessionId || btnAnswer.disabled) return;
   const answer = answerInput.value.trim();
@@ -9241,39 +9620,128 @@ btnZoomQuestion?.addEventListener("click", () => {
   panel.classList.toggle("is-zoomed");
 });
 
-// Live suggestions for initial text ---------------------------------------
-function setSuggestions(items) {
-  if (!suggestionWrap || !suggestionList) return;
-  const focusShell = document.getElementById("focusShell");
-  suggestionList.innerHTML = "";
-  const list = Array.isArray(items) ? items.filter(Boolean) : [];
-  if (!list.length) {
-    suggestionWrap.hidden = true;
-    focusShell?.classList.remove("has-suggestions");
+// Live suggestions for initial text — inline ghost-text autocomplete ------
+// We use a simple approach: a readonly <textarea> clone sits behind the real one,
+// showing the full merged text. The real textarea has a transparent background.
+// Ghost tail is shown in a faded colour; accepted with Tab or →.
+
+let currentGhostSuggestion = ""; // the full text that would result from accepting
+let ghostSyncScheduled = false;
+
+function getGhostTail(typedValue, fullSuggestion) {
+  const typed = String(typedValue || "");
+  const full  = String(fullSuggestion || "").trim();
+  if (!full) return "";
+
+  const typedLower = typed.toLowerCase();
+  const fullLower  = full.toLowerCase();
+
+  if (fullLower.startsWith(typedLower)) {
+    return full.slice(typed.length); // continuation of what they typed
+  }
+  // Suggestion is a replacement / append — show whole thing after a space
+  const trimmed = typed.trimEnd();
+  return (trimmed ? " " : "") + full;
+}
+
+function renderGhost() {
+  ghostSyncScheduled = false;
+  const textarea = document.getElementById("initialText");
+  const ghost    = document.getElementById("inlineSuggestGhost");
+  const hint     = document.getElementById("inlineSuggestHint");
+  if (!textarea || !ghost) return;
+
+  if (!currentGhostSuggestion) {
+    ghost.textContent = "";
+    if (hint) hint.classList.remove("visible");
     return;
   }
-  list.forEach((text) => {
-    const pill = document.createElement("button");
-    pill.type = "button";
-    pill.className = "suggestion-pill";
-    pill.textContent = text;
-    pill.addEventListener("click", () => applySuggestion(text));
-    suggestionList.appendChild(pill);
-  });
-  suggestionWrap.hidden = false;
-  focusShell?.classList.add("has-suggestions");
+
+  const tail = getGhostTail(textarea.value, currentGhostSuggestion);
+  if (!tail) {
+    ghost.textContent = "";
+    if (hint) hint.classList.remove("visible");
+    return;
+  }
+
+  // Copy exact computed styles from textarea so ghost aligns pixel-perfectly
+  const cs = window.getComputedStyle(textarea);
+  const props = [
+    "padding","paddingTop","paddingRight","paddingBottom","paddingLeft",
+    "fontSize","fontFamily","fontWeight","fontStyle","lineHeight",
+    "letterSpacing","wordSpacing","textIndent","borderTopWidth",
+    "borderRightWidth","borderBottomWidth","borderLeftWidth","boxSizing",
+    "width","overflowX","overflowY","whiteSpace","wordWrap","wordBreak"
+  ];
+  props.forEach(p => { ghost.style[p] = cs[p]; });
+  ghost.style.border       = "1px solid transparent"; // same box model, invisible border
+  ghost.style.borderRadius = cs.borderRadius;
+  ghost.style.background   = "transparent";
+  ghost.style.color        = "transparent"; // typed part invisible
+  ghost.style.position     = "absolute";
+  ghost.style.top          = "0";
+  ghost.style.left         = "0";
+  ghost.style.height       = cs.height;
+  ghost.style.pointerEvents = "none";
+  ghost.style.zIndex       = "0";
+  ghost.style.overflow     = "hidden";
+  ghost.style.resize       = "none";
+  ghost.style.whiteSpace   = "pre-wrap";
+
+  // Build: invisible typed text + visible ghost tail
+  ghost.innerHTML = "";
+  const typedNode = document.createTextNode(textarea.value);
+  const tailSpan  = document.createElement("span");
+  tailSpan.style.cssText = "color: #9ca3af; font-style: normal;";
+  tailSpan.textContent   = tail;
+  ghost.appendChild(typedNode);
+  ghost.appendChild(tailSpan);
+
+  if (hint) {
+    hint.textContent = "Tab";
+    hint.classList.add("visible");
+  }
+}
+
+function scheduleGhostRender() {
+  if (!ghostSyncScheduled) {
+    ghostSyncScheduled = true;
+    requestAnimationFrame(renderGhost);
+  }
+}
+
+function setSuggestions(items) {
+  const input = document.getElementById("initialText");
+  const list  = Array.isArray(items) ? items.filter(Boolean) : [];
+
+  if (!list.length || !input) {
+    currentGhostSuggestion = "";
+    scheduleGhostRender();
+    return;
+  }
+
+  // Take only the single best suggestion (first item)
+  const best   = list[0];
+  currentGhostSuggestion = mergeSuggestionText(input.value, best);
+  scheduleGhostRender();
+}
+
+function clearGhost() {
+  currentGhostSuggestion = "";
+  scheduleGhostRender();
 }
 
 function applySuggestion(text) {
-  const input = $("initialText");
+  const input = document.getElementById("initialText");
   if (!input) return;
-  const current = String(input.value || "");
   const suggestion = String(text || "").trim();
   if (!suggestion) return;
-  input.value = mergeSuggestionText(current, suggestion);
+  // text is already the full merged value (typed + continuation)
+  input.value = suggestion;
   input.selectionStart = input.selectionEnd = input.value.length;
   input.focus();
-  setSuggestions([]);
+  currentGhostSuggestion = "";
+  renderGhost(); // immediate, no rAF needed
 }
 
 function mergeSuggestionText(current, suggestion) {
@@ -9281,34 +9749,18 @@ function mergeSuggestionText(current, suggestion) {
   const next = String(suggestion || "").trim();
   if (!base) return next;
 
-  const baseKey = normalizeSuggestionCompare(base);
-  const nextKey = normalizeSuggestionCompare(next);
-  if (!nextKey || baseKey.endsWith(nextKey)) return base;
-  if (nextKey.startsWith(baseKey)) return next;
+  const baseLower = base.toLowerCase();
+  const nextLower = next.toLowerCase();
 
-  return shouldAppendSuggestion(next) ? appendSuggestion(base, next) : next;
-}
+  // Suggestion is a direct continuation of what was typed — show only the new part
+  if (nextLower.startsWith(baseLower)) return next;
 
-function normalizeSuggestionCompare(value) {
-  return String(value || "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .toLowerCase();
-}
+  // Suggestion overlaps at the end — avoid double text
+  if (baseLower.endsWith(nextLower)) return base;
 
-function shouldAppendSuggestion(suggestion) {
-  const text = String(suggestion || "").trim();
-  if (!text) return false;
-  if (/^[,;:)\]}]/.test(text)) return true;
-  if (/^[a-z]/.test(text)) return true;
-  return /^(and|but|or|so|because|while|when|then|also|plus|which|that|who|where|with|without|for|to|from|about|like|especially|instead|even|as)\b/i.test(text);
-}
-
-function appendSuggestion(base, suggestion) {
-  const next = suggestion.trim();
-  if (/^[,;:)\]}]/.test(next)) return `${base}${next}`;
-  if (/[([{/\-]$/.test(base) || /[–—]$/.test(base)) return `${base}${next}`;
-  return `${base} ${next}`;
+  // Otherwise always append — never replace what the user typed
+  const sep = /\s$/.test(base) ? "" : " ";
+  return base + sep + next;
 }
 
 function requestSuggestionsDebounced(rawText) {
@@ -9316,18 +9768,47 @@ function requestSuggestionsDebounced(rawText) {
   suggestTimer = setTimeout(() => {
     const text = (rawText || "").trim();
     if (!text || text.length < 4) {
-      setSuggestions([]);
+      clearGhost();
       return;
     }
     if (!socketInitialized) initSocket();
     if (socket) {
       socket.emit("suggest_request", { text });
     }
-  }, 350);
+  }, 280);
 }
 
-const initialTextEl = $("initialText");
-initialTextEl?.addEventListener("input", (evt) => requestSuggestionsDebounced(evt.target.value));
+(function attachInitialTextListeners() {
+  const el = document.getElementById("initialText");
+  if (!el) return;
+
+  // Tab or → at end of line accepts the ghost
+  el.addEventListener("keydown", (evt) => {
+    if (!currentGhostSuggestion) return;
+    const atEnd = el.selectionStart === el.value.length && el.selectionEnd === el.value.length;
+    if ((evt.key === "Tab" || evt.key === "ArrowRight") && atEnd) {
+      evt.preventDefault();
+      applySuggestion(currentGhostSuggestion);
+    } else if (evt.key === "Escape") {
+      clearGhost();
+    }
+    // Don't clear on every other key — let the input event handle it
+  });
+
+  // On new input: clear ghost immediately, then request a fresh one
+  el.addEventListener("input", (evt) => {
+    currentGhostSuggestion = ""; // wipe without rAF so ghost doesn't flicker
+    renderGhost();
+    requestSuggestionsDebounced(evt.target.value);
+  });
+
+  // Clear ghost when focus leaves
+  el.addEventListener("blur", () => clearGhost());
+})();
+
+
+
+
 
 function attachKeypadListeners() {
   if (integerKeypadListenerAttached) return;

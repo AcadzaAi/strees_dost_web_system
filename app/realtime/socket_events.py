@@ -96,26 +96,23 @@ def _generate_local_suggestions(text: str) -> list[str]:
             "I feel stuck and need a clear plan to get back on track.",
         )
 
-    return bank[:4]  # keep it short for UX
+    return bank[:1]  # single best suggestion for inline ghost-text UX
 
 
 def _generate_ai_suggestions(text: str) -> list[str]:
     """Use OpenAI chat completion to propose concise suggestions."""
     system = (
-        "You suggest completions for a student stress vent.\n"
-        "Return ONLY a JSON object with key suggestions: an array of short strings (<=120 chars).\n"
-        "Do not include markdown."
+        "You suggest a single completion for a student stress vent.\n"
+        "Return ONLY a JSON object: {\"suggestions\": [\"<one short sentence>\"]}\n"
+        "Max 100 chars. No markdown."
     )
-    user = (
-        f"Partial text: {text[:500]}\n"
-        "Continue their thought with 2-3 natural, first-person sentences they might type."
-    )
-    resp = openai_client.chat_text(
+    user = f"Partial: {text[:300]}\nComplete their thought in 1 natural first-person sentence."
+    resp = openai_client.chat_json_no_retry(
         model="gpt-4o-mini",
         system=system,
         user=user,
-        max_tokens=120,
-        temperature=0.6,
+        max_tokens=60,
+        temperature=0.5,
     )
     raw = (resp.choices[0].message.content or "").strip()
     data = json.loads(raw)
@@ -128,7 +125,7 @@ def _generate_ai_suggestions(text: str) -> list[str]:
             cleaned = item.strip()
             if cleaned:
                 out.append(cleaned[:200])
-        if len(out) >= 4:
+        if len(out) >= 1:  # single best suggestion for inline ghost-text UX
             break
     return out
 
