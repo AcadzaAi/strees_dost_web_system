@@ -1,10 +1,10 @@
 venv/
 .venv/
+.venv312/
 .env
 __pycache__/
 *.pyc
 instance/
-data/
 migrations/versions/
 .vscode/
 *.log
@@ -15,3 +15,13 @@ migrations/versions/
 *.swp
 Thumbs.db
 .DS_Store
+
+# Allow data folder CSV files for deployment
+!data/
+!data/*.csv
+data/*.txt
+data/*.log
+
+# Include static/data folder with catalog file (required for app)
+!static/data/
+!static/data/*.json

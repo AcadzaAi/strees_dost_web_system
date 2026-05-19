@@ -1,104 +1,224 @@
-# Stress Dost — Usage Guide
+# Stress Dost - Focus Zones Test Platform
 
-A Flask + Socket.IO app that builds a student stress profile, asks guided questions, then emits stress-test popups and a practice-question panel.
+A web application for testing focus and concentration under stress with intelligent question triggers and real-time feedback.
 
-## Setup
-- Requirements: Python 3.10+, OpenAI API access (for LLM flows), optional Acadza API access.
-- Install:
-  ```bash
-  cd "/home/saurabh/Desktop/New Folder/stress_dost"
-  python3 -m venv .venv
-  source .venv/bin/activate
-  pip install -r requirements.txt
-  ```
+## Features
 
-## Configuration (.env)
-- `DATABASE_URL=sqlite:///instance/stress.db` (or your Postgres URL)
-- `OPENAI_API_KEY=...` (required)
-- `SOCKETIO_CORS_ALLOWED_ORIGINS=*` (tighten for prod)
-- Flow tuning: `MIN_QUESTIONS` (2), `MAX_QUESTIONS` (2), `MAX_DOMAIN_QUESTIONS` (2)
-- Acadza: `ACADZA_API_URL`, `ACADZA_API_KEY`, `ACADZA_AUTH` (optional bearer), `ACADZA_COURSE`, `ACADZA_USER_AGENT`, `ACADZA_VERIFY=true|false`, `QUESTION_IDS_CSV` (path to CSV of IDs)
+- 7-question Focus Zones test with adaptive difficulty
+- Real-time stress triggers (bouncing questions, spotlight effects, etc.)
+- Subject and chapter-based question selection
+- User profile system with session tracking
+- Socket.IO for real-time interactions
+- Academic topic extraction and question management
 
-## Database
-- Initialize schema (Flask-Migrate): `flask --app wsgi db upgrade`
-- SQLite files: `instance/stress.db`, `instance/stress_dost.db` (point `DATABASE_URL` to the one you want)
+## Tech Stack
 
-## Run / Verify
-- Dev server: `python wsgi.py` (http://127.0.0.1:5002)
-- Health: `curl http://localhost:5002/health`
-- Prod hint: `gunicorn --worker-class eventlet -w 1 -b 0.0.0.0:5002 wsgi:app`
+- **Backend**: Python 3.12, Flask, Flask-SocketIO
+- **Frontend**: Vanilla JavaScript, HTML5, CSS3
+- **Database**: SQLite with SQLAlchemy
+- **Real-time**: Socket.IO with eventlet
+- **AI**: OpenAI GPT for question generation
+- **Deployment**: Render.com
 
-## Using the UI (http://localhost:5002/)
-- Stage 1: enter an initial vent and click “Launch Session” (`POST /session/start`)
-- Stage 2: answer prompts; short answers may trigger a clarifier (`/session/<id>/next-question`, `/answer`)
-- Completion: app calls `/session/<id>/start-simulation`, shows popups, then loads practice questions
-- Post-completion A/B loop: once the popup/question screen is active, a center-screen binary prompt appears every 20 seconds; answers are stored in `session.meta["binary_answers"]`
-- HUD shows session ID, domains, trace log, popup console
+## Local Development
 
-## API Quickstart (headless)
+### Prerequisites
+
+- Python 3.12+
+- pip
+- Virtual environment (recommended)
+
+### Setup
+
+1. Clone the repository:
 ```bash
-# Start session
-curl -X POST http://localhost:5002/session/start \
-  -H "Content-Type: application/json" \
-  -d '{"text":"I keep scrolling reels and exams are close"}'
-
-# Get next question
-curl -X POST http://localhost:5002/session/<session_id>/next-question
-
-# Submit answer (include domain/slot if you have them)
-curl -X POST http://localhost:5002/session/<session_id>/answer \
-  -H "Content-Type: application/json" \
-  -d '{"answer":"I study 3 hours","domain":"time_pressure","slot":"study_hours_per_day"}'
-
-# Trigger popup simulation after completion
-curl -X POST http://localhost:5002/session/<session_id>/start-simulation
-
-# Generate one summary/query-driven A/B prompt after completion
-curl -X POST http://localhost:5002/session/<session_id>/binary-question
-
-# Store the user's A/B choice
-curl -X POST http://localhost:5002/session/<session_id>/binary-answer \
-  -H "Content-Type: application/json" \
-  -d '{"selected":"A"}'
-
-# Debug/status
-curl http://localhost:5002/session/<session_id>/status
-curl http://localhost:5002/session/<session_id>/debug
-curl http://localhost:5002/session/<session_id>/summary
+git clone <your-repo-url>
+cd stress-dost-web
 ```
 
-## Practice Question Service (`app/api/question_routes.py`)
-- `GET /api/questions/load-test-questions` → random set from `data/question_ids.csv`
-- `GET /api/questions/get-question/<id>` → single question
-- `POST /api/questions/prefetch-batch` with `{"question_ids":[...]}` → prefetch
-- `POST /api/questions/mutate/<id>` → numeric mutation for SCQ/integer questions
-- `GET /api/questions/stats` → count + sample IDs
-- Edit `data/question_ids.csv` (header `question_id`) to change the pool
+2. Create and activate virtual environment:
+```bash
+python -m venv venv
+# Windows
+venv\Scripts\activate
+# Linux/Mac
+source venv/bin/activate
+```
 
-## Realtime / Popups
-- Socket.IO default namespace; `server_hello` on connect
-- Join room: emit `join_session` with `{session_id:"<id>"}`; popups arrive as `popup`
-- Popup generator lives in `app/services/popup_generator.py`; simulation scheduled via `app/realtime/scheduler.py`
-- Sanity-check: `POST /session/<id>/test-popup`
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
-## Summary-Driven Binary Questions
-- Generator lives in `app/services/binary_question_generator.py`
-- `POST /session/<id>/binary-question` creates one A/B prompt from:
-  - raw initial query
-  - conversation history
-  - `session.meta["user_summary"]`
-  - previous binary questions/answers
-- `POST /session/<id>/binary-answer` stores the choice in `session.meta["binary_answers"]`
-- Frontend behavior:
-  - only runs after follow-ups end and the completed screen is visible
-  - shows a center overlay every 20 seconds
-  - skips generation if a previous A/B prompt is still open
+4. Create `.env` file from example:
+```bash
+cp .env.example .env
+```
 
-## Key Files
-- App factory: `app/__init__.py`; config defaults: `app/config.py`
-- Domain/slot schema: `app/constants.py`; planner: `app/services/planner.py`; slot prefilling: `app/services/slot_prefill_llm.py`; question generation: `app/services/question_generator.py`
-- Frontend: `static/index.html`, `static/app.js`, `static/styles.css`
+5. Configure environment variables in `.env`:
+   - Add your `OPENAI_API_KEY`
+   - Add Acadza API credentials (`ACADZA_AUTH`, `ACADZA_API_KEY`)
+   - Other settings are pre-configured
 
-## Notes
-- Network needed for OpenAI/Acadza; without it, only partial fallbacks run.
-- Combo questions (see `app/services/combo_specs.py`) may require formatted answers; hints return in responses.
+6. Initialize database:
+```bash
+python -m flask db upgrade
+```
+
+7. Run the application:
+```bash
+python wsgi.py
+```
+
+8. Open browser at `http://localhost:5002`
+
+## Deployment to Render
+
+### Prerequisites
+
+- GitHub account
+- Render.com account
+- OpenAI API key
+- Acadza API credentials
+
+### Steps
+
+1. **Push to GitHub**:
+```bash
+git add .
+git commit -m "Setup for Render deployment"
+git push origin main
+```
+
+2. **Create New Web Service on Render**:
+   - Go to [Render Dashboard](https://dashboard.render.com/)
+   - Click "New +" → "Web Service"
+   - Connect your GitHub repository
+   - Render will auto-detect `render.yaml`
+
+3. **Configure Environment Variables**:
+   
+   In Render dashboard, add these secret environment variables:
+   
+   - `OPENAI_API_KEY`: Your OpenAI API key
+   - `ACADZA_COURSE`: Your course (e.g., "JEE")
+   - `ACADZA_AUTH`: Your Acadza authorization token
+   - `ACADZA_API_KEY`: Your Acadza API key
+   - `DATABASE_URL`: (Optional) Leave empty to use SQLite
+
+4. **Deploy**:
+   - Click "Create Web Service"
+   - Render will automatically build and deploy
+   - Wait for deployment to complete (~5-10 minutes)
+
+5. **Access Your App**:
+   - Your app will be available at: `https://your-app-name.onrender.com`
+
+### Important Notes
+
+- **Free Tier**: Render free tier spins down after 15 minutes of inactivity
+- **First Request**: May take 30-60 seconds to wake up
+- **Persistent Storage**: SQLite database persists on the mounted disk
+- **CSV Files**: Question data is included in the repository
+
+## Project Structure
+
+```
+stress-dost-web/
+├── app/
+│   ├── api/              # API routes
+│   ├── db/               # Database models
+│   ├── realtime/         # Socket.IO events
+│   └── services/         # Business logic
+├── data/                 # Question data (CSV files)
+├── instance/             # SQLite database (gitignored)
+├── migrations/           # Database migrations
+├── static/               # Frontend assets
+│   ├── app.js           # Main JavaScript
+│   ├── styles.css       # Styles
+│   └── index.html       # Main page
+├── .env.example         # Environment template
+├── .gitignore          # Git ignore rules
+├── render.yaml         # Render deployment config
+├── requirements.txt    # Python dependencies
+├── runtime.txt         # Python version
+└── wsgi.py            # Application entry point
+```
+
+## Environment Variables
+
+### Required (Secrets)
+- `OPENAI_API_KEY`: OpenAI API key for AI features
+- `ACADZA_AUTH`: Acadza authorization token
+- `ACADZA_API_KEY`: Acadza API key
+- `ACADZA_COURSE`: Course name (e.g., "JEE")
+
+### Optional
+- `PORT`: Server port (default: 5002, Render auto-assigns)
+- `FLASK_ENV`: Environment (production/development)
+- `DATABASE_URL`: Database connection string
+- `SOCKETIO_CORS_ALLOWED_ORIGINS`: CORS origins (default: *)
+- `MIN_QUESTIONS`: Minimum questions (default: 7)
+- `MAX_QUESTIONS`: Maximum questions (default: 7)
+- `QUESTION_IDS_CSV`: Path to question CSV file
+
+## Data Files
+
+The `data/` folder contains:
+- `question_ids.csv`: List of question IDs
+- `question_ids_enriched.csv`: Questions with metadata (subject, chapter, difficulty)
+
+These files are included in the repository for deployment.
+
+## Security
+
+- `.env` file is gitignored (never commit secrets)
+- Use `.env.example` as a template
+- All sensitive data should be in environment variables
+- Database files are gitignored
+- Instance folder is gitignored
+
+## Troubleshooting
+
+### Local Development
+
+**Database errors**:
+```bash
+# Reset database
+rm instance/stress_dost.db
+python -m flask db upgrade
+```
+
+**Port already in use**:
+```bash
+# Change PORT in .env file
+PORT=5003
+```
+
+### Render Deployment
+
+**Build fails**:
+- Check `requirements.txt` for correct dependencies
+- Verify Python version in `runtime.txt`
+- Check Render build logs
+
+**App crashes**:
+- Check environment variables are set
+- Review Render logs
+- Verify database migrations ran
+
+**Slow first request**:
+- Normal for free tier (cold start)
+- Consider upgrading to paid tier for always-on
+
+## Support
+
+For issues or questions:
+1. Check Render logs
+2. Review environment variables
+3. Verify all CSV files are present
+4. Check database migrations
+
+## License
+
+[Your License Here]

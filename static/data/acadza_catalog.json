@@ -1,0 +1,1090 @@
+{
+  "Physics": {
+    "Mathematics in physics": [
+      "Basic functions used in physics",
+      "Graph plotting",
+      "Introduction to calculus"
+    ],
+    "Units and dimensions": [
+      "Units",
+      "Dimensional Analysis",
+      "Errors",
+      "Propogation of errors",
+      "Rounding off & significant figures"
+    ],
+    "Vectors": [
+      "Scalars and vectors",
+      "Types and properties of vectors",
+      "Vector addition and subtraction",
+      "Components of vector",
+      "Product of vectors"
+    ],
+    "Motion in one dimension": [
+      "Parameters used in particle kinematics",
+      "Equation of motion",
+      "Non uniform motion",
+      "Motion under gravity in 1D",
+      "Graphs",
+      "Relative Motion"
+    ],
+    "Motion in two dimensions": [
+      "Basics of 2D",
+      "Projectile motion",
+      "Projectile on inclined plane",
+      "Relative motion in 2D"
+    ],
+    "Newton's law of motion": [
+      "Introduction to forces",
+      "Newton's law of motion",
+      "Equilibrium of forces",
+      "Frame of reference",
+      "Free body diagram",
+      "Constraint motion",
+      "Pulley problems",
+      "Spring",
+      "Pseudo force",
+      "Friction",
+      "Angle of repose",
+      "Multiple block system"
+    ],
+    "Work, power and energy": [
+      "Work done",
+      "Work done by different forces",
+      "Energy",
+      "Work energy theorem",
+      "Conservative and non-conservative forces",
+      "Potential energy",
+      "Conservation of mechanical energy",
+      "Power",
+      "Virtual work and constraint forces"
+    ],
+    "Circular Motion": [
+      "Introduction to circular motion",
+      "Kinematics of circular motion",
+      "Dynamics of uniform circular motion",
+      "Vertical circular motion",
+      "Rotating frame of reference"
+    ],
+    "Centre of mass and momentum conservation (collision)": [
+      "Centre of mass (COM)",
+      "Motion of centre of mass",
+      "Relation between momentum and kinetic energy",
+      "Impulse in collisions",
+      "Conservation of linear momentum",
+      "Collision or impact",
+      "Colision of one direction",
+      "Oblique 2D collision",
+      "Collisions in COM frame",
+      "Variable mass system"
+    ],
+    "Rotational Motion": [
+      "Kinematics of rotational motion",
+      "Moment of inertia (MOI)",
+      "Torque",
+      "Second law of rotational motion",
+      "Work and kinetic energy in rotational motion",
+      "Angular momentum (L) and its conservation",
+      "Rolling motion",
+      "Collision in rotation",
+      "Miscellaneous(optional)"
+    ],
+    "Gravitation": [
+      "Newton's law of gravitation",
+      "Gravitational field due to continous distribution of mass",
+      "Acceleration due to gravity",
+      "Gravitational potential and energy",
+      "circular motion of particles under mutual gravitational force",
+      "Motion of satellite",
+      "Planetary motion"
+    ],
+    "Oscillations (SHM)": [
+      "Periodic and Oscillatory Motion",
+      "Simple harmonic motion",
+      "Time period in SHM",
+      "Problem based on Amplitude",
+      "Angular SHM",
+      "Free, damped and forced oscillation"
+    ],
+    "Properties of matter and fluid mechanics": [
+      "Stress and strain",
+      "Stress-Strain Curve",
+      "Elastic potential energy",
+      "Poisson's ratio",
+      "Young Modulus",
+      "Rigidity or Shear Modulus",
+      "Fluids (Hydrostatics)",
+      "Pascal's law",
+      "Force on a surface immersed in a liquid",
+      "Accelerated fluid",
+      "Archimedes' principle",
+      "Fluids (Hydrodynamics)",
+      "Velocity of Efflux",
+      "Surface tension",
+      "Surface energy",
+      "Cohessive & Adhessive forces",
+      "Excess pressure across a curved surface",
+      "Capillary action",
+      "Viscosity",
+      "Stoke's Law"
+    ],
+    "Waves": [
+      "Wave motion",
+      "Equation of a simple harmonic wave",
+      "Waves on string",
+      "Principle of superposition of waves",
+      "Reflection and transmission of waves",
+      "Stationary waves",
+      "Sound wave",
+      "Speed of Sound Wave",
+      "Superposition of Sound Waves",
+      "Stationary waves in Sound",
+      "Beats",
+      "Doppler's effect"
+    ],
+    "Temperature and thermal properties of matter": [
+      "Temperature",
+      "Thermal expansion",
+      "Calorimetry"
+    ],
+    "Kinetic theory of gases": [
+      "Average pressure exerted by an ideal gas",
+      "Maxwell distribution of molecular speeds",
+      "Degrees of freedom and internal energy of a gas"
+    ],
+    "Laws of thermodynamics": [
+      "Thermodynamics system and variables",
+      "Thermodynamics process",
+      "Polytropic process",
+      "Graph",
+      "Second law of thermodynamics"
+    ],
+    "Heat transfer": [
+      "Thermal conduction",
+      "Radiation",
+      "Newton's law of cooling",
+      "Convection"
+    ],
+    "Electrostatics": [
+      "Charge and its properties",
+      "Coulomb's law",
+      "Electric field",
+      "Electric flux and Gauss law",
+      "Electrostatic potential and energy",
+      "Electric dipole",
+      "Conductors and their properties",
+      "Capacity and capacitance"
+    ],
+    "Current electricity": [
+      "Current and drift speed",
+      "Resistance",
+      "Ohm's law",
+      "Combination of Resistance",
+      "Circuit analysis and Kirchhoff's circuit law",
+      "Battery and cells",
+      "Equivalent Resistance",
+      "Electrical instrument",
+      "Heating effect",
+      "RC circuit"
+    ],
+    "Magnetism": [
+      "Biot-savart law",
+      "Ampere's circuital law",
+      "Lorentz force",
+      "Magnetic force on a current carrying conductor",
+      "Magnetic dipole and dipole moment",
+      "Bar Magnet",
+      "Terrestrial magnestism",
+      "Magnetic properties of matter"
+    ],
+    "Geometrical optics and optical instruments": [
+      "Laws of reflection and plane mirrors",
+      "Spherical mirror",
+      "Refraction through plane surface",
+      "Prism and its characteristics",
+      "Refraction at spherical surfaces",
+      "Thin lens",
+      "Optical instruments"
+    ],
+    "Wave optics": [
+      "Introduction to wave optics",
+      "Interference of light",
+      "Young double slit experiment setup",
+      "Thin film interference",
+      "Diffraction",
+      "Polarization"
+    ],
+    "Experimental physics": [
+      "Experimental physics",
+      "Simple Pendulum",
+      "Meter Scale",
+      "Young’s modulus",
+      "Surface Tension of Water",
+      "Experimental physicsCoefficient of Viscosity of given viscous liquid",
+      "Experimental physicsNewton's Law of Cooling",
+      "Resonance tube experiment",
+      "Specific Heat Capacity of Solid and Liquid",
+      "Metre bridge",
+      "Potentiometer",
+      "Galvanometer",
+      "Parallax method",
+      "Triangular prism",
+      "Traveling microscope",
+      "Identification",
+      "By Multimeter"
+    ],
+    "Photoelectric effect and matter waves": [
+      "Photoelectric effects",
+      "Einstein’s Experiment",
+      "De Broglie's hypothesis of a matter wave",
+      "Radiation pressure"
+    ],
+    "Atomic structures": [
+      "Types of spectrum",
+      "Atomic Collision",
+      "Photon Emitted in De-Excitation of atom",
+      "X-rays"
+    ],
+    "Nuclear physics and radioactivity": [
+      "Concept of nucleus and nucleons",
+      "Nuclear force and stability of a nucleus",
+      "Radiactivity",
+      "Nuclear reactions"
+    ],
+    "Semiconductors and Communication System": [
+      "Band theory",
+      "P-N junction diode",
+      "Rectifier",
+      "Special diodes",
+      "Junction Transistor",
+      "Logic gates",
+      "Communication systems",
+      "Modes of communication",
+      "Modulation"
+    ],
+    "Electromagnetic Induction": [
+      "Magnetic Flux",
+      "Faraday's law and Lenz's law",
+      "Motional E.M.F.",
+      "Time varying Magnetic Field",
+      "Eddy Current",
+      "Self-induction and mutual inductance"
+    ],
+    "Alternating Current and EM Waves": [
+      "Alternating current",
+      "A.C. circuits",
+      "Electromagnetic waves"
+    ]
+  },
+  "Chemistry": {
+    "Chemical bonding and molecular structure": [
+      "Cause of chemical combination",
+      "Lewis dot formula",
+      "Chemical bonds and their type",
+      "Ionic or electrovalent bonds",
+      "Fajan's rule",
+      "Application of Fajan's rule",
+      "Water solubility of compounds of S block",
+      "Covlent bond",
+      "Valence bond theory-1",
+      "Back bonding",
+      "Bridge bonding",
+      "Molecular orbital (MO)",
+      "Polarity",
+      "Metallic bond",
+      "Intermolecular forces",
+      "Hydrogen bonding"
+    ],
+    "S-block elements (Alkali and alkaline earth metals) and Hydrogen": [
+      "Hydrogen",
+      "Compounds of Hydrogen",
+      "Hydrogen peroxide",
+      "Hardness of water",
+      "Alkali metals",
+      "Chemical properties of Alkali metals",
+      "Compounds of Alkali metals",
+      "Alkaline earth metals",
+      "Chemical properties of Alkaline earth metals",
+      "Compounds of alkaline earth metals",
+      "Anomalous behaviour of s-block elements",
+      "Compounds of s- block elements"
+    ],
+    "P-Block Elements(Boron and Carbon Family)": [
+      "Boron family",
+      "Chemical Properties",
+      "Boron and Its Compounds",
+      "Aluminium and Its Compounds",
+      "Carbon Family",
+      "Compounds of Carbon",
+      "Silicon and Its Compounds",
+      "Compounds of Carbon Family"
+    ],
+    "Group 15 & 16 Elements": [
+      "General properties of group 15",
+      "Chemical properties of group 15",
+      "Nitrogen",
+      "Ammonia",
+      "Oxides of nitrogen",
+      "Oxyacids of nitrogen",
+      "Preparation and properties of phosphorus",
+      "Preparation and properties of phosphine",
+      "Halides of Phosphorus",
+      "Oxyacids",
+      "General properties of group 16",
+      "Compounds of oxygen family",
+      "Oxygen",
+      "Ozone",
+      "Hydrogen Peroxide",
+      "Allotropic forms of Sulphur",
+      "Hydrogen Sulphide",
+      "Sulphur Dioxide",
+      "Sulphur Trioxide",
+      "Sulphuric acid",
+      "Oxyacids of Sulphur",
+      "Sodium Thiosulphate"
+    ],
+    "P BLOCK (Group 17 & 18)": [
+      "General Properties of group",
+      "Fluorine",
+      "Chlorine",
+      "Bromine and Iodine",
+      "Haloacids",
+      "Oxides of CI and Br",
+      "Oxyacids of halogens",
+      "Bleaching powder",
+      "Interhalogen compounds",
+      "Pseudohalides",
+      "Polyhalides",
+      "General Properties",
+      "Compounds of Xenon"
+    ],
+    "Coordination Compounds": [
+      "Type and Introduction of salts",
+      "Some Important terms of coordination compound",
+      "Nomenclature of co-ordination compounds",
+      "Isomerism in Co-ordination Compounds",
+      "Werner's concept",
+      "Valence bond theory",
+      "Crystal field theory",
+      "Miscellaneous Concepts",
+      "Metal Carbonyls & Bonding in Metal Carbonyls"
+    ],
+    "D and F block elements": [
+      "General Characteristics of D Block Elements",
+      "Potassium dichromate",
+      "Potassium permanganate",
+      "General Characterictics of f block",
+      "Lantanoid Contraction",
+      "Comparison"
+    ],
+    "General principles and processes of isolation of metals (Metallurgy)": [
+      "Minerals & Ores",
+      "Concentration of ores by physical separation",
+      "Concentration of ores by chemical separation",
+      "Conversion of concentrated ore into its oxide",
+      "Reduction of oxide to crude metal",
+      "Refining or purification of crude metal",
+      "Thermodynamics of reduction process",
+      "Alloys and amalgam",
+      "Types of furnaces",
+      "Extraction of silver",
+      "Extraction of gold",
+      "Extraction of tin",
+      "Extraction of magnesium",
+      "Extraction of aluminium",
+      "Extraction of lead",
+      "Extraction of copper",
+      "Extraction of zinc",
+      "Extraction of iron",
+      "Steel formation"
+    ],
+    "Qualitative Analysis and Purification of organic compounds": [
+      "Introduction",
+      "Preliminary tests",
+      "Group I Acidic Radicals",
+      "Group II Acidic Radicals",
+      "Group I Basic Radicals",
+      "Group II Basic Radicals",
+      "Group III Basic Radicals",
+      "Group IV Basic Radicals",
+      "Group V Basic Radicals",
+      "Group VI Basic Radicals",
+      "Purification of Organic Compounds",
+      "Qualitative analysis of organic compounds",
+      "Quantitative analysis of organic compounds"
+    ],
+    "Classification and nomenclature of organic compounds": [
+      "Classification and degree of unsaturaion",
+      "Terminology of general IUPAC name",
+      "Rules for IUPAC nomenclature",
+      "IUPAC nomenclature of important compounds"
+    ],
+    "General Organic Chemistry": [
+      "Bond Cleavage",
+      "Inductive effect",
+      "Resonance",
+      "Heat of hydrogenation and combustion",
+      "Aromaticity",
+      "Resonance energy",
+      "Hyperconjugation effect [+H effect]",
+      "Reverse hyperconjugation[-H effect]",
+      "Electromeric effect",
+      "Acid-base theory",
+      "Acidic strength comparisons",
+      "Basic strength comparisons"
+    ],
+    "Isomerism of organic compounds": [
+      "Structural Isomerism",
+      "2-D projections of molecules",
+      "Conformational analysis of open chain compounds",
+      "Geometrical isomerism",
+      "Concept of strain",
+      "Concept of symmetry",
+      "Fischer projections",
+      "Optical isomerism",
+      "Conformational analysis of closed chain compounds",
+      "Classification of optical isomers",
+      "Racemic mixture",
+      "Concept of chirality",
+      "Calculation of number of optical isomers",
+      "Amine inversion",
+      "Resolution"
+    ],
+    "Reaction Mechanism": [
+      "Kinetics of organic reaction",
+      "Thermodynamics of organic reactions",
+      "Organic Reagents",
+      "Leaving Groups in organic reactions",
+      "Rearrangement",
+      "Substitution Reaction",
+      "Elimination Reaction",
+      "Comparison between Substitution and Elimination",
+      "Addition Reaction"
+    ],
+    "Alkanes, Alkenes and Alkynes (Hydrocarbons)": [
+      "Introduction: Alkanes, Alkynes and Alkenes",
+      "Preparations of Alkane",
+      "Physical properties of Alkane",
+      "Chemical properties of Alkane",
+      "Preparation of Alkenes",
+      "Physical properties of Alkenes",
+      "Electrophilic Addition Reaction",
+      "Oxidation reaction",
+      "Diels-Alder reaction",
+      "Miscellaneous reactions of Alkenes",
+      "Preparation of Alkynes",
+      "Physical properties of Alkynes",
+      "Chemical properties of Alkynes",
+      "Miscellaneous reactions of Alkynes"
+    ],
+    "Aromatic hydrocarbons": [
+      "Preparations",
+      "Physical properties",
+      "Electrophilic aromatic substitution [ArSE or EAS]",
+      "Nucleophilic substitution Reaction",
+      "Miscellaneous"
+    ],
+    "Alkyl and aryl halides or halogen derivatives": [
+      "Preparation of haloalkanes",
+      "Physical and chemical properties of haloalkanes",
+      "Grignard reagent",
+      "Haloform",
+      "Aryl halides",
+      "Reaction of aryl halides",
+      "Nucleophilic substitution of aryl halides"
+    ],
+    "Alcohols": [
+      "Preparation of alcohols",
+      "Properties of alcohol",
+      "Geminal & Vicinal diols",
+      "Preparation and properties of glycerol"
+    ],
+    "Phenols": [
+      "Preparation of phenols",
+      "Properties of phenol",
+      "Chemical properties of phenol"
+    ],
+    "Ethers": [
+      "Preparation of ethers",
+      "Properties of ethers",
+      "Chemical properties of aliphatic ethers",
+      "Epoxide",
+      "Properties of epoxide"
+    ],
+    "Carbonyl compounds (Aldehydes and ketones)": [
+      "1 Concept added",
+      "Properties of carbonyl compounds"
+    ],
+    "Carboxylic acid and its derivatives": [
+      "Preparation of carboxylic acids",
+      "Properties",
+      "Chemical properties of acyl halides",
+      "Preparation and properties of anhydrides",
+      "Preparation of esters",
+      "Properties of esters",
+      "Preparation of amides",
+      "Properties of amides"
+    ],
+    "Amines": [
+      "Preparation of amines",
+      "Properties of amines",
+      "Distinction tests",
+      "Oxidation of amines",
+      "Preparation of Aniline",
+      "Properties of Aniline",
+      "Urea"
+    ],
+    "Biomolecules": [
+      "Carbohydrates",
+      "Monosaccharides",
+      "Sucrose",
+      "Maltose",
+      "Polysaccharides",
+      "Structure and classification of amino acids",
+      "Synthesis of amino acids",
+      "Polypeptides",
+      "Nucleic Acid",
+      "Structure of Nucleic Acid"
+    ],
+    "Synthetic and natural polymers": [
+      "Polymers-Introduction",
+      "Classification based on source and structure",
+      "Classification based on molecular forces",
+      "Type of polymerization reaction",
+      "Polymerization",
+      "Homopolymers",
+      "Biodegradable Polymers"
+    ],
+    "Environmental chemistry": [
+      "Environmental Pollution",
+      "Tropospheric Pollution",
+      "Particulate Pollutants",
+      "Stratospheric Pollution",
+      "Water Pollution",
+      "Soil Pollution",
+      "Strategies to control environmental pollution",
+      "Green Chemistry"
+    ],
+    "Chemistry in everyday life": [
+      "Introduction to drugs and chemotherapy",
+      "Chemicals in food",
+      "Cleansing agents"
+    ],
+    "Basic concepts of chemistry (Mole concept)": [
+      "BASIC MOLE",
+      "BASIC STOICHIOMETRY",
+      "ADVANCED STOICHIOMETRY",
+      "Concentration TERMS"
+    ],
+    "Atomic structure": [
+      "EARLY ATOMIC MODELS",
+      "Useful concept of Physics",
+      "DUAL NATURE OF LIGHT",
+      "BOHR'S THEORY",
+      "ATOMIC SPECTRUM",
+      "Wave- particle duality",
+      "Photoelectric effect",
+      "Schrodinger equation"
+    ],
+    "Gaseous state": [
+      "Measurement of gas pressure",
+      "Gas laws",
+      "Ideal gas equation",
+      "Dalton's law",
+      "Kinetic theory of gases",
+      "Graham's law",
+      "Eudiometry",
+      "Non-ideal gases",
+      "Critical phenomena",
+      "Van der Waals equation",
+      "Other equations of state"
+    ],
+    "Volumetric analysis": [
+      "Redox Reactions",
+      "Equivalent mass calculation",
+      "Advanced stoichiometry"
+    ],
+    "Thermodynamics and Thermochemistry": [
+      "Basic terms used in thermodynamics",
+      "Heat",
+      "Work",
+      "Internal Energy",
+      "Calorimetry",
+      "First law of thermodynamics",
+      "Application of First law of thermodynamics",
+      "Basic law of thermochemistry",
+      "Measurement of Enthalpy change",
+      "Enthalpy change involving solutions",
+      "Second law of Thermodynamics",
+      "Kirchhoff equation",
+      "Gibbs Free Energy",
+      "Third Law Of Thermodynamics"
+    ],
+    "Chemical equilibrium": [
+      "Types of chemical reaction",
+      "Kinetics and equilibrium",
+      "Equilibrium",
+      "Types of equilibrium",
+      "Relation between degree of dissociation and vapour density",
+      "Le Chatelier's principle",
+      "Application of equilibrium constant",
+      "Calculation of equilibrium constant"
+    ],
+    "Ionic equilibrium": [
+      "Introduction of Electrolytes",
+      "Classification of acids and bases",
+      "Ionisation of water",
+      "pH scale",
+      "Calculation of pH",
+      "Salt hydrolysis",
+      "Buffer solution",
+      "Indicators",
+      "Acid-base titrations",
+      "Solubility product",
+      "Precipitation",
+      "Complex Equilibrium",
+      "Miscellaneous Problems"
+    ],
+    "Solid state": [
+      "Crystal systems",
+      "Packing in solids",
+      "Radius Ratio Rule",
+      "Ionic Crystals",
+      "Diffraction of X-rays by Ionic Crystals",
+      "Imperfection in Crystals",
+      "Defects in Solids",
+      "Properties of Solids"
+    ],
+    "Chemical kinetics": [
+      "Rate of reaction",
+      "Integrated rate law",
+      "Analysis of some important first order reaction",
+      "Integrated rate law of higher order",
+      "Complex kinetics (First order reaction)",
+      "Effect of temperature on rate of reaction",
+      "Mechanism of chemical reaction"
+    ],
+    "Radioactivity": [
+      "Radioactivity",
+      "Radioactivity Displacement",
+      "Radioactivity Disintegration",
+      "Advanced Radioactivity"
+    ],
+    "Nuclear Chemistry": [
+      "1 Concept added",
+      "Nucleus"
+    ],
+    "Electrochemistry": [
+      "Introduction and cells",
+      "Electrochemical cells",
+      "Commercial Cells",
+      "Electrolytic cell",
+      "Conductance"
+    ],
+    "Liquid solutions": [
+      "Solutions",
+      "Raoult's Law",
+      "Colligative property"
+    ],
+    "Surface chemistry": [
+      "Adsorption",
+      "Catalysis",
+      "Colloidal state",
+      "Preparation of colloidal solution",
+      "Purification of colloidal solution",
+      "Property of colloidal solution",
+      "Stability of sols",
+      "Emulsions"
+    ],
+    "Classification of elements and periodicity in properties": [
+      "Classification of elements",
+      "Mendeleev's classification",
+      "Classification in blocks and properties",
+      "Diagonal relationship",
+      "Screening or shielding effect",
+      "Inert pair effect",
+      "Atomic radii",
+      "Variation of atomic radius",
+      "Ionic radii",
+      "Trends of ionic radii",
+      "Ianthaniod contraction",
+      "Ionization energy",
+      "Applications of ionization energy",
+      "Electron gain enthalpy/electron affinity (EA)",
+      "Electronegativity",
+      "Applications of electronegativity",
+      "Hydration energy",
+      "Lattice energy",
+      "Oxidation Number"
+    ]
+  },
+  "Math": {
+    "Trignometric Ratios, Functions & Identities": [
+      "Fundamentals of Trigo",
+      "Domain, Range, Graph of Trigo",
+      "Signs of Ratios in Quadrants",
+      "Allied Angles",
+      "Basic Trigo Identities",
+      "Standard Angles",
+      "Compound Angles Formula",
+      "Factorisation, De Factorisation",
+      "15°, 75°",
+      "Multiple angles Formula",
+      "18°, 36°, 54°, 72°",
+      "Half Angle Formula",
+      "22.5° , 67.5° and 7.5°",
+      "A, (60°+A), (60°-A)",
+      "A+B+C= 180°, In Triangle ABC",
+      "Max and Min in Trigo",
+      "Sin and Cos of an AP",
+      "Trignonometry and other chapters"
+    ],
+    "Equation and Inequation": [
+      "Inequalities",
+      "Modulus Function",
+      "Exponential Function",
+      "Logarithm Function"
+    ],
+    "Quadratic Equations": [
+      "Introduction of quadratic",
+      "Equation and roots",
+      "Nature of Roots of quadratic",
+      "Descartes Rule of Sign",
+      "Transformation of equation",
+      "Common roots",
+      "Quadratic/Biquadratic",
+      "Quadratic function and its graph",
+      "Maximum and minimum value of quadratic",
+      "Location of roots",
+      "Polynomial expression",
+      "Rolle’s theorem"
+    ],
+    "Sequences and Series (Progressions)": [
+      "Definition of Sequence and Series",
+      "Arithmetic Progressions (AP)",
+      "Geometric Progressions(GP)",
+      "Harmonic progression(HP)",
+      "A.M. G.M and H.M",
+      "Arithmetic-geometric progression ( AGP)",
+      "Miscellaneous series",
+      "Various Inequalities",
+      "Special Concepts"
+    ],
+    "Trigonometric Equations": [
+      "Introduction of trigonometric equation",
+      "General solution of some elementary equations",
+      "Important points to be taken care while solving equations",
+      "General solution of some standard equations",
+      "Different strategies to solve T.E",
+      "Solution of some special equations"
+    ],
+    "Binomial Theorem": [
+      "Factorial",
+      "Binomial Expansion",
+      "Middle term(s) and greatest coefficient(s) in (x + a)^n",
+      "Numerically Greatest Term",
+      "Binomial Coefficients",
+      "Multinomial Theorem",
+      "Generalised form of binomial theorem",
+      "Integral and fractional part",
+      "Application of binomial theorem"
+    ],
+    "Permutation and Combination": [
+      "Fundamental principle of counting",
+      "Combination",
+      "Permutation",
+      "Circular Permutation",
+      "Geometry based problem",
+      "Inclusion- Exclusion principle in combinatorics",
+      "Distribution",
+      "Division into group",
+      "Divisors",
+      "De-arrangement"
+    ],
+    "Probability": [
+      "Basic terms in Probability",
+      "Set Theory in Probability",
+      "Dependent and Independent events",
+      "Odds",
+      "Conditional probability",
+      "Law of total probability and Bayes' theorem",
+      "Probability Distribution",
+      "Geometrical probability"
+    ],
+    "Point and Straight Line": [
+      "Coordinate system",
+      "Imp Points of Triangle",
+      "Imp points of quadrilateral",
+      "Locus of a Point",
+      "Change of axes",
+      "Slope",
+      "Equation of line",
+      "Point of intersection of two Lines",
+      "Distance of a Point from a Line",
+      "Position of Point w.r.t. Line",
+      "Angle bisectors",
+      "Family of Straight Lines",
+      "Pair of straight lines",
+      "Equation of Angle Bisector",
+      "Homogenisation of non Homogeneous Equation",
+      "Some other important concepts"
+    ],
+    "Circle": [
+      "Definition and Properties of circle",
+      "Equation of a circle in different forms",
+      "Position of point w.r.t. circle",
+      "Intercepts of Circle on a line",
+      "Tangent and Normal",
+      "Common tangents to two circles",
+      "Power of a point",
+      "Intersection of two circles",
+      "Important terms and their equations",
+      "Family of circles",
+      "Pole and Polar",
+      "Radical axis and radical centre",
+      "Coaxial system of circles"
+    ],
+    "Parabola": [
+      "Introduction of conic",
+      "Fundamentals of Parabola",
+      "Chord of Parabola",
+      "Position of a Point w.r.t Parabola",
+      "Intersection of line and Parabola",
+      "Tangent to a Parabola",
+      "Normal to a Parabola",
+      "Equation of Chord of Contact to a Parabola",
+      "Equation of Chord of Parabola with given Midpoint",
+      "Pair of Tangents to the Parabola",
+      "Diameter of Parabola",
+      "Pole and Polar of Parabola",
+      "Some standard properties of parabola"
+    ],
+    "Ellipse": [
+      "Definition and basics of ellipse",
+      "Auxiliary circle and parametric coordinates (Ellipse)",
+      "Equation of chord ellipse",
+      "Position of a point w.r.t. ellipse",
+      "Line and Ellipse",
+      "Equation of tangent ellipse",
+      "Important terms and their equation ellipse",
+      "Normal to an Ellipse",
+      "Diameter of an Ellipse",
+      "Standard properties of ellipse"
+    ],
+    "Hyperbola": [
+      "Introduction of hyperbola",
+      "Position of a point w.r.t hyperbola",
+      "Equation of chord hyperbola",
+      "Line and hyperbola",
+      "Tangent to Hyperbola",
+      "Normal to Hyperbola",
+      "Reflection property of hyperbola",
+      "Director Circle Hyperbola",
+      "Chord of Contact of Hyperbola",
+      "Chord of Hyperbola with given Midpoint",
+      "Pair of Tangents to Hyperbola from an Outside Point",
+      "Diameter of Hyperbola",
+      "Pole and Polar of hyperbola",
+      "Asymptotes of hyperbola",
+      "Highlights and Properties of Hyperbola",
+      "Rectangular Hyperbola"
+    ],
+    "Complex Numbers": [
+      "Introduction to complex numbers",
+      "Algebra of Complex Numbers",
+      "Square Roots of Complex Numbers",
+      "Argand plane",
+      "Conjugate of a Complex Number",
+      "Modulus of a complex number",
+      "Amplitude and argument",
+      "Other forms of complex number",
+      "De Moivre's Theorem",
+      "Concept of Rotation in Complex Numbers",
+      "Roots of unity",
+      "Complex Polynomial",
+      "Geometry of complex number",
+      "Log of Complex Numbers",
+      "Trigonometric series by complex number"
+    ],
+    "Properties of Triangle": [
+      "Basic rules in trigonometry",
+      "Formula for Half angle of Triangles",
+      "Area of Triangle",
+      "M-N Theorem",
+      "Incenter and Inradius",
+      "Centroid and Medians",
+      "Excentre and ex-radii of a triangle",
+      "Orthocentre and Pedal Triangle",
+      "Quadrilateral",
+      "Height and distance"
+    ],
+    "Functions": [
+      "Functions",
+      "Graphs and Properties of Elementary Functions",
+      "Transformation of Graphs",
+      "Kinds of functions",
+      "PnC based Questions",
+      "Even and odd functions",
+      "Periodic functions",
+      "Composite functions",
+      "Inverse functions",
+      "Binary operation",
+      "Equal and identical functions",
+      "Functional Equations"
+    ],
+    "Inverse Trigonometric Functions": [
+      "Domain, range and graphs of I.T.F.",
+      "Relation of f⁻¹(x) with f⁻¹(-x)&f⁻¹(1/x)",
+      "Addition of complementary angles",
+      "Relation between different I.T.F.",
+      "Domain, range and graph of f(f⁻¹(x))",
+      "Domain, range and graph of f⁻¹(f(x))",
+      "Sum and difference of angles formulas",
+      "Multiple angle formula",
+      "Some other important concept"
+    ],
+    "Limits": [
+      "Introduction and basics of limits",
+      "Methods of Evaluating Limits",
+      "Standard limits",
+      "L’Hopital’s rule",
+      "0⁰,ꝏ⁰ and 1^ꝏ Form",
+      "Limits using expansions",
+      "Sandwich theorem",
+      "Newton leibniz rule",
+      "Limit of composite functions",
+      "Geometrical Limits"
+    ],
+    "Continuity and Differentiability": [
+      "Continuity",
+      "Types of Discontinuity",
+      "Continuity of standard functions",
+      "Continuity of special types of functions",
+      "Intermediate Value Theorem",
+      "Differentiability",
+      "Reasons for non-differentiability",
+      "Differentiability of standard functions"
+    ],
+    "Method of Differentiation": [
+      "Introduction of derivative",
+      "Differential coefficients of standard function",
+      "Algebra of Differentiation",
+      "Differentiation by Substitution",
+      "Differentiation of Composite Functions",
+      "Differentiation of implicit function",
+      "Differentiation of Parametric Equations",
+      "Differentiation using logarithm",
+      "Derivative of Infinite Series",
+      "Differentiation of a Function w.r.t Another Function",
+      "Derivative of inverse function",
+      "Differentiation of Determinant",
+      "Higher Order Derivatives",
+      "Determining a function using first principle"
+    ],
+    "Application of Derivatives": [
+      "Rate Measured in Calculus",
+      "Error and approximations",
+      "Tangents and normals",
+      "Mean value theorem",
+      "Monotonicity",
+      "Maxima and Minima"
+    ],
+    "Indefinite Integration": [
+      "Introduction of Integration",
+      "Integration by substitution",
+      "Integration by parts",
+      "Algebraic integration",
+      "Some special trigonometric forms",
+      "Miscellaneous methods of integration",
+      "Some important concepts"
+    ],
+    "Definite Integration": [
+      "Introduction of definite integrals",
+      "Properties of Definite Integrals",
+      "Newton leibnitz’s rule",
+      "Other important concepts"
+    ],
+    "Area Under Curves": [
+      "1 Concept added",
+      "Different cases of bounded area"
+    ],
+    "Differential Equation": [
+      "Introduction of D.E.",
+      "Solution of differential equations",
+      "Application of Differential Equations",
+      "Trajectory in Differential Equations"
+    ],
+    "Matrices and Determinants": [
+      "Matrices",
+      "Types of Matrix",
+      "Algebra of matrices",
+      "Transpose of a matrix",
+      "Adjoint of a Matrix",
+      "Inverse of Matrix",
+      "Linear equations",
+      "Classification of matrices",
+      "Determinant",
+      "Properties of Determinant",
+      "Determinant Multiplication",
+      "System of Linear Equation",
+      "Calculus of determinant",
+      "Cayley-Hamilton theorem",
+      "Rank of a matrix"
+    ],
+    "Vector": [
+      "Introduction and Types of Vectors",
+      "Position vector and direction cosines",
+      "Algebra of vectors",
+      "Collinearity and coplanarity of vectors",
+      "Product of two vectors",
+      "Product of three vector",
+      "Product of four vectors",
+      "Reciprocal System of Vectors",
+      "Solution of vector equation"
+    ],
+    "Three Dimensional Geometrical System": [
+      "Introduction of 3D",
+      "Important Points in a Triangle 3 Dimensional Geometry",
+      "Line in 3D and Vectors",
+      "Plane in 3D and vectors",
+      "Foot of perpendicular and image of a point in plane",
+      "Angle between two planes",
+      "Angle Bisector between two Planes",
+      "Family of planes",
+      "Plane and Line",
+      "Sphere"
+    ],
+    "Set Theory and Relations": [
+      "Sets and their representation",
+      "Types of Sets",
+      "SubSet and power set",
+      "Operations on Sets",
+      "Formulas on operation of sets, Venn Diagram",
+      "Cartesian Product of Sets",
+      "Relations",
+      "Types of Relations",
+      "Other important points"
+    ],
+    "Mathematical Induction": [
+      "1 Concept added",
+      "Mathematical Statement Logic & Principle"
+    ],
+    "Statistics": [
+      "Fundamental of statistics",
+      "Mean deviation",
+      "Variance and standard deviation"
+    ],
+    "Mathematical Reasoning": [
+      "Statement",
+      "Logical connectives",
+      "Implications & Quantifiers",
+      "Algebra of statements",
+      "Logical equivalence in mathematical reasoning",
+      "Contrapositive, converse & contradiction of a statement",
+      "Tautology and fallacy in mathematical reasoning"
+    ],
+    "Linear Programming": [
+      "Introduction and Formation of LPP",
+      "Solution of LPP"
+    ]
+  }
+}

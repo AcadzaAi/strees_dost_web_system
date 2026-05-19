@@ -28,7 +28,7 @@ def should_ask_slot(user_text: str, domain: str, slot: str) -> bool:
     }
     try:
         resp = chat_json(
-            model="gpt-5-mini",
+            model="gpt-4o-mini",
             system=SYSTEM_PROMPT_SLOT_GATE,
             user=json.dumps(payload, ensure_ascii=False),
         )

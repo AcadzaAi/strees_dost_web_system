@@ -36,7 +36,6 @@ ALLOWED_TRIGGERS = {
     "fakeCrashScreen",
     "blackout",
     "hesitationHeatmap",
-    "bollywoodReelTrap",
 }
 
 
@@ -50,12 +49,12 @@ EVENT_PRIORITY = {
     "answer_changed": ["optionShuffle", "hesitationHeatmap", "mirageHighlight"],
     "interaction_hesitation": ["mirageHighlight", "hesitationHeatmap", "stressTimer"],
     "long_hesitation": ["phantomCompetitor", "stressTimer", "spatialTicking"],
-    "idle_resumed": ["blurAttack", "chaosBackground", "bollywoodReelTrap"],
-    "feedback_topic_selected": ["bollywoodReelTrap"],
+    "idle_resumed": ["blurAttack", "chaosBackground"],
+    "feedback_topic_selected": ["chaosBackground"],
     "time_pressure": ["heartbeatVibration", "stressTimer", "fakeLowBattery", "spatialTicking"],
     "question_loaded": ["fakeMentorCount", "phantomCompetitor"],
     "submit_attempt": ["spatialTicking", "stressTimer"],
-    "context_switched": ["bollywoodReelTrap", "chaosBackground", "fakeMentorCount"],
+    "context_switched": ["chaosBackground", "fakeMentorCount"],
     "device_agitation": ["spatialTicking", "shepardTone", "stressTimer"],
     "high_tap_intensity": ["confidenceBreaker", "stressTimer", "optionShuffle"],
 }
@@ -111,7 +110,6 @@ TRIGGER_INTENSITY_HINTS = {
     "spatialTicking": "medium",
     "waveDistortion": "medium",
     "heartbeatVibration": "medium",
-    "bollywoodReelTrap": "medium",
     "blurAttack": "high",
     "screenFlip": "high",
     "colorInversion": "high",
@@ -175,7 +173,7 @@ Orchestration behavior:
   - overload -> chaos/shepard/wave style
   - urgency -> timer/ticking/haptic urgency style
 - If conflicting signals or weak confidence, choose no trigger.
-- If preferred interest topic exists and bollywoodReelTrap is available, prefer bollywoodReelTrap
+- If preferred interest topic exists, bias toward non-repetitive medium-intensity triggers
     for suitable events (especially context_switch/idle/distraction-style moments).
 
 Safety:
@@ -212,7 +210,7 @@ Output constraints:
 
 
 DEVIL_BRIEF_PROMPT = """
-You are writing a dramatic but useful pre-test briefing from a devil persona.
+You are writing a creative, dramatic pre-test briefing from a devil persona.
 Use student follow-up answers and planned trigger policy context.
 
 Output strict JSON only:
@@ -220,16 +218,21 @@ Output strict JSON only:
     "devil_name": "...",
     "intro": "...",
     "taunt": "...",
-    "problems": ["...", "...", "..."],
-    "design_points": ["...", "...", "..."],
-    "challenge_lines": ["...", "..."]
+    "problems": ["...", "..."],
+    "design_points": ["..."],
+    "challenge_lines": ["..."]
 }
 
 Rules:
-- Keep tone creative and cinematic, but not abusive.
-- Problems must be specific to follow-up themes when available.
-- Keep each bullet under 120 chars.
+- Keep tone creative and dramatic, but not abusive.
+- Problems: Maximum 2 items, each under 80 chars. These should be OBSERVATIONS about the user's actual situation/stress, NOT challenges or questions. State what you noticed from their answers (e.g., "You mentioned struggling with time management", "Your focus drops when multiple tasks pile up"). Do NOT ask questions or challenge them here.
+- Design_points: Only 1 line, under 100 chars. Brief summary of what triggers/strategies we planned based on their problems.
+- Challenge_lines: Only 1 line, under 100 chars. This is where you can be dramatic and challenging.
+- Intro: One sentence under 120 chars, referencing their actual responses.
+- Taunt: One sentence under 100 chars, connected to what they shared.
 - Do not mention medical diagnosis.
+- If user gave minimal/unclear answers, keep problems general but as observations, not questions.
+- Problems = what you observed. Design_points = what we planned (1 line only). Challenge_lines = the dare.
 """
 
 
@@ -729,8 +732,8 @@ def recommend_trigger():
         or ""
     ).strip().lower()
 
-    if preferred_interest_topic and "bollywoodReelTrap" in available:
-        event_priority = ["bollywoodReelTrap", *event_priority]
+    if preferred_interest_topic:
+        event_priority = [*event_priority]
 
     payload = {
         "event_name": event_name,
@@ -861,9 +864,9 @@ def devil_brief():
                 "devil_name": str(parsed.get("devil_name") or "The Invigilator Devil")[:80],
                 "intro": str(parsed.get("intro") or "I studied your responses and designed this test around your pressure points.")[:260],
                 "taunt": str(parsed.get("taunt") or "Accept my challenge. I doubt you can beat me.")[:220],
-                "problems": [str(x)[:120] for x in problems[:5] if str(x).strip()],
-                "design_points": [str(x)[:120] for x in design_points[:5] if str(x).strip()],
-                "challenge_lines": [str(x)[:120] for x in challenge_lines[:3] if str(x).strip()],
+                "problems": [str(x)[:80] for x in problems[:2] if str(x).strip()],
+                "design_points": [str(x)[:100] for x in design_points[:1] if str(x).strip()],
+                "challenge_lines": [str(x)[:100] for x in challenge_lines[:1] if str(x).strip()],
                 "source": "ai",
             }
         )
@@ -872,21 +875,17 @@ def devil_brief():
         return jsonify(
             {
                 "devil_name": "The Invigilator Devil",
-                "intro": "I shaped this test from your answers: where you hesitate, where panic rises, where focus slips.",
+                "intro": "I shaped this test from your answers: where you hesitate, where panic rises.",
                 "taunt": "Accept my challenge. I know your weak moments; prove me wrong.",
                 "problems": [
-                    "You lose speed when doubt appears.",
-                    "You overthink after one hard question.",
-                    "Distractions steal attention at critical moments.",
+                    "Your speed drops when doubt creeps in.",
+                    "Distractions pull your attention at critical moments.",
                 ],
                 "design_points": [
-                    "Wrong answers trigger pressure responses.",
-                    "Hesitation patterns trigger decision traps.",
-                    "Time pressure increases near key transitions.",
+                    "Triggers activate on wrong answers, hesitation, and idle patterns.",
                 ],
                 "challenge_lines": [
                     "Accept this challenge and hold your focus.",
-                    "Beat the devil by beating your own panic.",
                 ],
                 "source": "fallback",
             }

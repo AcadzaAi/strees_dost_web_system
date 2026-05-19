@@ -64,7 +64,7 @@ def extract_components(text: str) -> List[str]:
     for attempt in (1, 2):
         try:
             response = chat_text(
-                model="gpt-5-mini",
+                model="gpt-4o-mini",
                 system=SYSTEM_PROMPT_EXTRACT,
                 user=user_text[:1500],
             )
@@ -159,7 +159,7 @@ def detect_causes(user_text: str) -> Dict[str, bool]:
     for attempt in (1, 2):
         try:
             resp = chat_json(
-                model="gpt-5-mini",
+                model="gpt-4o-mini",
                 system=SYSTEM_PROMPT_CAUSES,
                 user=json.dumps(payload, ensure_ascii=False),
             )

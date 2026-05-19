@@ -784,6 +784,8 @@ def debug_session(session_id: str):
             "popups": session.popups or [],
             "filled_slots": session.filled_slots,
             "meta": session.meta,
+            "raw_initial_text": session.raw_initial_text,
+            "history": session.history,
         }
     )
 

@@ -1,0 +1,54 @@
+question_id,subject,chapter,concepts,sub_concepts,difficulty,level,question_type
+5fb7c6691554e41fe3c59728,Physics,Vectors,,Triangle law of addition,2,MEDIUM,integerQuestion
+5fcf36abbe78d01bd27d94af,Physics,Vectors,,Triangle law of addition,2,MEDIUM,integerQuestion
+69f6df8d924b2815e7ca71f4,Physics,Vectors,,Magnitude and direction of the resultant (Cosine law).|Polygon law,,MEDIUM,integerQuestion
+69f6df8d924b2815e7ca71f7,Physics,Vectors,,Magnitude and direction of the resultant (Cosine law).,,MEDIUM,scq
+69df934eeffe141471f79bf8,Physics,Vectors,,Magnitude and direction of the resultant (Cosine law).|Component along and perpendicular to a direction.,,HARD,scq
+5f735313e6dbfb158d5aa2a6,Physics,Vectors,,Null & unit vector|Magnitude and direction of the resultant (Cosine law).,3,HARD,scq
+5f73545fe6dbfb158d5aa2a9,Physics,Vectors,,X and Y component.,2,MEDIUM,scq
+5f73a1fa518b8a17aee7993a,Physics,Vectors,,Component along and perpendicular to a direction.|Equilibrium of forces,2,MEDIUM,scq
+5f744d9d518b8a17aee79969,Physics,Vectors,,"Introduction to basic vectors ( i, j ,k)",2,MEDIUM,scq
+69c68a69e305776bd133fd94,Physics,Electrostatics,,Electric Flux|X and Y component.,,MEDIUM,scq
+69e77f4e4ec46f2d24734a3a,Physics,Vectors,,Component along and perpendicular to a direction.,,MEDIUM,scq
+5f736f13e6dbfb158d5aa2e7,Physics,Vectors,,Component along and perpendicular to a direction.,3,HARD,scq
+5f745a38518b8a17aee79976,Physics,Vectors,,"Component along and perpendicular to a direction.|Introduction to basic vectors ( i, j ,k)",3,HARD,scq
+5f736366e6dbfb158d5aa2ce,Physics,Vectors,,Scalar Product and application,2,MEDIUM,scq
+c5f7388a4e6dbfb158d5aa314,,,,,,,
+6002f849939dac50db5b1510,Physics,Vectors,,Scalar Product and application,2,MEDIUM,scq
+6002f849939dac50db5b1511,Physics,Vectors,,Scalar Product and application,2,MEDIUM,scq
+69c68702e305776bd133fa95,Physics,Vectors,,Scalar Product and application,,MEDIUM,scq
+5f7370bae6dbfb158d5aa2f0,Physics,Vectors,,Scalar Product and application,3,HARD,scq
+69d082c5155b0f39b11b7d8f,Physics,Vectors,,Magnitude and direction of the resultant (Cosine law).|Scalar Product and application,,HARD,scq
+5fb771a103080e18f68195fc,Physics,Vectors,,Collinear and coplanar vectors,2,MEDIUM,scq
+600302d9939dac50db5b1528,Physics,Vectors,,Collinear and coplanar vectors,2,MEDIUM,scq
+60030384939dac50db5b152b,Physics,Vectors,,Collinear and coplanar vectors,2,MEDIUM,scq
+600303ff939dac50db5b1530,Physics,Vectors,,Collinear and coplanar vectors,2,MEDIUM,scq
+69da18cceffe141471f504bd,Physics,Vectors,,Collinear and coplanar vectors,,MEDIUM,scq
+6073514d4aa5f61227cfc62a,Chemistry,Isomerism of organic compounds,,"Functional, ring chain isomerism and metamerism",2,MEDIUM,scq
+6075c263b35be8122d24da01,Chemistry,Isomerism of organic compounds,,"Definition and types of isomerism, Discussion of chain and position isomerism",2,MEDIUM,scq
+68e870116e45ba37dcc16361,Chemistry,Isomerism of organic compounds,,% enol content and types of tautomers,,MEDIUM,scq
+69e086cbe4d4b13ea4262d75,Chemistry,Isomerism of organic compounds,,"% enol content and types of tautomers|Strength of H bond,condition for intramolecular H bonding",,MEDIUM,scq
+69e7c4244ec46f2d2473950f,Chemistry,Isomerism of organic compounds,,"Functional, ring chain isomerism and metamerism",,MEDIUM,scq
+61ddae5acd9852266e10a2c0,Chemistry,Isomerism of organic compounds,,"Functional, ring chain isomerism and metamerism",,HARD,scq
+69d8dd3fba972c146b6f4f93,Chemistry,Isomerism of organic compounds,,"Functional, ring chain isomerism and metamerism",,HARD,scq
+6075cb364aa5f61227cfc7c4,Chemistry,Isomerism of organic compounds,,"Introduction, Mechanism and condition of tautomerism",2,MEDIUM,scq
+623ef67e02d97d468f703d9b,Math,Circle,,"Intercept on x-axis,y-axis & on y=mx+c",2,MEDIUM,scq
+62435143019c3e4c289b947e,Math,Circle,,"Center radius form,General equation of circle|Intercept on x-axis,y-axis & on y=mx+c",3,HARD,scq
+609046b89a5038761d3d423b,Physics,Gravitation,,Law of Gravitation,2,MEDIUM,scq
+68e8734a6e45ba37dcc16f42,Physics,Newton's law of motion,,Law of Gravitation,,MEDIUM,scq
+6956d8d223cb221e570d6776,Physics,Gravitation,,Law of Gravitation|Coulomb's Law,,MEDIUM,scq
+69f737b35327e315e0a2ef81,Physics,Gravitation,,Gravitation Field Intensity|g at surface of earth/planet,,MEDIUM,scq
+69f87217924b2815e7cba842,Physics,Gravitation,,Gravitation Field Intensity|g at surface of earth/planet,,MEDIUM,scq
+69be3a41a7507e0d0e268e2a,Physics,Gravitation,,Gravitational field due to a Solid Sphere|Gravitational Field Due to system of particles,,MEDIUM,integerQuestion
+6090e1a8da7daa761b029996,Physics,Gravitation,,Gravitation Field Intensity,3,HARD,scq
+60911195eb93df05f5d8aa3c,Physics,Gravitation,,Gravitational Potential Energy|Gravitation Field Intensity,3,HARD,scq
+6092446b49877905fbe24ba1,Physics,Gravitation,,Law of Gravitation,3,HARD,scq
+605dc237a345d051c37c8b8a,Math,Circle,,"Center radius form,General equation of circle|Intercept on x-axis,y-axis & on y=mx+c",2,MEDIUM,scq
+605dc405c8bf7651c409a509,Math,Circle,,"Center radius form,General equation of circle|Intersection of Line and Circle, Slope form of tangent",2,MEDIUM,scq
+605f00776c1c9c65b9df26b1,Math,Circle,,"Intercept on x-axis,y-axis & on y=mx+c",2,MEDIUM,scq
+606411cbdfb39935e08287f1,Math,Circle,,"Centroid,Incentre|Meaning,Equation,Steps to find the locus|Chord of contact of circle",2,MEDIUM,scq
+606618b1df6ae46000fd308e,Math,Circle,,"Common chord to two circles,Length of common chord",2,MEDIUM,scq
+609414ac49a33b4a01c1b5b8,Math,Parabola,,"Types of common tangents,No. of common tangents",2,MEDIUM,scq
+61556ac29cfe09503096bd1e,Math,Differential Equation,,"Intersection of Line and Circle, Slope form of tangent|Point form & Parametric form of tangent (parabola)",,HARD,scq
+6236074e1f1d6050de02553b,Math,Circle,,"Intercept on x-axis,y-axis & on y=mx+c",3,HARD,scq
+623eed5f02d97d468f7039fa,Math,Circle,,Through intersection of two circles and a circle & a line,3,HARD,scq

@@ -3,75 +3,239 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Stress Dost — Sign in</title>
+  <title>Focus & Accuracy Dost — Sign in</title>
   <link rel="stylesheet" href="/styles.css" />
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ---- Intro video overlay shown after name entry ---- */
+    .intro-video-stage {
+      position: fixed;
+      inset: 0;
+      background: radial-gradient(circle at top, #0b1024 0%, #05060d 70%);
+      z-index: 9999;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .intro-video-stage.is-active { display: flex; }
+
+    .intro-video-skip {
+      position: absolute;
+      top: 18px;
+      right: 18px;
+      background: rgba(255, 255, 255, 0.1);
+      color: #fff;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      padding: 8px 18px;
+      border-radius: 999px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      backdrop-filter: blur(10px);
+      transition: background 0.2s, transform 0.2s;
+      z-index: 2;
+    }
+    .intro-video-skip:hover {
+      background: rgba(255, 255, 255, 0.22);
+      transform: translateY(-1px);
+    }
+
+    .intro-video-frame {
+      width: min(960px, 96vw);
+      aspect-ratio: 16 / 9;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.08);
+      background: #000;
+    }
+    .intro-video-frame iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      display: block;
+    }
+
+    .intro-video-caption {
+      margin-top: 18px;
+      color: rgba(255, 255, 255, 0.78);
+      font-size: 14px;
+      text-align: center;
+      max-width: 720px;
+      line-height: 1.5;
+    }
+    .intro-video-caption strong { color: #fff; }
+
+    .intro-video-continue {
+      margin-top: 16px;
+      background: linear-gradient(120deg, #ff6cab, #8561f9);
+      color: #fff;
+      border: 0;
+      padding: 12px 28px;
+      border-radius: 999px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 12px 30px rgba(133, 97, 249, 0.45);
+    }
+    .intro-video-continue:hover { transform: translateY(-1px); }
+
+    @media (max-width: 640px) {
+      .intro-video-stage { padding: 14px; }
+      .intro-video-skip { top: 12px; right: 12px; padding: 6px 14px; font-size: 13px; }
+      .intro-video-caption { font-size: 13px; }
+      .intro-video-continue { padding: 10px 22px; font-size: 14px; }
+    }
+  </style>
 </head>
-<body class="login-page">
-  <div class="login-split-page">
-    <aside class="login-split-left" aria-label="About Stress Dost">
-      <div class="glass login-glass login-glass--hero">
-        <span class="login-pill">Student stress companion</span>
-        <h1 class="login-hero-title">
-          Vent it.<br />
-          <em>Understand it.</em><br />
-          Beat it.
-        </h1>
-        <p class="login-hero-copy">
-          Write or say what’s weighing on you. Stress Dost turns your stress into something you can actually work with.
-        </p>
-        <ul class="login-feature-list">
-          <li><span class="login-dot login-dot--blue"></span> AI-guided conversation flow</li>
-          <li><span class="login-dot login-dot--green"></span> Real-time stress profiling</li>
-          <li><span class="login-dot login-dot--orange"></span> Practice questions and timed drills</li>
-        </ul>
-        <div class="login-scroll-hint" aria-hidden="true">↓</div>
+<body>
+  <main class="viewport">
+    <section class="stage active" id="stageName">
+      <div class="glass intro-card name-card">
+        <p class="eyebrow">Get started</p>
+        <h2>What should we call you?</h2>
+        <p>Enter your name to personalize the session.</p>
+        <label for="displayName" class="label">Name</label>
+        <input id="displayName" type="text" placeholder="Enter your name" />
+        <div class="row" id="nameStepRow">
+          <button id="btnNameNext" class="btn primary" type="button">Continue</button>
+        </div>
+
+        <div class="stage-hint" id="loginHint"></div>
       </div>
-    </aside>
+    </section>
+  </main>
 
-    <div class="login-split-divider" aria-hidden="true"></div>
-
-    <div class="login-split-right">
-      <div class="glass login-glass login-glass--form">
-        <section class="login-stage-panel is-active" id="loginStage">
-          <p class="login-right-lead">Welcome! Let’s get you started.</p>
-          <form id="loginForm" class="login-form" autocomplete="on">
-            <label for="displayName" class="label">Your name </label>
-            <input id="displayName" name="displayName" type="text" maxlength="120" placeholder="e.g Rohan" />
-
-            <label for="userId" class="label">Your id (optional)</label>
-            <input id="userId" name="userId" type="text" maxlen
-            gth="200" placeholder="Leave blank — we assign a" title="Leave blank for a random id" />
-            
-            <label for="mood" class="label">How are you feeling right now? (optional)</label>
-            <select id="mood" name="mood">
-              <option value="">— pick one —</option>
-              <option value="overwhelmed">Overwhelmed</option>
-              <option value="anxious">Anxious</option>
-              <option value="scattered">Scattered / can't focus</option>
-              <option value="burned-out">Burned out</option>
-              <option value="just-checking">Just checking in</option>
-            </select>
-
-            <div class="stage-hint" id="loginHint"></div>
-
-            <button type="submit" class="btn primary login-btn-wide">Go to Stress Dost</button>
-
-            <div class="login-or" role="presentation"><span>or</span></div>
-
-            <button type="button" class="btn ghost login-btn-wide" id="btnGuest">Continue as guest</button>
-          </form>
-        </section>
-
-        <section class="login-stage-panel" id="welcomeStage" hidden>
-          <h2 class="login-welcome-title" id="welcomeHeading">Hey there</h2>
-          <p class="login-right-lead" id="welcomeMessage">Ready to vent? The session is all yours.</p>
-          <a href="/" class="btn primary login-btn-wide">Launch Stress Dost →</a>
-        </section>
-      </div>
+  <!-- Intro video overlay (Synthesia embed) -->
+  <div id="introVideoStage" class="intro-video-stage" aria-hidden="true">
+    <button id="introVideoSkip" class="intro-video-skip" type="button" aria-label="Skip intro video">Skip ›</button>
+    <div class="intro-video-frame">
+      <iframe
+        id="introVideoFrame"
+        src=""
+        title="Mastering Focus Under Pressure"
+        loading="lazy"
+        allow="autoplay; fullscreen; encrypted-media"
+        allowfullscreen
+        referrerpolicy="strict-origin-when-cross-origin"></iframe>
     </div>
+    <p class="intro-video-caption">
+      <strong>Mastering Focus Under Pressure.</strong>
+      A quick walkthrough of how Focus Dost works. Click <strong>Skip</strong> at any time.
+    </p>
+    <button id="introVideoContinue" class="intro-video-continue" type="button">Continue to your session</button>
   </div>
 
   <script src="/auth.js"></script>
-  <script src="/login.js"></script>
+  <script>
+    (function () {
+      var btnNext = document.getElementById("btnNameNext");
+      var nameInput = document.getElementById("displayName");
+      var hint = document.getElementById("loginHint");
+
+      var videoStage    = document.getElementById("introVideoStage");
+      var videoFrame    = document.getElementById("introVideoFrame");
+      var btnSkipVideo  = document.getElementById("introVideoSkip");
+      var btnContVideo  = document.getElementById("introVideoContinue");
+
+      var SYNTHESIA_EMBED_URL =
+        "https://share.synthesia.io/embeds/videos/34ab6da8-fecf-419f-a34c-115a92d721b1";
+
+      if (!window.StressDostAuth) return;
+
+      if (window.StressDostAuth.getUser()) {
+        window.location.replace("/");
+        return;
+      }
+
+      function goHome() {
+        if (videoFrame) { try { videoFrame.src = "about:blank"; } catch (_) {} }
+        window.location.href = "/";
+      }
+
+      function showIntroVideo() {
+        if (!videoStage || !videoFrame) { goHome(); return; }
+        videoFrame.src = SYNTHESIA_EMBED_URL;
+        videoStage.classList.add("is-active");
+        videoStage.setAttribute("aria-hidden", "false");
+        if (btnSkipVideo) btnSkipVideo.focus();
+      }
+
+      if (btnSkipVideo) btnSkipVideo.addEventListener("click", goHome);
+      if (btnContVideo) btnContVideo.addEventListener("click", goHome);
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape" && videoStage && videoStage.classList.contains("is-active")) {
+          goHome();
+        }
+      });
+
+      function submitProfile() {
+        if (hint) hint.textContent = "";
+        var display_name = (nameInput || {}).value || "";
+
+        if (!display_name.trim()) {
+          if (hint) hint.textContent = "Please enter your name";
+          return;
+        }
+
+        if (btnNext) { btnNext.disabled = true; btnNext.textContent = "Just a sec…"; }
+
+        console.log('[Login] Checking profile for:', display_name.trim());
+        fetch("/api/user/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: display_name.trim() })
+        })
+        .then(res => res.json())
+        .then(data => {
+          console.log('[Login] API response:', data);
+          if (data.error) {
+            if (hint) hint.textContent = data.error;
+            if (btnNext) { btnNext.disabled = false; btnNext.textContent = "Continue"; }
+            return;
+          }
+
+          window.StressDostAuth.setUser({
+            user_id: data.user_id,
+            display_name: data.name,
+            total_sessions: data.total_sessions,
+            completed_sessions: data.completed_sessions,
+            is_new_user: data.is_new_user
+          });
+
+          console.log('[Login] User saved, showing intro video');
+          showIntroVideo();
+        })
+        .catch(err => {
+          console.error('[Login] Network error:', err);
+          if (hint) hint.textContent = "Network error. Please try again.";
+          if (btnNext) { btnNext.disabled = false; btnNext.textContent = "Continue"; }
+        });
+      }
+
+      if (btnNext) {
+        btnNext.addEventListener("click", submitProfile);
+      }
+
+      if (nameInput) {
+        nameInput.addEventListener("keypress", function (e) {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            submitProfile();
+          }
+        });
+      }
+    })();
+  </script>
 </body>
 </html>

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from openai import OpenAI
 
-client = OpenAI()
-client_no_retry = OpenAI(max_retries=0)
+client = OpenAI(timeout=30.0)  # 30 second timeout
+client_no_retry = OpenAI(max_retries=0, timeout=10.0)  # 10 second timeout for latency-critical calls
 
 
 def chat_text(model: str, system: str, user: str, **kwargs):

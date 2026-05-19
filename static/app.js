@@ -1,31 +1,47 @@
-﻿// DOM helpers --------------------------------------------------------------
+// DOM helpers --------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
 const stageEls = {
   name: $("stageName"),
   intro: $("stageIntro"),
   loading: $("stageLoading"),
   qa: $("stageQA"),
+  subjectSelection: $("stageSubjectSelection"),
+  topicSelection: $("stageTopicSelection"),
   devil: $("stageDevil"),
+  fullscreen: $("stageFullscreen"),
   popups: $("stagePopups"),
 };
 
 const logBox = $("logBox");
-const popupConsole = $("popupConsole");
-const popupOverlay = $("popupOverlay");
+const popupConsole = null;
+const popupOverlay = null;
 const popupQueue = [];
 let popupActive = false;
 let popupTimer = null;
 let popupSuppressionTimer = null;
 const recentPopups = new Set();
 
-const loadingTextEl = $("loadingText");
+const loadingTitleEl = $("loadingTitle");
+const loadingSubtitleEl = $("loadingSubtitle");
+const loadingPhaseEl = $("loadingPhase");
+const loadingNoteEl = $("loadingNote");
+const loadingEchoEl = $("loadingEcho");
 const nameHintEl = $("nameHint");
 const introHintEl = $("introHint");
 const storyPromptEl = $("storyPrompt");
 const hintBox = $("hintBox");
-const popupSummary = $("popupSummary");
+const popupSummary = null;
 const suggestionWrap = $("suggestionWrap");
 const suggestionList = $("suggestionList");
+
+// Academic topics elements
+const subjectOptions = $("subjectOptions");
+const topicOptions = $("topicOptions");
+const subjectHint = $("subjectHint");
+const topicHint = $("topicHint");
+const btnSubjectNext = $("btnSubjectNext");
+const btnTopicNext = $("btnTopicNext");
+const btnTopicBack = $("btnTopicBack");
 
 const hudPanel = $("hudPanel");
 const hudToggle = $("hudToggle");
@@ -47,8 +63,12 @@ const hudUserLine = $("hudUserLine");
 const answerInput = $("answerInput");
 const questionStem = $("questionStem");
 const questionOptions = $("questionOptions");
+const testCard = $("testCard");
+const questionPanel = questionStem?.closest(".question-panel") || null;
+const questionBody = questionPanel?.closest(".question-body") || null;
 const questionCounter = $("questionCounter");
 const questionSubject = $("questionSubject");
+const questionTypeSelect = $("questionTypeSelect");
 const questionProgress = $("questionProgress");
 const mutateBadge = $("mutateBadge");
 const integerPanel = $("integerPanel");
@@ -61,6 +81,18 @@ const btnPrevQuestion = $("btnPrevQuestion");
 const btnNextQuestion = $("btnNextQuestion");
 const btnReloadQuestions = $("btnReloadQuestions");
 const btnSubmitQuestion = $("btnSubmitQuestion");
+const btnFinishTest = $("btnFinishTest");
+const btnReportError = $("btnReportError");
+const btnLifeline = $("btnLifeline");
+const btnShowSolution = $("btnShowSolution");
+const btnSaveQuestion = $("btnSaveQuestion");
+const btnSaveQuestionSubject = $("btnSaveQuestionSubject");
+const btnSaveQuestionHeader = $("btnSaveQuestionHeader");
+const btnZoomQuestion = $("btnZoomQuestion");
+const solutionModal = $("solutionModal");
+const solutionAnswerLine = $("solutionAnswerLine");
+const solutionContent = $("solutionContent");
+const btnCloseSolution = $("btnCloseSolution");
 const devilTitle = $("devilTitle");
 const devilIntro = $("devilIntro");
 const devilProblems = $("devilProblems");
@@ -84,18 +116,33 @@ let testQuestions = [];
 let testQuestionIndex = 0;
 let selectedOptions = {};
 let answeredMap = {};
+let pendingTriggerTimeouts = []; // Store pending trigger timeouts to cancel when switching questions
 let mutationTimers = [];
 let mutationPaused = false;
+let isLoadingTestBank = false;
 let integerKeypadListenerAttached = false;
 let suggestTimer = null;
+let loadingTicker = null;
+let loadingFrameIndex = 0;
+let lastAnswerEcho = "";
+let solutionModalOpen = false;
+let pendingAdvanceAfterSubmit = false;
+let questionTriggerPlan = null; // Stores trigger plan from backend
+const SOLUTION_GRACE_MS = 1400;
+
+// Cancel all pending trigger timeouts when switching questions
+function cancelPendingTriggers() {
+  console.log('[cancelPendingTriggers] Cancelling', pendingTriggerTimeouts.length, 'pending triggers');
+  pendingTriggerTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
+  pendingTriggerTimeouts = [];
+}
 const disableStressMode = false;
 const stressDebug = true;
-const manualStressTriggerMode = true;
+const manualStressTriggerMode = false;
 const enableDevTriggerPanel =
   manualStressTriggerMode &&
   (window.location.hostname === "localhost" ||
-    window.location.hostname === "127.0.0.1" ||
-    window.location.search.includes("devTriggers=1"));
+    window.location.hostname === "127.0.0.1");
 
 const DEV_FALLBACK_QUESTIONS = [
   {
@@ -134,14 +181,20 @@ const DEV_FALLBACK_QUESTIONS = [
   },
   {
     question_id: "dev-fallback-3",
-    question_type: "integer",
-    subject: "Chemistry",
-    chapter: "Mole Concept",
-    difficulty: "Easy",
-    level: "EASY",
-    question_html: "<p>Enter the integer part of Avogadro number coefficient in x × 10<sup>23</sup>.</p>",
+    question_type: "scq",
+    subject: "Mathematics",
+    chapter: "Advanced Calculus",
+    difficulty: "Hard",
+    level: "HARD",
+    question_html: "<p><strong>HARD QUESTION:</strong> If f(x) = x³ - 6x² + 11x - 6, find all real roots:</p>",
     question_images: [],
-    integer_answer: 6,
+    options: [
+      { label: "A", text: "x = 1, 2, 3" },
+      { label: "B", text: "x = 0, 1, 2" },
+      { label: "C", text: "x = -1, 2, 3" },
+      { label: "D", text: "x = 1, 3, 5" },
+    ],
+    correct_answer: "A",
   },
   {
     question_id: "dev-fallback-4",
@@ -180,19 +233,19 @@ const DEV_FALLBACK_QUESTIONS = [
   {
     question_id: "dev-fallback-6",
     question_type: "scq",
-    subject: "Chemistry",
-    chapter: "Periodic Table",
-    difficulty: "Easy",
-    level: "EASY",
-    question_html: "<p>Atomic number represents:</p>",
+    subject: "Physics",
+    chapter: "Quantum Mechanics",
+    difficulty: "Hard",
+    level: "HARD",
+    question_html: "<p><strong>HARD QUESTION:</strong> In the photoelectric effect, if the frequency of incident light is doubled while keeping intensity constant, the maximum kinetic energy of ejected electrons:</p>",
     question_images: [],
     options: [
-      { label: "A", text: "Number of neutrons" },
-      { label: "B", text: "Number of protons" },
-      { label: "C", text: "Mass number" },
-      { label: "D", text: "Number of isotopes" },
+      { label: "A", text: "Remains the same" },
+      { label: "B", text: "Doubles" },
+      { label: "C", text: "More than doubles" },
+      { label: "D", text: "Becomes half" },
     ],
-    correct_answer: "B",
+    correct_answer: "C",
   },
   {
     question_id: "dev-fallback-7",
@@ -302,21 +355,39 @@ const CLIENT_FALLBACK_QUESTIONS = [
   },
 ];
 
-function openDevFallbackQuestionsDirect() {
-  const cloned = DEV_FALLBACK_QUESTIONS.map((q, idx) => ({
-    ...q,
-    question_index: idx + 1,
-    options: Array.isArray(q.options) ? q.options.map((opt) => ({ ...opt })) : [],
-  }));
-  testQuestions = cloned;
-  testQuestionIndex = 0;
-  selectedOptions = {};
-  answeredMap = {};
-  clearMutationTimers();
-  setTestHint("Dev mode: Loaded local fallback questions directly.");
-  renderTestQuestion();
-  StressTriggers.beginExamTimer();
-  showStage("popups");
+async function openDevFallbackQuestionsDirect() {
+  try {
+    const cloned = DEV_FALLBACK_QUESTIONS.map((q, idx) => ({
+      ...q,
+      question_index: idx + 1,
+      options: Array.isArray(q.options) ? q.options.map((opt) => ({ ...opt })) : [],
+    }));
+    testQuestions = cloned;
+    testQuestionIndex = 0;
+    selectedOptions = {};
+    answeredMap = {};
+    
+    try {
+      clearMutationTimers();
+    } catch (err) {
+      console.error('[openDevFallbackQuestionsDirect] clearMutationTimers failed:', err);
+    }
+    
+    // Fetch trigger plan for fallback questions too (non-blocking)
+    try {
+      await fetchQuestionTriggerPlan();
+    } catch (err) {
+      console.error('[openDevFallbackQuestionsDirect] Failed to fetch trigger plan:', err);
+      // Continue anyway - triggers will use default behavior
+    }
+    
+    setTestHint("Dev mode: Loaded local fallback questions directly.");
+    renderTestQuestion();
+    showStage("popups");
+  } catch (err) {
+    console.error('[openDevFallbackQuestionsDirect] Critical error:', err);
+    alert('Failed to load fallback questions: ' + err.message);
+  }
 }
 
 // Utility ------------------------------------------------------------------
@@ -367,6 +438,13 @@ async function postJSON(url, body, options) {
   return data;
 }
 
+async function deleteJSON(url) {
+  const res = await fetch(url, { method: "DELETE", headers: { "Content-Type": "application/json" } });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || data.message || `HTTP ${res.status}`);
+  return data;
+}
+
 async function postFormData(url, formData) {
   const res = await fetch(url, {
     method: "POST",
@@ -378,29 +456,105 @@ async function postFormData(url, formData) {
 }
 
 function showStage(name, message) {
-  // Pause non-critical mutation traffic while popup stress stage is active.
-  setMutationPaused(name === "popups");
-  if (name !== "popups") {
-    popupQueue.length = 0;
-    popupActive = false;
-    clearTimeout(popupTimer);
-    if (popupOverlay) popupOverlay.innerHTML = "";
-  }
+  setMutationPaused(false);
   Object.values(stageEls).forEach((el) => el?.classList.remove("active"));
   const stage = stageEls[name];
   if (stage) stage.classList.add("active");
-  if (name === "loading" && message) setLoadingMessage(message);
+  if (name === "loading") {
+    startLoadingLoop(message);
+  } else {
+    stopLoadingLoop();
+  }
+  
+  // Notify StressTriggers about stage change
+  if (typeof StressTriggers !== 'undefined' && StressTriggers.setStage) {
+    StressTriggers.setStage(name);
+  }
+  
   // Keep viewport at top when switching stages so users see loaders/questions without scrolling
   try {
     window.scrollTo({ top: 0, behavior: "smooth" });
   } catch (e) {
     window.scrollTo(0, 0);
   }
-  StressTriggers.setStage(name);
 }
 
 function setLoadingMessage(message) {
-  if (loadingTextEl) loadingTextEl.textContent = message || "Calibrating vibes…";
+  if (loadingNoteEl) {
+    loadingNoteEl.textContent = message || "This takes a moment - your plan is being crafted";
+  }
+}
+
+const LOADING_FRAMES = [
+  {
+    phase: "READING",
+    title: "Reading what you shared",
+    subtitle: "Picking up every signal",
+  },
+  {
+    phase: "MAPPING",
+    title: "Mapping your focus pattern",
+    subtitle: "Connecting the dots",
+  },
+  {
+    phase: "MATCHING",
+    title: "Finding what works for you",
+    subtitle: "Pulling from what helps",
+  },
+  {
+    phase: "CRAFTING",
+    title: "Shaping your session",
+    subtitle: "Almost ready",
+  },
+];
+
+function startLoadingLoop(message) {
+  stopLoadingLoop();
+  loadingFrameIndex = 0;
+  applyLoadingFrame(loadingFrameIndex);
+  setLoadingMessage(message);
+  setLoadingEcho();
+  loadingTicker = setInterval(() => {
+    loadingFrameIndex = (loadingFrameIndex + 1) % LOADING_FRAMES.length;
+    applyLoadingFrame(loadingFrameIndex);
+  }, 1800);
+}
+
+function stopLoadingLoop() {
+  if (loadingTicker) {
+    clearInterval(loadingTicker);
+    loadingTicker = null;
+  }
+}
+
+function applyLoadingFrame(index) {
+  const frame = LOADING_FRAMES[index];
+  if (!frame) return;
+  if (loadingPhaseEl) loadingPhaseEl.textContent = frame.phase;
+  if (loadingTitleEl) loadingTitleEl.textContent = capitalizeSentence(frame.title);
+  if (loadingSubtitleEl) loadingSubtitleEl.textContent = capitalizeSentence(frame.subtitle);
+}
+
+function capitalizeSentence(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function setLoadingEcho() {
+  if (!loadingEchoEl) return;
+  const span = loadingEchoEl.querySelector("span");
+  if (!span) return;
+  const text = getLatestUserStory();
+  span.textContent = text || "...";
+}
+
+function getLatestUserStory() {
+  const initialText = $("initialText")?.value || "";
+  const answerText = $("answerInput")?.value || "";
+  const combined = (lastAnswerEcho || answerText || initialText).trim();
+  if (!combined) return "";
+  return combined.length > 120 ? `${combined.slice(0, 117)}...` : combined;
 }
 
 function setHint(text) {
@@ -429,21 +583,28 @@ function setStoryPrompt(name) {
   if (!storyPromptEl) return;
   const cleanName = (name || "").trim();
   if (!cleanName) {
-    storyPromptEl.textContent = "What's on your mind today?";
+    storyPromptEl.textContent = "Hey there! 👋";
     return;
   }
-  storyPromptEl.textContent = `Hey ${cleanName}, what's on your mind today?`;
+  const normalized = toTitleCase(cleanName);
+  storyPromptEl.textContent = `Hey ${normalized}! 👋`;
+}
+
+function toTitleCase(value) {
+  return String(value)
+    .toLowerCase()
+    .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
 function setRecordButtonState() {
   if (!btnRecord) return;
   if (mediaRecorder && mediaRecorder.state === "recording") {
-    btnRecord.textContent = "Stop Recording";
+    btnRecord.textContent = "■";
     btnRecord.classList.remove("ghost");
     btnRecord.classList.add("primary");
     return;
   }
-  btnRecord.textContent = recordedAudioBlob ? "Re-record Voice" : "Record Voice";
+  btnRecord.textContent = recordedAudioBlob ? "↺" : "🎙";
   btnRecord.classList.remove("primary");
   btnRecord.classList.add("ghost");
 }
@@ -458,6 +619,7 @@ function setSessionUI(id, domains) {
 
 function syncUserUI() {
   const u = window.StressDostAuth?.getUser?.();
+  console.log('[syncUserUI] User data:', u);
   if (userChip) {
     userChip.textContent = u ? `${u.display_name} · ${String(u.user_id).slice(0, 8)}…` : "";
     userChip.style.display = u ? "inline-flex" : "none";
@@ -465,6 +627,21 @@ function syncUserUI() {
   if (hudUserLine) {
     if (!u) hudUserLine.textContent = "—";
     else hudUserLine.textContent = `${u.display_name} (${u.user_id})`;
+  }
+  // Set story prompt with user's name
+  if (u && u.display_name) {
+    setStoryPrompt(u.display_name);
+  }
+  // Update session counter
+  const sessionCounter = document.getElementById('sessionCounter');
+  console.log('[syncUserUI] Session counter element:', sessionCounter);
+  if (sessionCounter && u) {
+    const completedSessions = u.completed_sessions || 0;
+    console.log('[syncUserUI] Completed sessions:', completedSessions);
+    sessionCounter.textContent = `Sessions: ${completedSessions}`;
+    sessionCounter.style.setProperty('display', 'inline-block', 'important');
+  } else if (sessionCounter) {
+    sessionCounter.style.display = 'none';
   }
 }
 
@@ -486,33 +663,77 @@ function updateScoreMeta() {
 function setQuestionUI(data) {
   currentDomain = data.domain || null;
   currentSlot = data.slot || null;
-  const totalAsked = Number(data?.meta?.total_questions_asked || 0);
+  const totalAsked = Number(
+    data?.meta?.total_questions_asked ||
+    data?.meta?.question_index ||
+    0
+  );
+  const totalExpected = Number(
+    data?.meta?.total_questions ||
+    data?.meta?.total_questions_expected ||
+    data?.meta?.total_followups ||
+    data?.meta?.max_questions ||
+    0
+  );
+  const currentIndex = totalAsked > 0 ? totalAsked : 1;
+  const qaCount = $("qaCount");
+  if (qaCount) {
+    qaCount.textContent = totalExpected > 0 ? `${currentIndex}/${totalExpected}` : `${currentIndex}`;
+  }
+  const qaProgress = document.querySelector(".qa-progress span");
+  if (qaProgress && totalExpected > 0) {
+    const pct = Math.min(100, Math.max(0, (currentIndex / totalExpected) * 100));
+    qaProgress.style.width = `${pct}%`;
+  }
 
-  $("qMeta").textContent = `domain: ${currentDomain || "—"} | slot: ${currentSlot || "—"}`;
+  const qMeta = $("qMeta");
+  if (qMeta) {
+    qMeta.innerHTML = '<span class="qa-emoji" aria-hidden="true">' +
+      '<svg viewBox="0 0 64 64" focusable="false" aria-hidden="true">' +
+      '<circle cx="32" cy="32" r="22" />' +
+      '<circle cx="32" cy="32" r="8" />' +
+      '<path d="M32 10 L44 22 L32 32" />' +
+      '<path d="M54 32 L42 44 L32 32" />' +
+      '<path d="M32 54 L20 42 L32 32" />' +
+      '<path d="M10 32 L20 20 L32 32" />' +
+      '<path d="M20 20 L44 22 L32 32" />' +
+      '</svg></span><span>FOLLOW-UP QUESTION</span>';
+  }
   $("questionText").textContent = data.question || "Your next question will bloom here.";
+
+  // Replay the zoom-in/out entrance animation each time a new follow-up arrives.
+  const qaCardEl = document.querySelector("#stageQA .qa-card");
+  if (qaCardEl) {
+    qaCardEl.classList.remove("qa-card-enter");
+    void qaCardEl.offsetWidth;
+    qaCardEl.classList.add("qa-card-enter");
+  }
+
   if (btnSkip) {
     btnSkip.hidden = totalAsked < 3;
     btnSkip.disabled = false;
   }
   setHint(data.hint || "");
-  btnAnswer.disabled = false;
   answerInput.disabled = false;
   answerInput.focus();
+  updateAnswerButtonState();
 }
 
 function resetFlow() {
   StressTriggers.onReset();
+  // Reset academic topics (raw, autoPickedSubject, autoPickedTopics → null)
+  if (sessionId) window.academicTopics?.resetAcademicTopics?.(sessionId);
   sessionId = null;
   currentDomain = null;
   currentSlot = null;
   setSuggestions([]);
   btnAnswer.disabled = true;
+  btnAnswer.hidden = true;
   if (btnSkip) {
     btnSkip.hidden = true;
     btnSkip.disabled = false;
   }
   answerInput.value = "";
-  if (userNameInput) userNameInput.value = "";
   $("initialText").value = "";
   recordedAudioBlob = null;
   recordingMimeType = "audio/webm";
@@ -529,7 +750,8 @@ function resetFlow() {
   setHint("");
   setNameHint("");
   setIntroHint("");
-  setStoryPrompt("");
+  // Don't clear story prompt - it's set from user profile
+  // setStoryPrompt("");
   // Reset test question panel
   testQuestions = [];
   testQuestionIndex = 0;
@@ -537,8 +759,9 @@ function resetFlow() {
   answeredMap = {};
   if (questionStem) questionStem.textContent = "Questions will appear here with options.";
   if (questionOptions) questionOptions.innerHTML = "";
-  if (questionCounter) questionCounter.textContent = "Questions —";
-  if (questionSubject) questionSubject.textContent = "—";
+  if (questionCounter) questionCounter.textContent = "Q. 1 of 1";
+  if (questionSubject) questionSubject.textContent = "ID: —";
+  if (questionTypeSelect) questionTypeSelect.options[0].textContent = "Math-Single Type";
   if (questionProgress) questionProgress.style.width = "0%";
   if (mutateBadge) mutateBadge.style.display = "none";
   if (integerPanel) integerPanel.style.display = "none";
@@ -546,13 +769,16 @@ function resetFlow() {
   if (devilDesign) devilDesign.innerHTML = "";
   if (devilBlueprint) devilBlueprint.innerHTML = "";
   if (devilHint) devilHint.textContent = "";
+  _lifelines = 3;
   updateScoreMeta();
   setTestHint("");
-  popupSummary.textContent = "We're releasing your personalized pulses now. Watch the center top.";
-  popupOverlay.innerHTML = "";
+  if (popupSummary) {
+    popupSummary.textContent = "We're releasing your personalized pulses now. Watch the center top.";
+  }
+  if (popupOverlay) popupOverlay.innerHTML = "";
   log("reset_flow");
   setSessionUI(null, null);
-  showStage("name");
+  showStage("intro");
 }
 
 function summarizeFollowupThemes(followups) {
@@ -571,6 +797,8 @@ function summarizeFollowupThemes(followups) {
 async function buildDevilBriefPage() {
   const followups = StressTriggers.getFollowupAnswers ? StressTriggers.getFollowupAnswers() : [];
   const themes = summarizeFollowupThemes(followups);
+  const user = window.StressDostAuth?.getUser?.();
+  const userName = user?.display_name || "challenger";
 
   const planned = {
     trigger_count: 19,
@@ -595,36 +823,55 @@ async function buildDevilBriefPage() {
     brief = null;
   }
 
-  const devilName = brief?.devil_name || "The Invigilator Devil";
-  const intro = brief?.intro || "I shaped this test using your follow-up responses: where focus breaks, where doubt wins, where time pressure hurts.";
-  const taunt = brief?.taunt || "Accept my challenge. I know your weak points. I doubt you can beat me.";
-  const problems = Array.isArray(brief?.problems) && brief.problems.length
-    ? brief.problems
-    : themes.map((t) => `You show signs of ${t}.`);
-  const designPoints = Array.isArray(brief?.design_points) && brief.design_points.length
-    ? brief.design_points
-    : [
-      "Every trigger is activated by interaction signals, not random timers.",
-      "Only one trigger can run at a time with strict timeout control.",
-      "Wrong answers and hesitation now directly shape pressure style.",
-      "AI selects the next trigger based on your live behavior.",
-    ];
-  const challengeLine = (Array.isArray(brief?.challenge_lines) && brief.challenge_lines[0])
-    ? brief.challenge_lines[0]
-    : "Accept my challenge and beat me if your focus is stronger than your fear.";
+  // Helper function to capitalize first letter of a sentence
+  function capitalizeFirstLetter(str) {
+    if (!str) return str;
+    return str.charAt(0).toUpperCase() + str.slice(1);
+  }
 
-  if (devilTitle) devilTitle.textContent = `${devilName} Designed Your Test`;
+  const devilName = brief?.devil_name || "Lucifer the Tempter";
+  const intro = brief?.intro || `I designed your focus test, ${userName}.`;
+  const taunt = (Array.isArray(brief?.challenge_lines) && brief.challenge_lines[0])
+    ? capitalizeFirstLetter(brief.challenge_lines[0])
+    : "Dare you think you can outsmart the flames of the underworld? Let's see if you burn or rise!";
+  const problems = Array.isArray(brief?.problems) && brief.problems.length
+    ? brief.problems.map(p => capitalizeFirstLetter(p))
+    : themes.map((t) => capitalizeFirstLetter(t));
+  const warningLine = capitalizeFirstLetter(brief?.taunt)
+    || "Face the flames and prove your mettle, or be consumed by your own hesitation!";
+
+  // Build a summary from followup text
+  const firstAnswer = followups[0]?.answer || "";
+  const insightSummary = firstAnswer
+    ? `Stress related to ${firstAnswer.toLowerCase().substring(0, 80)}`
+    : "Stress related to your academics";
+
+  // Fill new HTML
+  if (devilTitle) devilTitle.textContent = `Meet ${devilName}`;
   if (devilIntro) devilIntro.textContent = intro;
-  if (devilChallengeLine) devilChallengeLine.textContent = challengeLine;
+  if (devilChallengeLine) devilChallengeLine.textContent = taunt;
+
+  const insightEl = document.getElementById("devilInsightSummary");
+  if (insightEl) insightEl.textContent = insightSummary;
+
+  const warningEl = document.getElementById("devilWarning");
+  if (warningEl) {
+    warningEl.innerHTML = `<span class="devil-warning-icon">⚠️</span> ${escapeHTML(warningLine)}`;
+  }
 
   if (devilProblems) {
     devilProblems.innerHTML = "";
-    problems.slice(0, 5).forEach((line) => {
+    problems.slice(0, 2).forEach((line) => {
       const li = document.createElement("li");
-      li.textContent = line;
+      li.innerHTML = `<span class="insight-icon">🔥</span> ${escapeHTML(line)}`;
       devilProblems.appendChild(li);
     });
   }
+
+  // Still fill hidden panels for data purposes
+  const designPoints = Array.isArray(brief?.design_points) && brief.design_points.length
+    ? brief.design_points
+    : ["Triggers activate on wrong answers, hesitation, and idle patterns."];
 
   if (devilDesign) {
     devilDesign.innerHTML = "";
@@ -654,21 +901,8 @@ async function buildDevilBriefPage() {
   }
 
   if (devilHint) {
-    devilHint.textContent = "Review this brief, then accept the challenge to start the test.";
+    devilHint.textContent = "";
   }
-}
-
-function proceedFromNameStep() {
-  const name = (userNameInput?.value || "").trim();
-  if (!name) {
-    setNameHint("Please enter your name first.");
-    userNameInput?.focus();
-    return;
-  }
-  setNameHint("");
-  setStoryPrompt(name);
-  showStage("intro");
-  $("initialText")?.focus();
 }
 
 async function startRecording() {
@@ -768,6 +1002,29 @@ function cloneClientFallbackQuestions() {
 
 // Stress trigger engine ----------------------------------------------------
 const StressTriggers = (() => {
+  if (disableStressMode) {
+    const resolved = Promise.resolve();
+    return {
+      setStage: () => {},
+      onReset: () => {},
+      getFollowupAnswers: () => [],
+      onQuestionLoaded: () => {},
+      onOptionChange: () => {},
+      onOptionClick: () => {},
+      onOptionHover: () => {},
+      onOptionPointerDown: () => {},
+      onOptionPointerUp: () => {},
+      beforeSubmitDelay: () => resolved,
+      afterSubmit: () => {},
+      noteAnswerOutcome: () => {},
+      beginExamTimer: () => {},
+      onPopupsEntered: () => {},
+      requestFeedbackPulse: () => {},
+      isScreenBusyForPopup: () => false,
+      onQuestionRendered: () => {},
+    };
+  }
+
   const reducedMotion = Boolean(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   const AI_TRIGGER_ENDPOINT = "/api/triggers/recommend";
   const AI_DECISION_MIN_GAP_MS = 700;
@@ -792,6 +1049,8 @@ const StressTriggers = (() => {
     stage: "name",
     examStartedAt: 0,
     examDurationMs: 900000,
+    examTimerId: null,
+    lifelines: 3,
     questionStartedAt: 0,
     currentQuestionId: "",
     questionDifficulty: "",
@@ -844,6 +1103,16 @@ const StressTriggers = (() => {
     newsReelHistory: [],
     lastNewsTopic: "",
     lastNewsImage: "",
+    hardQuestionChallenge: null,
+    hardQuestionPostSubmitDelayMs: 0,
+    optionFeedbackActive: false,
+    optionFeedbackQuestionId: "",
+    optionFeedbackOverlay: null,
+    optionFeedbackLastOption: "",
+    // Q6 option feedback interception state
+    optionFeedbackInterceptionEnabled: false,
+    optionFeedbackInterceptionCount: 0,
+    optionFeedbackMaxInterceptions: 2,
   };
 
   const FEEDBACK_PROMPT_LIBRARY = {
@@ -878,6 +1147,29 @@ const StressTriggers = (() => {
 
   const FEEDBACK_DIFFICULTY_OPTIONS = ["Easy", "Medium", "Hard"];
   const FEEDBACK_TOPIC_OPTIONS = ["Movies", "News", "Games", "Music", "Sports", "Technology", "Science", "Health", "Other"];
+
+  const OPTION_FEEDBACK_LIBRARY = {
+    A: {
+      headline: "88% missed this exact question.",
+      subhead: "JEE Main 2023 Shift 2 had the exact phrasing. Solution videos all converge on A.",
+      coach: "Coaching tells you to memorize this type. It always reduces to A.",
+    },
+    B: {
+      headline: "64% missed this exact question.",
+      subhead: "64% of students who solved this got B.",
+      coach: "Coaching teachers call this a 'second-read' question. Read it again.",
+    },
+    C: {
+      headline: "79% missed this exact question.",
+      subhead: "79% of students who solved this got B.",
+      coach: "The data given is more than required. Extra info is the distractor.",
+    },
+    D: {
+      headline: "77% missed this exact question.",
+      subhead: "77% of FIITJEE Phase Test rankers chose B in this exact question.",
+      coach: "The students who score above 99 percentile know this pattern cold.",
+    },
+  };
 
   const INTEREST_TOPIC_MAP = {
     movies: "movies",
@@ -928,103 +1220,8 @@ const StressTriggers = (() => {
   }
 
   function scheduleInterestReelTrigger(preferredTopic) {
-    const mappedTopic = mapFeedbackTopicToReelTopic(preferredTopic);
-    if (!mappedTopic) return;
-
+    void preferredTopic;
     clearInterestReelSchedule();
-    state.feedbackTopicPreference = mappedTopic;
-
-    const startedAt = Date.now();
-    const maxWindowMs = 15000;
-    const initialDelayMs = 1000 + Math.floor(Math.random() * 14000);
-    state.feedbackInterestReelDeadlineAt = startedAt + maxWindowMs;
-
-    const forceMandatoryAtDeadline = () => {
-      if (state.stage !== "popups") {
-        clearInterestReelSchedule();
-        return;
-      }
-
-      if (active.size > 0) {
-        deactivateAllTriggers();
-      }
-      state.screenQuietUntil = 0;
-
-      const activated = activateTrigger("bollywoodReelTrap", {
-        userState: currentUserState(),
-        force: true,
-        reason: `mandatory_feedback_interest:${mappedTopic}`,
-        intensity: applyFeedbackIntensityBias("low"),
-        timeoutMs: 0,
-      });
-
-      if (activated) {
-        clearInterestReelSchedule();
-        return;
-      }
-
-      // One immediate final retry if something raced at the deadline tick.
-      state.feedbackInterestReelTimer = setTimeout(() => {
-        if (state.stage !== "popups") {
-          clearInterestReelSchedule();
-          return;
-        }
-        if (active.size > 0) {
-          deactivateAllTriggers();
-        }
-        state.screenQuietUntil = 0;
-        activateTrigger("bollywoodReelTrap", {
-          userState: currentUserState(),
-          force: true,
-          reason: `mandatory_feedback_interest_retry:${mappedTopic}`,
-          intensity: applyFeedbackIntensityBias("low"),
-          timeoutMs: 0,
-        });
-        clearInterestReelSchedule();
-      }, 180);
-    };
-
-    state.feedbackInterestHardDeadlineTimer = setTimeout(forceMandatoryAtDeadline, maxWindowMs);
-
-    const attemptActivate = (forceFallback = false) => {
-      if (state.stage !== "popups") {
-        clearInterestReelSchedule();
-        return;
-      }
-
-      const userState = currentUserState();
-      const context = {
-        userState,
-        force: Boolean(forceFallback),
-        reason: `feedback_interest:${mappedTopic}`,
-        intensity: applyFeedbackIntensityBias("low"),
-        timeoutMs: 0,
-      };
-
-      if (active.size === 0) {
-        const activated = activateTrigger("bollywoodReelTrap", context);
-        if (activated) {
-          clearInterestReelSchedule();
-          return;
-        }
-      }
-
-      const now = Date.now();
-      if (now >= Number(state.feedbackInterestReelDeadlineAt || 0)) {
-        if (!forceFallback && active.size === 0) {
-          // Final attempt allows bypass of repeat/cooldown gates.
-          attemptActivate(true);
-        } else {
-          clearInterestReelSchedule();
-        }
-        return;
-      }
-
-      const retryDelay = 500 + Math.floor(Math.random() * 1100);
-      state.feedbackInterestReelTimer = setTimeout(() => attemptActivate(false), retryDelay);
-    };
-
-    state.feedbackInterestReelTimer = setTimeout(() => attemptActivate(false), initialDelayMs);
   }
 
   function buildFeedbackSurvey(mood, reason, promptOverride) {
@@ -1069,6 +1266,10 @@ const StressTriggers = (() => {
     phantomCompetitor: { conflicts: [], cooldown: [18000, 30000] },
     stressTimer: { conflicts: [], cooldown: [20000, 30000] },
     confidenceBreaker: { conflicts: [], cooldown: [15000, 22000] },
+    focusHandSignal: { conflicts: ["blackout", "fakeCrashScreen", "blurAttack"], cooldown: [12000, 20000] },
+    focusReadGate: { conflicts: ["blackout", "fakeCrashScreen", "blurAttack"], cooldown: [15000, 22000] },
+    premiumImagePopup: { conflicts: ["blackout", "fakeCrashScreen", "blurAttack"], cooldown: [14000, 22000] },
+    optionFeedbackPopups: { conflicts: [], cooldown: [12000, 20000] },
     mirageHighlight: { conflicts: [], cooldown: [15000, 22000] },
     blurAttack: { conflicts: [], cooldown: [16000, 24000], idleOnly: true },
     screenFlip: { conflicts: ["colorInversion", "blurAttack", "heartbeatVibration"], cooldown: [20000, 30000] },
@@ -1083,8 +1284,40 @@ const StressTriggers = (() => {
     fakeCrashScreen: { conflicts: ["fakeLowBattery", "blackout"], cooldown: [26000, 38000] },
     blackout: { conflicts: ["fakeLowBattery", "fakeCrashScreen", "chaosBackground"], cooldown: [24000, 36000] },
     hesitationHeatmap: { conflicts: [], cooldown: [18000, 26000] },
-    bollywoodReelTrap: { conflicts: ["blackout", "fakeCrashScreen"], cooldown: [32000, 52000] },
+    torchlightSpotlight: { conflicts: ["blackout", "fakeCrashScreen", "blurAttack"], cooldown: [18000, 28000] },
+    difficultyCheckPrompt: { conflicts: ["blackout", "fakeCrashScreen", "blurAttack"], cooldown: [18000, 30000] },
+    boucingQuestion: { conflicts: ["blackout", "fakeCrashScreen"], cooldown: [24000, 36000] },
+    // Question-level triggers for Focus Zones test
+    hardFog: { conflicts: ["blurAttack"], cooldown: [18000, 26000] },
+    accuracyTest: { conflicts: [], cooldown: [16000, 24000] },
+    readingTest: { conflicts: [], cooldown: [16000, 24000] },
+    hardPeerDoubt: { conflicts: ["phantomCompetitor"], cooldown: [18000, 28000] },
+    billiardBall: { conflicts: [], cooldown: [16000, 24000] },
   };
+
+  const ENABLED_TRIGGERS = new Set([
+    "optionShuffle",
+    "mirageHighlight",
+    "screenFlip",
+    "heartbeatVibration",
+    "torchlightSpotlight",
+    "difficultyCheckPrompt",
+    "boucingQuestion",
+    "optionFeedbackPopups",
+    "focusHandSignal",
+    "focusReadGate",
+    "premiumImagePopup",
+    // Question-level triggers for Focus Zones test
+    "hardFog",
+    "accuracyTest",
+    "readingTest",
+    "hardPeerDoubt",
+    "billiardBall",
+  ]);
+
+  function isTriggerEnabled(name) {
+    return ENABLED_TRIGGERS.has(name);
+  }
 
   function debugLog(kind, detail) {
     if (!stressDebug) return;
@@ -1288,20 +1521,9 @@ const StressTriggers = (() => {
   }
 
   function mountDevilTopBanner(lines) {
+    // Disabled in production - no devil banners shown
     const banner = document.createElement("div");
-    banner.className = "stress-heart-devil-banner";
-    banner.setAttribute("role", "status");
-    banner.setAttribute("aria-live", "polite");
-    banner.innerHTML = `
-      <div class="avatar" aria-hidden="true">😈</div>
-      <div class="bubble">
-        <strong>${escapeHTML(lines?.title || "Devil Notice")}</strong>
-        <span>${escapeHTML(lines?.lead || "Stay focused.")}</span>
-        <em>${escapeHTML(lines?.challenge || "Can you hold your nerve?")}</em>
-        ${lines?.taunt ? `<small>${escapeHTML(lines.taunt)}</small>` : ""}
-      </div>
-    `;
-    document.body.appendChild(banner);
+    banner.style.display = "none";
     return banner;
   }
 
@@ -1349,8 +1571,17 @@ const StressTriggers = (() => {
   }
 
   function timeRemainingMs() {
-    if (!state.examStartedAt) return state.examDurationMs;
-    return Math.max(0, state.examDurationMs - (Date.now() - state.examStartedAt));
+    if (!state.examStartedAt || state.examStartedAt <= 0) return state.examDurationMs;
+    const elapsed = Date.now() - state.examStartedAt;
+    const remaining = state.examDurationMs - elapsed;
+    return Math.max(0, remaining);
+  }
+  
+  function timeUsedMs() {
+    if (!state.examStartedAt || state.examStartedAt <= 0) return 0;
+    const elapsed = Date.now() - state.examStartedAt;
+    // Cap at exam duration to prevent going over
+    return Math.min(elapsed, state.examDurationMs);
   }
 
   function currentUserState() {
@@ -1370,21 +1601,32 @@ const StressTriggers = (() => {
   }
 
   function canActivateTrigger(name, context) {
+    if (!isTriggerEnabled(name)) return { ok: false, reason: "disabled" };
     const force = Boolean(context?.force);
     if (disableStressMode) return { ok: false, reason: "disabled" };
-    if (!force && state.stage !== "popups") return { ok: false, reason: "stage" };
-    if (!force && isInterruptionActive()) return { ok: false, reason: "interruption" };
-    if (!force && isInQuietBreak()) return { ok: false, reason: "quiet-break" };
+    
+    // When force is true (question-level triggers), bypass most checks
+    if (force) {
+      // Only check if already active or max active reached
+      if (active.has(name)) return { ok: false, reason: "active" };
+      if (active.size >= 1) return { ok: false, reason: "max-active" };
+      return { ok: true };
+    }
+    
+    // Normal checks for AI-triggered events
+    if (state.stage !== "popups") return { ok: false, reason: "stage" };
+    if (isInterruptionActive()) return { ok: false, reason: "interruption" };
+    if (isInQuietBreak()) return { ok: false, reason: "quiet-break" };
     if (active.has(name)) return { ok: false, reason: "active" };
-    if (!force && state.lastTriggerName === name) return { ok: false, reason: "repeat" };
+    if (state.lastTriggerName === name) return { ok: false, reason: "repeat" };
     if (active.size >= 1) return { ok: false, reason: "max-active" };
     const until = cooldownUntil.get(name) || 0;
-    if (!force && Date.now() < until) return { ok: false, reason: "cooldown" };
+    if (Date.now() < until) return { ok: false, reason: "cooldown" };
     const config = triggerConfig[name] || { conflicts: [] };
-    if (!force && (config.conflicts || []).some((other) => active.has(other))) {
+    if ((config.conflicts || []).some((other) => active.has(other))) {
       return { ok: false, reason: "conflict" };
     }
-    if (!force && reducedMotion && [
+    if (reducedMotion && [
       "phantomCompetitor",
       "heartbeatVibration",
       "blurAttack",
@@ -1394,6 +1636,8 @@ const StressTriggers = (() => {
       "chaosBackground",
       "blackout",
       "hesitationHeatmap",
+      "torchlightSpotlight",
+      "boucingQuestion",
     ].includes(name)) {
       return { ok: false, reason: "reduced-motion" };
     }
@@ -1790,6 +2034,259 @@ const StressTriggers = (() => {
     };
   }
 
+  function isHardDifficulty(value) {
+    const text = String(value || "").trim().toLowerCase();
+    return text === "hard" || text === "h" || text.includes("hard");
+  }
+
+  function showHardQuestionFullScreen(kind) {
+    const overlay = document.createElement("div");
+    overlay.className = `hard-question-fullscreen ${kind === "fail" || kind === "fail-wrong" ? "is-fail" : "is-intro"}`;
+    
+    if (kind === "intro") {
+      overlay.innerHTML = `
+        <div class="hard-question-center">
+          <div class="hard-question-icon">⚡</div>
+          <div class="hard-question-eyebrow">HARD QUESTION AHEAD</div>
+          <div class="hard-question-title">You have 30 seconds.</div>
+          <div class="hard-question-accent">And a trap.</div>
+          <div class="hard-question-box">
+            <div class="hard-question-box-icon">🕷️</div>
+            <div class="hard-question-box-title">Something's going to happen.</div>
+            <div class="hard-question-box-sub">We're not telling you what.</div>
+            <div class="hard-question-box-foot">Figure it out. Answer anyway.</div>
+          </div>
+          <div class="hard-question-footnote">Starting in a moment...</div>
+        </div>
+      `;
+    } else if (kind === "fail-wrong") {
+      // Wrong answer fail screen with shaky skull
+      overlay.innerHTML = `
+        <div class="hard-question-center">
+          <div class="hard-question-icon shake-skull">💀</div>
+          <div class="hard-question-eyebrow">HARD QUESTION · FAILED</div>
+          <div class="hard-question-title">That was the make-or-break moment.</div>
+          <div class="hard-question-box is-fail-box">
+            <div class="hard-question-box-sub">You broke.</div>
+          </div>
+          <div class="hard-question-footnote">Next question in 3s</div>
+        </div>
+      `;
+    } else {
+      // Timeout fail screen (30 seconds expired)
+      overlay.innerHTML = `
+        <div class="hard-question-center">
+          <div class="hard-question-icon">💀</div>
+          <div class="hard-question-eyebrow">HARD QUESTION · FAILED</div>
+          <div class="hard-question-title">30 seconds are gone.</div>
+          <div class="hard-question-box is-fail-box">
+            <div class="hard-question-box-sub">That question could have lifted you 500 ranks.</div>
+          </div>
+          <div class="hard-question-footnote">Next question in 3s</div>
+        </div>
+      `;
+    }
+    document.body.appendChild(overlay);
+    return overlay;
+  }
+
+  function clearHardQuestionChallenge() {
+    const info = state.hardQuestionChallenge;
+    if (!info) return;
+    if (info.tickId) clearInterval(info.tickId);
+    if (info.regenRafId) cancelAnimationFrame(info.regenRafId);
+    if (info.resizeHandler) {
+      window.removeEventListener("resize", info.resizeHandler);
+      window.removeEventListener("orientationchange", info.resizeHandler);
+    }
+    if (info.scratchHandlers) {
+      window.removeEventListener("pointerdown", info.scratchHandlers.onPointerDown);
+      window.removeEventListener("pointermove", info.scratchHandlers.onPointerMove);
+      window.removeEventListener("pointerup", info.scratchHandlers.onPointerUp);
+      window.removeEventListener("pointercancel", info.scratchHandlers.onPointerUp);
+    }
+    info.rubLayer?.remove();
+    info.introOverlay?.remove();
+    info.failOverlay?.remove();
+    const timerEl = document.getElementById("questionTimer");
+    if (timerEl) {
+      timerEl.classList.remove("hard-question-countdown");
+      // Reset timer display to normal exam timer
+      const remainingMs = timeRemainingMs();
+      const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      timerEl.textContent = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    }
+    state.hardQuestionChallenge = null;
+    state.hardQuestionPostSubmitDelayMs = 0;
+  }
+
+  function activateHardQuestionChallenge(question) {
+    if (!questionBody || !question?.question_id || !isHardDifficulty(question?.difficulty)) return;
+    clearHardQuestionChallenge();
+
+    const challenge = {
+      questionId: String(question.question_id),
+      deadlineAt: 0,
+      tickId: null,
+      regenRafId: null,
+      introOverlay: showHardQuestionFullScreen("intro"),
+      failOverlay: null,
+      rubLayer: null,
+      canvas: null,
+      ctx: null,
+      resizeHandler: null,
+      resolved: false,
+      scratchHandlers: null,
+    };
+    state.hardQuestionChallenge = challenge;
+
+    setTimeout(() => {
+      if (!state.hardQuestionChallenge || state.hardQuestionChallenge.questionId !== challenge.questionId) return;
+      challenge.introOverlay?.remove();
+      challenge.introOverlay = null;
+      
+      // Show the question now that intro overlay is dismissed
+      if (questionStem) questionStem.style.visibility = 'visible';
+      if (questionOptions) questionOptions.style.visibility = 'visible';
+      
+      challenge.deadlineAt = Date.now() + 30000;
+
+      const timerEl = document.getElementById("questionTimer");
+      if (timerEl) timerEl.classList.add("hard-question-countdown");
+
+      const layer = document.createElement("div");
+      layer.className = "hard-question-rub-layer";
+      const canvas = document.createElement("canvas");
+      layer.appendChild(canvas);
+      document.body.appendChild(layer);
+      challenge.rubLayer = layer;
+      challenge.canvas = canvas;
+      challenge.ctx = canvas.getContext("2d");
+
+      const syncLayer = () => {
+        if (!challenge.rubLayer || !questionBody) return;
+        const rect = questionBody.getBoundingClientRect();
+        challenge.rubLayer.style.left = `${Math.round(rect.left)}px`;
+        challenge.rubLayer.style.top = `${Math.round(rect.top)}px`;
+        challenge.rubLayer.style.width = `${Math.round(rect.width)}px`;
+        challenge.rubLayer.style.height = `${Math.round(rect.height)}px`;
+        canvas.width = Math.max(1, Math.round(rect.width * window.devicePixelRatio));
+        canvas.height = Math.max(1, Math.round(rect.height * window.devicePixelRatio));
+        canvas.style.width = `${Math.round(rect.width)}px`;
+        canvas.style.height = `${Math.round(rect.height)}px`;
+        if (challenge.ctx) {
+          challenge.ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
+          challenge.ctx.globalCompositeOperation = "source-over";
+          challenge.ctx.filter = "blur(1.5px)";
+          challenge.ctx.fillStyle = "rgba(236, 240, 248, 0.86)";
+          challenge.ctx.fillRect(0, 0, rect.width, rect.height);
+          challenge.ctx.filter = "none";
+        }
+      };
+      syncLayer();
+      challenge.resizeHandler = () => syncLayer();
+      window.addEventListener("resize", challenge.resizeHandler);
+      window.addEventListener("orientationchange", challenge.resizeHandler);
+
+      let scratching = false;
+      let lastScratchAt = 0;
+      const isPointInsideLayer = (evt) => {
+        if (!challenge.rubLayer) return false;
+        const rect = challenge.rubLayer.getBoundingClientRect();
+        const x = evt.clientX;
+        const y = evt.clientY;
+        return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+      };
+      const scratchAt = (evt) => {
+        if (!challenge.ctx || !challenge.rubLayer) return;
+        const rect = challenge.rubLayer.getBoundingClientRect();
+        const x = evt.clientX - rect.left;
+        const y = evt.clientY - rect.top;
+        const pressure = Math.max(0.2, Math.min(1, Number(evt.pressure || 0.35)));
+        const radius = 24 + pressure * 24;
+        challenge.ctx.globalCompositeOperation = "destination-out";
+        const gradient = challenge.ctx.createRadialGradient(x, y, 0, x, y, radius);
+        gradient.addColorStop(0, "rgba(0, 0, 0, 1)");
+        gradient.addColorStop(0.6, "rgba(0, 0, 0, 0.85)");
+        gradient.addColorStop(1, "rgba(0, 0, 0, 0)");
+        challenge.ctx.fillStyle = gradient;
+        challenge.ctx.beginPath();
+        challenge.ctx.arc(x, y, radius, 0, Math.PI * 2);
+        challenge.ctx.fill();
+        lastScratchAt = Date.now();
+      };
+      const onPointerDown = (evt) => {
+        if (!isPointInsideLayer(evt)) return;
+        scratching = true;
+        scratchAt(evt);
+      };
+      const onPointerMove = (evt) => {
+        if (!isPointInsideLayer(evt)) return;
+        if (!scratching && evt.pointerType !== "mouse") return;
+        scratchAt(evt);
+      };
+      const onPointerUp = () => {
+        scratching = false;
+      };
+      window.addEventListener("pointerdown", onPointerDown, { passive: true });
+      window.addEventListener("pointermove", onPointerMove, { passive: true });
+      window.addEventListener("pointerup", onPointerUp, { passive: true });
+      window.addEventListener("pointercancel", onPointerUp, { passive: true });
+      challenge.scratchHandlers = { onPointerDown, onPointerMove, onPointerUp };
+
+      const regen = () => {
+        if (!challenge.ctx || !challenge.rubLayer) return;
+        const rect = challenge.rubLayer.getBoundingClientRect();
+        const sinceScratchMs = Math.max(0, Date.now() - lastScratchAt);
+        const alpha = sinceScratchMs < 1200 ? 0.004 : 0.012;
+        challenge.ctx.globalCompositeOperation = "source-over";
+        challenge.ctx.fillStyle = `rgba(236, 240, 248, ${alpha})`;
+        challenge.ctx.fillRect(0, 0, rect.width, rect.height);
+        challenge.regenRafId = requestAnimationFrame(regen);
+      };
+      challenge.regenRafId = requestAnimationFrame(regen);
+
+      challenge.tickId = setInterval(() => {
+        if (!state.hardQuestionChallenge || state.hardQuestionChallenge.questionId !== challenge.questionId) return;
+        const remainingMs = Math.max(0, challenge.deadlineAt - Date.now());
+        // Timer display is now handled by startExamClock
+        if (remainingMs > 0) return;
+        clearInterval(challenge.tickId);
+        challenge.tickId = null;
+        if (challenge.resolved) return;
+        challenge.resolved = true;
+        const q = testQuestions[testQuestionIndex];
+        if (q && q.question_id === challenge.questionId) {
+          const picked = selectedOptions[q.question_id];
+          const correctAnswer = q.correct_answer || q.correct_answers;
+          const primaryCorrectLabel = Array.isArray(correctAnswer)
+            ? normalizeAnswerLabel(correctAnswer[0])
+            : normalizeAnswerLabel(correctAnswer);
+          answeredMap[q.question_id] = {
+            selected: picked || "",
+            correct: false,
+            correctLabel: primaryCorrectLabel,
+          };
+          if (_lifelines > 0) _lifelines -= 1;
+          updateScoreMeta();
+          updateLifelineState();
+          renderResultStateForCurrentQuestion();
+          setTestHint("Time up on hard question.");
+        }
+        challenge.failOverlay = showHardQuestionFullScreen("fail");
+        state.hardQuestionPostSubmitDelayMs = 3200;
+        setTimeout(() => {
+          challenge.failOverlay?.remove();
+          challenge.failOverlay = null;
+          clearHardQuestionChallenge();
+          advanceAfterSubmit();
+        }, 3200);
+      }, 120);
+    }, 2100);
+  }
+
   function triggerConfidenceBreaker() {
     const punchLines = [
       "You cannot beat the devil with guesses.",
@@ -1828,6 +2325,435 @@ const StressTriggers = (() => {
     return {
       durationMs: stableRange("confidenceBreaker_duration", 8000, 12000),
       cleanup: () => overlay.remove(),
+    };
+  }
+
+  function triggerFocusHandSignal() {
+    const overlay = document.createElement("div");
+    overlay.className = "stress-focus-hand-overlay";
+    overlay.innerHTML = `
+      <div class="stress-focus-hand-center">
+        <div class="stress-focus-rings" aria-hidden="true">
+          <span class="focus-ring ring-a"></span>
+          <span class="focus-ring ring-b"></span>
+          <span class="focus-ring ring-c"></span>
+        </div>
+        <div class="stress-focus-hand" aria-hidden="true">👉</div>
+        <div class="stress-focus-text">
+          <div class="focus-eyebrow">YOU NEED TO</div>
+          <div class="focus-main">FOCUS</div>
+          <div class="focus-sub">on this question</div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    return {
+      durationMs: stableRange("focusHandSignal_duration", 3200, 5200),
+      cleanup: () => overlay.remove(),
+    };
+  }
+
+  function extractQuestionKeywords(text) {
+    const stop = new Set([
+      "the", "and", "for", "from", "that", "with", "this", "which", "what", "when",
+      "then", "than", "into", "over", "only", "most", "least", "find", "solve",
+      "given", "each", "does", "your", "their", "they", "them", "where", "there",
+      "these", "those", "will", "would", "could", "should", "true", "false",
+      "correct", "wrong", "option", "following", "statement", "value",
+    ]);
+    const tokens = String(text || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .split(" ")
+      .filter(Boolean);
+    let words = tokens.filter((t) => t.length >= 4 && !stop.has(t));
+    if (!words.length) words = tokens.filter((t) => t.length >= 3);
+    const freq = new Map();
+    words.forEach((t) => freq.set(t, (freq.get(t) || 0) + 1));
+    return [...freq.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 6)
+      .map(([t]) => t);
+  }
+
+  function isRecallValid(stemText, inputText) {
+    const raw = String(inputText || "").trim();
+    
+    // Minimum length check - at least 10 characters
+    if (raw.length < 10) {
+      console.log('[isRecallValid] Too short:', raw.length, 'chars');
+      return false;
+    }
+    
+    // Tokenize input
+    const inputTokens = raw
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .split(" ")
+      .filter(Boolean);
+    
+    if (!inputTokens.length) {
+      console.log('[isRecallValid] No valid tokens');
+      return false;
+    }
+    
+    const inputSet = new Set(inputTokens);
+    
+    // Extract keywords from question
+    const keywords = extractQuestionKeywords(stemText);
+    console.log('[isRecallValid] Question keywords:', keywords);
+    
+    // Count matching keywords
+    const matches = keywords.filter((t) => inputSet.has(t)).length;
+    console.log('[isRecallValid] Keyword matches:', matches, '/', keywords.length);
+    
+    // More lenient threshold: 25% of keywords OR at least 2 keywords
+    const minMatches = Math.max(1, Math.ceil(keywords.length * 0.25));
+    
+    // Check for numbers in the question
+    const numbers = String(stemText || "").match(/\b\d+(?:\.\d+)?\b/g) || [];
+    const hasNumber = numbers.some((n) => raw.includes(n));
+    console.log('[isRecallValid] Has number match:', hasNumber, numbers);
+    
+    // Accept if:
+    // 1. Matches enough keywords
+    // 2. Has a number from the question AND reasonable length (15+ chars)
+    // 3. Very long answer (40+ chars) showing effort
+    const isValid = matches >= minMatches || 
+                    (hasNumber && raw.length >= 15) ||
+                    raw.length >= 40;
+    
+    console.log('[isRecallValid] Result:', isValid, '(matches:', matches, 'minMatches:', minMatches, 'length:', raw.length, ')');
+    return isValid;
+  }
+
+  function triggerFocusReadGate() {
+    const ctx = getActiveQuestionContext();
+    if (!ctx.question || !ctx.stemText) return null;
+    
+    console.log('[triggerFocusReadGate] Starting with question:', ctx.stemText);
+    
+    const overlay = document.createElement("div");
+    overlay.className = "stress-read-gate";
+    overlay.dataset.step = "1";
+    overlay.innerHTML = `
+      <div class="read-gate-card" data-step="1">
+        <div class="read-gate-lock">
+          <span class="lock-icon" aria-hidden="true">🔒</span>
+        </div>
+        <div class="read-gate-eyebrow">QUESTION LOCKED</div>
+        <div class="read-gate-title">Did you read it?</div>
+        <button type="button" class="btn primary read-gate-btn" data-action="unlock">🔓 Unlock</button>
+      </div>
+      <div class="read-gate-card" data-step="2">
+        <div class="read-gate-dot" aria-hidden="true"></div>
+        <div class="read-gate-eyebrow">PROVE YOU READ IT</div>
+        <div class="read-gate-title">What was the question saying?</div>
+        <div class="read-gate-sub">If you read it, you can describe it.</div>
+        <textarea class="read-gate-input" placeholder="In your own words — what was the question asking?"></textarea>
+        <button type="button" class="btn primary read-gate-btn" data-action="verify">Unlock the Question</button>
+        <div class="read-gate-divider"><span>or</span></div>
+        <button type="button" class="btn ghost read-gate-btn read-gate-ghost" data-action="giveup">I gave up</button>
+        <div class="read-gate-foot">No going back.</div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const stepInput = overlay.querySelector(".read-gate-input");
+    let isProcessing = false; // Flag to prevent multiple clicks
+    
+    const showStep = (step) => {
+      overlay.dataset.step = String(step);
+      if (step === 2) stepInput?.focus();
+    };
+
+    const closeGate = () => {
+      console.log('[triggerFocusReadGate] Closing gate and removing overlay');
+      overlay.remove();
+      deactivateTrigger("focusReadGate");
+    };
+
+    // Show roast message for 4.5 seconds then unlock
+    const showRoastAndUnlock = (message) => {
+      if (isProcessing) {
+        console.log('[triggerFocusReadGate] Already processing, ignoring duplicate click');
+        return;
+      }
+      isProcessing = true;
+      
+      console.log('[triggerFocusReadGate] Showing roast:', message);
+      
+      // Hide the input overlay first
+      overlay.style.display = 'none';
+      
+      const roastOverlay = document.createElement('div');
+      roastOverlay.className = 'stress-difficulty-check-overlay';
+      roastOverlay.style.zIndex = '10003';
+      roastOverlay.innerHTML = `
+        <div class="binary-card" style="max-width: 420px; padding: 28px 24px;">
+          <div class="binary-question" style="font-size: 20px; font-weight: 600; line-height: 1.4; color: #f8fafc;">${message}</div>
+        </div>
+      `;
+      document.body.appendChild(roastOverlay);
+      
+      console.log('[triggerFocusReadGate] Roast overlay appended to body');
+      
+      setTimeout(() => {
+        console.log('[triggerFocusReadGate] Roast complete, unlocking question');
+        roastOverlay.remove();
+        closeGate();
+      }, 4500);
+    };
+
+    const unlockBtn = overlay.querySelector('[data-action="unlock"]');
+    const verifyBtn = overlay.querySelector('[data-action="verify"]');
+    const giveupBtn = overlay.querySelector('[data-action="giveup"]');
+
+    if (unlockBtn) {
+      unlockBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        console.log('[triggerFocusReadGate] Unlock button clicked');
+        showStep(2);
+      });
+    }
+    
+    if (verifyBtn) {
+      verifyBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        if (isProcessing) {
+          console.log('[triggerFocusReadGate] Already processing, ignoring click');
+          return;
+        }
+        
+        const value = String(stepInput?.value || "").trim();
+        console.log('[triggerFocusReadGate] Verify clicked, input:', value);
+        
+        if (isRecallValid(ctx.stemText, value)) {
+          console.log('[triggerFocusReadGate] Answer valid, showing success roast');
+          showRoastAndUnlock("Impressive recall. But reading isn't the hard part — answering correctly is. 📖");
+        } else {
+          console.log('[triggerFocusReadGate] Answer invalid, showing failure roast');
+          showRoastAndUnlock("That's not even close. Were you actually reading, or just staring? 👀");
+        }
+      });
+    }
+    
+    if (giveupBtn) {
+      giveupBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        if (isProcessing) {
+          console.log('[triggerFocusReadGate] Already processing, ignoring click');
+          return;
+        }
+        
+        console.log('[triggerFocusReadGate] Give up button clicked');
+        showRoastAndUnlock("At least you're honest about your lack of focus. That's... something. 🤷");
+      });
+    }
+
+    return {
+      durationMs: 0,
+      cleanup: () => {
+        console.log('[triggerFocusReadGate] Cleanup called');
+        overlay.remove();
+      },
+    };
+  }
+
+  const PREMIUM_IMAGE_LIBRARY = [
+    {
+      tone: "wrong",
+      title: "WRONG ANSWER",
+      headline: "Your JEE rank just dropped 10,000 spots",
+      sub: "Focus. Or someone else will take what you're working for.",
+      question: "Can you make it to the top IITs?",
+      image: `
+        <svg viewBox="0 0 160 160" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="facepalm">
+          <defs>
+            <radialGradient id="g1" cx="40%" cy="35%" r="70%">
+              <stop offset="0%" stop-color="#FDE68A"/>
+              <stop offset="100%" stop-color="#F59E0B"/>
+            </radialGradient>
+          </defs>
+          <circle cx="80" cy="80" r="58" fill="url(#g1)"/>
+          <rect x="52" y="58" width="70" height="18" rx="9" fill="#111827" opacity="0.3"/>
+          <circle cx="64" cy="82" r="6" fill="#1F2937"/>
+          <circle cx="98" cy="82" r="6" fill="#1F2937"/>
+          <path d="M60 112c10 10 30 10 40 0" stroke="#1F2937" stroke-width="8" stroke-linecap="round"/>
+          <path d="M40 44l56 24" stroke="#F97316" stroke-width="16" stroke-linecap="round"/>
+        </svg>
+      `.trim(),
+    },
+    {
+      tone: "wrong",
+      title: "WRONG ANSWER",
+      headline: "This is not it chief 😐",
+      sub: "Do you even think this way you're gonna get into the top colleges?",
+      question: "Can you achieve rank under 1000?",
+      image: `
+        <svg viewBox="0 0 160 160" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="neutral">
+          <defs>
+            <radialGradient id="g2" cx="40%" cy="35%" r="70%">
+              <stop offset="0%" stop-color="#FFE29A"/>
+              <stop offset="100%" stop-color="#FBBF24"/>
+            </radialGradient>
+          </defs>
+          <circle cx="80" cy="80" r="58" fill="url(#g2)"/>
+          <circle cx="60" cy="78" r="7" fill="#111827"/>
+          <circle cx="100" cy="78" r="7" fill="#111827"/>
+          <path d="M58 110h44" stroke="#111827" stroke-width="8" stroke-linecap="round"/>
+        </svg>
+      `.trim(),
+    },
+    {
+      tone: "wrong",
+      title: "WRONG ANSWER",
+      headline: "That's a costly slip",
+      sub: "Top scorers are still reading the stem twice.",
+      question: "Can you stay in the race?",
+      image: `
+        <svg viewBox="0 0 160 160" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="melt">
+          <defs>
+            <radialGradient id="g3" cx="40%" cy="35%" r="70%">
+              <stop offset="0%" stop-color="#FDE68A"/>
+              <stop offset="100%" stop-color="#F59E0B"/>
+            </radialGradient>
+          </defs>
+          <path d="M80 18c-30 0-54 24-54 54 0 28 20 52 46 58 22 6 52 2 62-10 12-14 0-30-16-34 20-6 36-26 36-48 0-30-24-54-74-54z" fill="url(#g3)"/>
+          <circle cx="60" cy="70" r="7" fill="#111827"/>
+          <circle cx="98" cy="70" r="7" fill="#111827"/>
+          <path d="M58 98c12 10 34 10 44 0" stroke="#111827" stroke-width="8" stroke-linecap="round"/>
+        </svg>
+      `.trim(),
+    },
+  ];
+
+  function triggerPremiumImagePopup() {
+    const card = PREMIUM_IMAGE_LIBRARY[Math.floor(Math.random() * PREMIUM_IMAGE_LIBRARY.length)];
+    const overlay = document.createElement("div");
+    overlay.className = "stress-premium-overlay";
+    overlay.innerHTML = `
+      <div class="premium-card">
+        <div class="premium-image" aria-hidden="true">${card.image}</div>
+        <div class="premium-eyebrow">${escapeHTML(card.title)}</div>
+        <div class="premium-headline">${escapeHTML(card.headline)}</div>
+        <div class="premium-sub">${escapeHTML(card.sub)}</div>
+        <div class="premium-question">${escapeHTML(card.question)}</div>
+        <div class="premium-actions">
+          <button type="button" class="premium-btn ghost" data-action="no">I Cannot 😔</button>
+          <button type="button" class="premium-btn primary" data-action="yes">I Can 💪</button>
+        </div>
+        <div class="premium-foot">Auto-continuing in 3s...</div>
+      </div>
+    `;
+    const close = () => deactivateTrigger("premiumImagePopup");
+    overlay.addEventListener("click", (evt) => {
+      if (evt.target === overlay) close();
+    });
+    overlay.querySelector('[data-action="no"]')?.addEventListener("click", close);
+    overlay.querySelector('[data-action="yes"]')?.addEventListener("click", close);
+    document.body.appendChild(overlay);
+    const foot = overlay.querySelector(".premium-foot");
+    let remaining = 3;
+    const tick = () => {
+      if (!foot) return;
+      foot.textContent = `Auto-continuing in ${remaining}s...`;
+    };
+    tick();
+    const intervalId = setInterval(() => {
+      remaining = Math.max(0, remaining - 1);
+      tick();
+      if (remaining <= 0) close();
+    }, 1000);
+    const autoTimer = setTimeout(() => close(), 3000);
+    return {
+      durationMs: 0,
+      cleanup: () => {
+        clearTimeout(autoTimer);
+        clearInterval(intervalId);
+        overlay.remove();
+      },
+    };
+  }
+
+  function ensureOptionFeedbackOverlay() {
+    if (state.optionFeedbackOverlay && state.optionFeedbackOverlay.isConnected) {
+      return state.optionFeedbackOverlay;
+    }
+    const overlay = document.createElement("div");
+    overlay.className = "confirm-modal option-feedback-modal";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.innerHTML = `
+      <div class="confirm-card option-feedback-card">
+        <div class="option-feedback-x" aria-hidden="true">×</div>
+        <div class="option-feedback-pill" data-role="headline"></div>
+        <div class="option-feedback-main" data-role="subhead"></div>
+        <div class="option-feedback-tip">
+          <span class="tip-icon" aria-hidden="true">💡</span>
+          <span data-role="coach"></span>
+        </div>
+        <div class="confirm-actions">
+          <button type="button" class="btn ghost small option-feedback-recheck-btn" data-role="recheck" style="color: #1A202C; border-color: #CBD5E0; background: rgba(255, 255, 255, 0.9);">Recheck</button>
+          <button type="button" class="btn primary small" data-role="lock">Lock Answer</button>
+        </div>
+      </div>
+    `;
+    overlay.addEventListener("click", (evt) => {
+      if (evt.target === overlay) closeOptionFeedbackPopup();
+    });
+    const recheckBtn = overlay.querySelector('[data-role="recheck"]');
+    recheckBtn?.addEventListener("click", () => closeOptionFeedbackPopup());
+    const lockBtn = overlay.querySelector('[data-role="lock"]');
+    lockBtn?.addEventListener("click", () => {
+      closeOptionFeedbackPopup();
+      submitCurrentQuestion();
+    });
+    document.body.appendChild(overlay);
+    state.optionFeedbackOverlay = overlay;
+    return overlay;
+  }
+
+  function closeOptionFeedbackPopup() {
+    if (state.optionFeedbackOverlay) state.optionFeedbackOverlay.remove();
+    state.optionFeedbackOverlay = null;
+  }
+
+  function maybeShowOptionFeedbackPopup(questionId, optionLabel) {
+    if (!state.optionFeedbackActive) return;
+    if (!questionId || !optionLabel) return;
+    if (String(questionId) !== String(state.optionFeedbackQuestionId || "")) return;
+    const label = String(optionLabel || "").trim().toUpperCase();
+    if (!label) return;
+    state.optionFeedbackLastOption = label;
+    const payload = OPTION_FEEDBACK_LIBRARY[label] || OPTION_FEEDBACK_LIBRARY.A;
+    const overlay = ensureOptionFeedbackOverlay();
+    const headline = overlay.querySelector('[data-role="headline"]');
+    const subhead = overlay.querySelector('[data-role="subhead"]');
+    const coach = overlay.querySelector('[data-role="coach"]');
+    if (headline) headline.textContent = payload.headline;
+    if (subhead) subhead.textContent = payload.subhead;
+    if (coach) coach.textContent = payload.coach;
+  }
+
+  function triggerOptionFeedbackPopups() {
+    if (!state.currentQuestionId) return null;
+    state.optionFeedbackActive = true;
+    state.optionFeedbackQuestionId = String(state.currentQuestionId || "");
+    state.optionFeedbackLastOption = "";
+    return {
+      durationMs: 0,
+      cleanup: () => {
+        state.optionFeedbackActive = false;
+        state.optionFeedbackQuestionId = "";
+        state.optionFeedbackLastOption = "";
+        closeOptionFeedbackPopup();
+      },
     };
   }
 
@@ -1905,6 +2831,280 @@ const StressTriggers = (() => {
     };
   }
 
+  function triggerTorchlightSpotlight() {
+    if (!questionBody || !state.currentQuestionId) return null;
+    const qid = String(state.currentQuestionId || "");
+    let rect = questionBody.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+
+    const host = document.createElement("div");
+    host.className = "stress-torchlight-mask";
+    document.body.appendChild(host);
+
+    const taunts = [
+      "Read in fragments. Decide under pressure.",
+      "Only a sliver of truth at a time.",
+      "Find the answer before the light runs away.",
+      "You do not get full visibility this round.",
+    ];
+    const taunt = taunts[stableRange("torchlightSpotlight_taunt", 0, taunts.length - 1)];
+    const topBanner = mountDevilTopBanner({
+      title: "Torchlight Mode",
+      lead: "A larger focus area is visible now.",
+      challenge: "Track the light and lock your answer.",
+      taunt,
+    });
+
+    let rafId = null;
+    let monitorTimer = null;
+    let resizeObserver = null;
+    let pendingLayoutSync = false;
+    let currentX = Math.max(80, rect.width * 0.5);
+    let currentY = Math.max(80, rect.height * 0.35);
+    let fromX = currentX;
+    let fromY = currentY;
+    let targetX = currentX;
+    let targetY = currentY;
+    let segmentStartedAt = 0;
+    let segmentDuration = 1400;
+    const innerMargin = 28;
+    const baseRadiusPx = Math.max(165, Math.min(280, Math.round(Math.min(rect.width, rect.height) * 0.48)));
+    let routeStep = 0;
+    host.style.setProperty("--torch-radius", `${baseRadiusPx}px`);
+
+    function syncMaskToQuestionBox() {
+      rect = questionBody.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      host.style.left = `${Math.round(rect.left)}px`;
+      host.style.top = `${Math.round(rect.top)}px`;
+      host.style.width = `${Math.round(rect.width)}px`;
+      host.style.height = `${Math.round(rect.height)}px`;
+      currentX = clamp(currentX, innerMargin, Math.max(innerMargin + 1, rect.width - innerMargin));
+      currentY = clamp(currentY, innerMargin, Math.max(innerMargin + 1, rect.height - innerMargin));
+      fromX = clamp(fromX, innerMargin, Math.max(innerMargin + 1, rect.width - innerMargin));
+      fromY = clamp(fromY, innerMargin, Math.max(innerMargin + 1, rect.height - innerMargin));
+      targetX = clamp(targetX, innerMargin, Math.max(innerMargin + 1, rect.width - innerMargin));
+      targetY = clamp(targetY, innerMargin, Math.max(innerMargin + 1, rect.height - innerMargin));
+      host.style.setProperty("--torch-x", `${Math.round(currentX)}px`);
+      host.style.setProperty("--torch-y", `${Math.round(currentY)}px`);
+    }
+
+    function queueLayoutSync() {
+      if (pendingLayoutSync) return;
+      pendingLayoutSync = true;
+      requestAnimationFrame(() => {
+        pendingLayoutSync = false;
+        syncMaskToQuestionBox();
+      });
+    }
+
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(max, value));
+    }
+
+    function centerWithinHost(nodeRect) {
+      const minX = innerMargin;
+      const maxX = Math.max(minX + 1, rect.width - innerMargin);
+      const minY = innerMargin;
+      const maxY = Math.max(minY + 1, rect.height - innerMargin);
+      const x = nodeRect.left - rect.left + (nodeRect.width * 0.5);
+      const y = nodeRect.top - rect.top + (nodeRect.height * 0.5);
+      return {
+        x: clamp(x, minX, maxX),
+        y: clamp(y, minY, maxY),
+      };
+    }
+
+    function buildFocusAnchors() {
+      let stemAnchors = [];
+      const optionAnchors = [];
+      let selectedAnchor = null;
+      let submitAnchor = null;
+      let integerAnchor = null;
+      const stemRect = questionStem?.getBoundingClientRect();
+      if (stemRect && stemRect.width > 10 && stemRect.height > 10) {
+        const toAnchor = (xRatio, yRatio, radiusMult = 1.22, travelMs = [900, 1500]) => {
+          const px = stemRect.left - rect.left + (stemRect.width * xRatio);
+          const py = stemRect.top - rect.top + (stemRect.height * yRatio);
+          return {
+            x: clamp(px, innerMargin, Math.max(innerMargin + 1, rect.width - innerMargin)),
+            y: clamp(py, innerMargin, Math.max(innerMargin + 1, rect.height - innerMargin)),
+            radiusMult,
+            travelMs,
+          };
+        };
+
+        // Sweep the question as a line/region (includes top-left corner).
+        stemAnchors = [
+          toAnchor(0.05, 0.12, 1.26, [1000, 1700]), // top-left
+          toAnchor(0.35, 0.14, 1.24, [900, 1500]),  // upper-left/center
+          toAnchor(0.68, 0.14, 1.24, [900, 1500]),  // upper-right/center
+          toAnchor(0.94, 0.16, 1.22, [900, 1500]),  // top-right
+          toAnchor(0.08, 0.48, 1.2, [1000, 1600]),  // mid-left for long questions
+          toAnchor(0.52, 0.52, 1.18, [1000, 1600]), // center body line
+        ];
+      }
+
+      const optionNodes = Array.from(questionOptions?.querySelectorAll("label.option") || []);
+      optionNodes.slice(0, 6).forEach((node) => {
+        const nodeRect = node.getBoundingClientRect();
+        if (nodeRect.width < 10 || nodeRect.height < 10) return;
+        const c = centerWithinHost(nodeRect);
+        optionAnchors.push({ x: c.x, y: c.y, radiusMult: 1.04, travelMs: [900, 1500] });
+      });
+
+      const selectedLabel = String(selectedOptions[qid] || "").trim();
+      if (selectedLabel) {
+        const selectedNode = questionOptions
+          ?.querySelector(`label.option input[value="${selectedLabel}"]`)
+          ?.closest("label.option");
+        const selectedRect = selectedNode?.getBoundingClientRect();
+        if (selectedRect && selectedRect.width > 10 && selectedRect.height > 10) {
+          const c = centerWithinHost(selectedRect);
+          selectedAnchor = { x: c.x, y: c.y, radiusMult: 1.1, travelMs: [900, 1300] };
+        }
+      }
+
+      const submitRect = btnSubmitQuestion?.getBoundingClientRect();
+      if (submitRect && submitRect.width > 10 && submitRect.height > 10) {
+        const c = centerWithinHost(submitRect);
+        submitAnchor = { x: c.x, y: c.y, radiusMult: 1.0, travelMs: [1000, 1500] };
+      }
+
+      const integerVisible = integerPanel && !integerPanel.hidden && getComputedStyle(integerPanel).display !== "none";
+      if (integerVisible) {
+        const intRect = integerPanel.getBoundingClientRect();
+        if (intRect.width > 10 && intRect.height > 10) {
+          const c = centerWithinHost(intRect);
+          integerAnchor = { x: c.x, y: c.y, radiusMult: 1.18, travelMs: [1100, 1700] };
+        }
+      }
+
+      const fallbackAnchor = {
+          x: clamp(rect.width * 0.5, innerMargin, Math.max(innerMargin + 1, rect.width - innerMargin)),
+          y: clamp(rect.height * 0.38, innerMargin, Math.max(innerMargin + 1, rect.height - innerMargin)),
+          radiusMult: 1.1,
+          travelMs: [1000, 1700],
+        };
+
+      return {
+        stemAnchors,
+        optionAnchors,
+        selectedAnchor,
+        submitAnchor,
+        integerAnchor,
+        fallbackAnchor,
+      };
+    }
+
+    function pickAnchor() {
+      const focus = buildFocusAnchors();
+      const stemSweep = (focus.stemAnchors && focus.stemAnchors.length)
+        ? focus.stemAnchors
+        : [focus.fallbackAnchor];
+      const stemPrimary = stemSweep[0] || focus.fallbackAnchor;
+      const options = focus.optionAnchors || [];
+      const route = [];
+
+      if (focus.integerAnchor) {
+        route.push(...stemSweep, focus.integerAnchor, stemPrimary);
+        if (focus.selectedAnchor) route.push(focus.selectedAnchor);
+        if (focus.submitAnchor) route.push(stemPrimary, focus.submitAnchor);
+      } else {
+        route.push(...stemSweep);
+        if (options[0]) route.push(options[0]);
+        if (options[1]) route.push(options[1]);
+        route.push(stemPrimary);
+        if (stemSweep[2]) route.push(stemSweep[2]);
+        if (stemSweep[4]) route.push(stemSweep[4]);
+        if (options[2]) route.push(options[2]);
+        if (options[3]) route.push(options[3]);
+        if (focus.selectedAnchor) route.push(stemPrimary, focus.selectedAnchor);
+        if (focus.submitAnchor) route.push(stemPrimary, focus.submitAnchor);
+      }
+
+      const finalRoute = route.filter(Boolean);
+      if (!finalRoute.length) return focus.fallbackAnchor;
+      const anchor = finalRoute[routeStep % finalRoute.length];
+      routeStep += 1;
+      return anchor;
+    }
+
+    function chooseTarget(ts, force = false) {
+      if (!force && segmentStartedAt && ts - segmentStartedAt < segmentDuration) return;
+      const anchor = pickAnchor();
+      if (!anchor) return;
+      fromX = currentX;
+      fromY = currentY;
+      targetX = anchor.x;
+      targetY = anchor.y;
+      const minTravel = Number(anchor.travelMs?.[0] || 1000);
+      const maxTravel = Number(anchor.travelMs?.[1] || 1700);
+      segmentDuration = minTravel + Math.floor(Math.random() * Math.max(1, maxTravel - minTravel + 1));
+      segmentStartedAt = ts || performance.now();
+      const adaptiveRadius = clamp(
+        Math.round(baseRadiusPx * Number(anchor.radiusMult || 1)),
+        Math.max(145, Math.round(baseRadiusPx * 0.9)),
+        Math.round(baseRadiusPx * 1.45)
+      );
+      host.style.setProperty("--torch-radius", `${adaptiveRadius}px`);
+    }
+
+    function tick(ts) {
+      if ((routeStep % 30) === 0) {
+        syncMaskToQuestionBox();
+      }
+      chooseTarget(ts, false);
+      const elapsed = Math.max(0, ts - segmentStartedAt);
+      const progress = clamp(elapsed / Math.max(1, segmentDuration), 0, 1);
+      // Smooth "readable" glide: quick settle at start, slower near destination.
+      const eased = 1 - ((1 - progress) ** 3);
+      currentX = fromX + ((targetX - fromX) * eased);
+      currentY = fromY + ((targetY - fromY) * eased);
+
+      host.style.setProperty("--torch-x", `${Math.round(currentX)}px`);
+      host.style.setProperty("--torch-y", `${Math.round(currentY)}px`);
+
+      if (progress >= 1) {
+        chooseTarget(ts, true);
+      }
+      rafId = requestAnimationFrame(tick);
+    }
+
+    syncMaskToQuestionBox();
+    chooseTarget(performance.now(), true);
+    rafId = requestAnimationFrame(tick);
+    window.addEventListener("resize", queueLayoutSync);
+    window.addEventListener("orientationchange", queueLayoutSync);
+    document.addEventListener("fullscreenchange", queueLayoutSync);
+    if (typeof ResizeObserver === "function") {
+      resizeObserver = new ResizeObserver(() => queueLayoutSync());
+      resizeObserver.observe(questionBody);
+    }
+
+    monitorTimer = setInterval(() => {
+      const movedToAnotherQuestion = String(state.currentQuestionId || "") !== qid;
+      // Removed hasAnswer check - torchlight should continue even if option is selected
+      if (movedToAnotherQuestion) {
+        deactivateTrigger("torchlightSpotlight");
+      }
+    }, 180);
+
+    return {
+      durationMs: 0,
+      cleanup: () => {
+        if (rafId) cancelAnimationFrame(rafId);
+        if (monitorTimer) clearInterval(monitorTimer);
+        window.removeEventListener("resize", queueLayoutSync);
+        window.removeEventListener("orientationchange", queueLayoutSync);
+        document.removeEventListener("fullscreenchange", queueLayoutSync);
+        if (resizeObserver) resizeObserver.disconnect();
+        host.remove();
+        topBanner.remove();
+      },
+    };
+  }
+
   function triggerHeartbeatVibration() {
     const shell = getAppShell();
     const lines = [
@@ -1944,9 +3144,20 @@ const StressTriggers = (() => {
     };
   }
 
-  function triggerScreenFlip() {
+  function triggerScreenFlip(ctx) {
     const shell = getAppShell();
     if (!shell) return null;
+    
+    // Get parameters from context
+    const flipCycles = ctx?.flipCycles || 5; // Default 5 cycles
+    const flipDuration = ctx?.flipDuration || 5000; // Default 5s flipped
+    const waitDuration = ctx?.waitDuration || 5000; // Default 5s wait
+    const permanentFinalState = ctx?.permanentFinalState !== false; // Default true
+    
+    console.log(`[triggerScreenFlip] Starting ${flipCycles} flip cycles`);
+    console.log(`[triggerScreenFlip] Flip duration: ${flipDuration}ms, Wait duration: ${waitDuration}ms`);
+    console.log(`[triggerScreenFlip] Permanent final state: ${permanentFinalState}`);
+    
     const taunts = [
       "Orientation is comfort. I just took it.",
       "When the world turns, only discipline stays upright.",
@@ -1957,15 +3168,74 @@ const StressTriggers = (() => {
     const banner = mountDevilTopBanner({
       title: "Devil Flip",
       lead: "I turned your screen against you.",
-      challenge: "Answer now. Can your focus survive a full flip?",
+      challenge: `Answer now. ${flipCycles} flips incoming.`,
       taunt,
     });
 
-    shell.classList.add("stress-screen-flip");
+    let currentCycle = 0;
+    let isFlipped = false;
+    let cycleTimeoutId = null;
+    let isCancelled = false;
+    
+    const performFlipCycle = () => {
+      if (isCancelled) return;
+      
+      currentCycle++;
+      console.log(`[triggerScreenFlip] Cycle ${currentCycle}/${flipCycles} - Flipping screen`);
+      
+      // Flip the screen
+      shell.classList.add("stress-screen-flip");
+      isFlipped = true;
+      
+      // Stay flipped for flipDuration
+      cycleTimeoutId = setTimeout(() => {
+        if (isCancelled) return;
+        
+        // Check if this is the last cycle
+        if (currentCycle >= flipCycles) {
+          // Last cycle - keep flipped permanently if permanentFinalState is true
+          if (permanentFinalState) {
+            console.log(`[triggerScreenFlip] Final cycle ${currentCycle}/${flipCycles} - Staying flipped permanently`);
+            // Don't flip back, leave it flipped
+          } else {
+            console.log(`[triggerScreenFlip] Final cycle ${currentCycle}/${flipCycles} - Flipping back`);
+            shell.classList.remove("stress-screen-flip");
+            isFlipped = false;
+          }
+        } else {
+          // Not the last cycle - flip back
+          console.log(`[triggerScreenFlip] Cycle ${currentCycle}/${flipCycles} - Flipping back`);
+          shell.classList.remove("stress-screen-flip");
+          isFlipped = false;
+          
+          // Wait for waitDuration before next flip
+          cycleTimeoutId = setTimeout(() => {
+            if (isCancelled) return;
+            performFlipCycle(); // Start next cycle
+          }, waitDuration);
+        }
+      }, flipDuration);
+    };
+    
+    // Start the first flip cycle
+    performFlipCycle();
+    
+    // Calculate total duration: (flipDuration + waitDuration) * (cycles - 1) + flipDuration
+    // Last cycle doesn't have a wait period
+    const totalDuration = (flipDuration + waitDuration) * (flipCycles - 1) + flipDuration;
+    
     return {
-      durationMs: stableRange("screenFlip_duration", 2600, 4200),
+      durationMs: totalDuration,
       cleanup: () => {
-        shell.classList.remove("stress-screen-flip");
+        console.log(`[triggerScreenFlip] Cleanup called`);
+        isCancelled = true;
+        if (cycleTimeoutId) {
+          clearTimeout(cycleTimeoutId);
+        }
+        // Only remove flip if not permanent or if we're cleaning up mid-cycle
+        if (!permanentFinalState || currentCycle < flipCycles) {
+          shell.classList.remove("stress-screen-flip");
+        }
         banner.remove();
       },
     };
@@ -2532,365 +3802,275 @@ const StressTriggers = (() => {
   }
 
   function triggerBollywoodReelTrap() {
-    const shell = getAppShell();
-    acquireInterruptionLock("news");
+    return null;
+  }
 
-    function inferStudentSignals() {
-      const recent = state.followupAnswers.slice(-14);
-      const corpus = recent
-        .map((entry) => `${entry.answer || ""} ${entry.domain || ""} ${entry.slot || ""}`)
-        .join(" ")
-        .toLowerCase();
+  function triggerBouncingQuestion() {
+    if (!state.currentQuestionId) return null;
+    const movingEl = getTestCard() || questionBody;
+    if (!movingEl) return null;
 
-      const buckets = [
-        { key: "sports", test: /cricket|football|sport|match|league|ipl|badminton/ },
-        { key: "music", test: /music|song|dance|playlist|guitar|rap|singer/ },
-        { key: "games", test: /game|gaming|esports|valorant|bgmi|pubg|minecraft|fifa/ },
-        { key: "technology", test: /tech|ai|coding|app|software|phone|device/ },
-        { key: "movies", test: /movie|film|series|actor|cinema|bollywood|reel/ },
-        { key: "health", test: /health|sleep|stress|focus|diet|gym|exercise/ },
-        { key: "science", test: /science|physics|chemistry|biology|space|research/ },
-      ];
+    const targetQuestionId = String(state.currentQuestionId || "");
+    const startRect = movingEl.getBoundingClientRect();
+    if (!startRect.width || !startRect.height) return null;
 
-      const interests = buckets.filter((b) => b.test.test(corpus)).map((b) => b.key);
-      const emotion = /anxious|panic|worried|stress|overwhelm|scared/.test(corpus)
-        ? "stressed"
-        : /excited|motivated|confident|happy/.test(corpus)
-          ? "energized"
-          : "neutral";
-
-      return {
-        interests: interests.slice(0, 4),
-        emotion,
-        shortContext: recent
-          .slice(-4)
-          .map((item) => String(item.answer || "").trim())
-          .filter(Boolean)
-          .slice(0, 3),
-      };
-    }
-
-    function inferTopicFromAnswers(signals) {
-      const preferredTopic = mapFeedbackTopicToReelTopic(state.feedbackTopicPreference);
-      if (preferredTopic) {
-        const emojiMap = {
-          sports: "🏅",
-          music: "🎵",
-          games: "🎮",
-          technology: "🤖",
-          movies: "🎬",
-          health: "🩺",
-          science: "🔬",
-          world: "🌍",
-        };
-        return { topic: preferredTopic, emoji: emojiMap[preferredTopic] || "🌟" };
-      }
-
-      const corpus = state.followupAnswers
-        .slice(-12)
-        .map((entry) => `${entry.answer || ""} ${entry.domain || ""} ${entry.slot || ""}`)
-        .join(" ")
-        .toLowerCase();
-      if (/cricket|football|sport|match|league/.test(corpus)) return { topic: "sports", emoji: "🏅" };
-      if (/music|song|dance|playlist|guitar|rap/.test(corpus)) return { topic: "music", emoji: "🎵" };
-      if (/game|gaming|esports|valorant|bgmi|pubg|minecraft|fifa/.test(corpus)) return { topic: "games", emoji: "🎮" };
-      if (/tech|ai|coding|app|software|phone|device/.test(corpus)) return { topic: "technology", emoji: "🤖" };
-      if (/movie|film|series|actor|cinema/.test(corpus)) return { topic: "movies", emoji: "🎬" };
-      if (/health|sleep|stress|focus|diet/.test(corpus)) return { topic: "health", emoji: "🩺" };
-      if (Array.isArray(signals?.interests) && signals.interests.length) {
-        const fromInterest = signals.interests[0];
-        const emojiMap = {
-          sports: "🏅",
-          music: "🎵",
-          games: "🎮",
-          technology: "🤖",
-          movies: "🎬",
-          health: "🩺",
-          science: "🔬",
-          world: "🌍",
-        };
-        return { topic: fromInterest, emoji: emojiMap[fromInterest] || "🌟" };
-      }
-      const fallback = [
-        { topic: "movies", emoji: "🎬" },
-        { topic: "movies", emoji: "🎬" },
-        { topic: "movies", emoji: "🎬" },
-        { topic: "technology", emoji: "🤖" },
-        { topic: "games", emoji: "🎮" },
-        { topic: "science", emoji: "🔬" },
-        { topic: "world", emoji: "🌍" },
-      ];
-      return fallback[Math.floor(Math.random() * fallback.length)];
-    }
-
-    const factBank = {
-      technology: [
-        {
-          title: "AI assistants now summarize long documents in seconds",
-          summary: "Recent education tooling trends show students increasingly using summarization features to reduce reading time.",
-          detail: "Usage snapshots indicate students are now combining summaries with concept maps to revise broader units more quickly before tests.",
-          joke: "AI said: I can summarize 40 pages. Student said: summarize my whole semester too.",
-          source: "Tech Brief",
-        },
-      ],
-      science: [
-        {
-          title: "Sleep consistency strongly correlates with next-day concentration",
-          summary: "Learning science research repeatedly finds regular sleep timing improves attention and recall in tests.",
-          detail: "Across repeated studies, irregular late-night patterns show measurable dips in memory retrieval speed the next morning.",
-          joke: "Brain at 2 AM: genius ideas. Brain at 9 AM exam: who am I?",
-          source: "Science Digest",
-        },
-      ],
-      world: [
-        {
-          title: "Student mobility is rising across major education hubs",
-          summary: "New reports indicate growing cross-city academic movement as learners seek specialized programs.",
-          detail: "Policy and placement trends both suggest students are choosing flexibility and industry-linked campuses more often than before.",
-          joke: "Students changed cities for better courses; luggage still thinks this is a tour.",
-          source: "Global Education Watch",
-        },
-      ],
-      movies: [
-        {
-          title: "Short-form film explainers are shaping youth media habits",
-          summary: "Media studies suggest quick explainers influence what students watch and discuss during breaks.",
-          detail: "Engagement curves show concise explainers increase recall of plot points, cast references, and follow-up recommendations.",
-          joke: "One reel explained the whole movie; still everyone asked, sequel kab aa raha hai?",
-          source: "Screen Trends",
-        },
-      ],
-      sports: [
-        {
-          title: "Micro-break routines are entering competitive training culture",
-          summary: "Teams are increasingly adopting short focus resets between drills to sustain high performance.",
-          detail: "Coaching reports link brief timed pauses with improved decision quality in late-session practice rounds.",
-          joke: "Coach said micro-break. Team heard snack-break.",
-          source: "Sports Analytics Desk",
-        },
-      ],
-      music: [
-        {
-          title: "Lo-fi and ambient playlists remain top picks during study sessions",
-          summary: "Listening behavior data shows students prefer low-distraction soundscapes for revision windows.",
-          detail: "Playback analytics indicate calmer background tracks reduce skip rates during focused 25-40 minute study intervals.",
-          joke: "Playlist said chill beats only. Student still danced during derivations.",
-          source: "Audio Trends",
-        },
-      ],
-      games: [
-        {
-          title: "Competitive game training methods are entering student focus routines",
-          summary: "Short strategy cycles from gaming are now being reused by students for timed problem-solving practice.",
-          detail: "Learning coaches report that game-style round planning helps improve pacing and fast decision confidence in tests.",
-          joke: "Student said one last match; timer said final boss is your exam.",
-          source: "Game Insight Desk",
-        },
-      ],
-      health: [
-        {
-          title: "Hydration and cognitive stamina are more linked than students assume",
-          summary: "Campus wellness programs are emphasizing hydration as a practical way to avoid focus dips.",
-          detail: "Recent student wellness audits found improved hydration habits correlate with steadier attention through long assessment blocks.",
-          joke: "Water bottle became topper; everyone else asked for notes.",
-          source: "Health Notes",
-        },
-      ],
-    };
-
-    const studentSignals = inferStudentSignals();
-    const recentTopics = (state.newsReelHistory || []).slice(-3).map((item) => item.topic);
-    let topicCtx = inferTopicFromAnswers(studentSignals);
-    if (recentTopics.filter((t) => t === topicCtx.topic).length >= 2) {
-      const rotateOrder = ["movies", "technology", "games", "music", "sports", "health", "science", "world"];
-      const nextTopic = rotateOrder.find((item) => !recentTopics.includes(item)) || rotateOrder[(Date.now() / 1000) % rotateOrder.length | 0];
-      const emojiMap = { movies: "🎬", technology: "🤖", games: "🎮", music: "🎵", sports: "🏅", health: "🩺", science: "🔬", world: "🌍" };
-      topicCtx = { topic: nextTopic, emoji: emojiMap[nextTopic] || "🌟" };
-    }
-
-    const topicVisuals = {
-      movies: [
-        "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=900&q=70",
-        "https://images.unsplash.com/photo-1517604931442-7e0c8ed2963c?auto=format&fit=crop&w=900&q=70",
-        "https://images.unsplash.com/photo-1595769816263-9b910be24d5f?auto=format&fit=crop&w=900&q=70",
-      ],
-      music: [
-        "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?auto=format&fit=crop&w=900&q=70",
-        "https://images.unsplash.com/photo-1511379938547-c1f69419868d?auto=format&fit=crop&w=900&q=70",
-        "https://images.unsplash.com/photo-1507838153414-b4b713384a76?auto=format&fit=crop&w=900&q=70",
-      ],
-      sports: [
-        "https://images.unsplash.com/photo-1461896836934-ffe607ba8211?auto=format&fit=crop&w=900&q=70",
-        "https://images.unsplash.com/photo-1471295253337-3ceaaedca402?auto=format&fit=crop&w=900&q=70",
-        "https://images.unsplash.com/photo-1517649763962-0c623066013b?auto=format&fit=crop&w=900&q=70",
-      ],
-      technology: [
-        "https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=900&q=70",
-        "https://images.unsplash.com/photo-1519389950473-47ba0277781c?auto=format&fit=crop&w=900&q=70",
-        "https://images.unsplash.com/photo-1517430816045-df4b7de11d1d?auto=format&fit=crop&w=900&q=70",
-      ],
-      games: [
-        "https://images.unsplash.com/photo-1511512578047-dfb367046420?auto=format&fit=crop&w=900&q=70",
-        "https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=900&q=70",
-        "https://images.unsplash.com/photo-1493711662062-fa541adb3fc8?auto=format&fit=crop&w=900&q=70",
-      ],
-      health: [
-        "https://images.unsplash.com/photo-1498837167922-ddd27525d352?auto=format&fit=crop&w=900&q=70",
-        "https://images.unsplash.com/photo-1506126613408-eca07ce68773?auto=format&fit=crop&w=900&q=70",
-        "https://images.unsplash.com/photo-1526256262350-7da7584cf5eb?auto=format&fit=crop&w=900&q=70",
-      ],
-      science: [
-        "https://images.unsplash.com/photo-1532187863486-abf9dbad1b69?auto=format&fit=crop&w=900&q=70",
-        "https://images.unsplash.com/photo-1507413245164-6160d8298b31?auto=format&fit=crop&w=900&q=70",
-        "https://images.unsplash.com/photo-1581093458791-9f3c3900df4b?auto=format&fit=crop&w=900&q=70",
-      ],
-      world: [
-        "https://images.unsplash.com/photo-1521295121783-8a321d551ad2?auto=format&fit=crop&w=900&q=70",
-        "https://images.unsplash.com/photo-1480714378408-67cf0d13bc1f?auto=format&fit=crop&w=900&q=70",
-        "https://images.unsplash.com/photo-1467269204594-9661b134dd2b?auto=format&fit=crop&w=900&q=70",
-      ],
-    };
-
-    function chooseVisual(topic, directUrl) {
-      if (directUrl) return String(directUrl);
-      const pool = topicVisuals[topic] || topicVisuals.movies;
-      const recentImages = (state.newsReelHistory || []).slice(-2).map((item) => item.image);
-      const candidates = pool.filter((url) => !recentImages.includes(url));
-      const source = candidates.length ? candidates : pool;
-      const idx = stableHash(`${sessionId || "anon"}|${topic}|${Date.now()}|${state.newsReelHistory.length}`) % source.length;
-      return source[idx];
-    }
-
-    let panel = null;
-    let disposed = false;
-    let autoCloseTimer = null;
-    const displayMs = stableRange("bollywoodReelTrap_duration", 5000, 7000);
-    const safetyTimer = setTimeout(() => {
-      deactivateTrigger("bollywoodReelTrap");
-    }, 15000);
-
-    (async () => {
-      let best = null;
-      try {
-        const data = await postJSON("/api/bollywood/reel-fact", {
-          topic_hint: topicCtx.topic,
-          force_topic: Boolean(mapFeedbackTopicToReelTopic(state.feedbackTopicPreference)),
-          followup_answers: state.followupAnswers.slice(-12),
-          student_profile: {
-            name: String(userNameInput?.value || "").trim(),
-            interests: [
-              ...new Set([
-                mapFeedbackTopicToReelTopic(state.feedbackTopicPreference),
-                ...(studentSignals.interests || []),
-              ].filter(Boolean)),
-            ],
-            emotion: studentSignals.emotion,
-            recent_context: studentSignals.shortContext,
-          },
-          avoid_titles: (state.newsReelHistory || []).slice(-6).map((item) => item.title),
-          variation_seed: Date.now(),
-        });
-        best = {
-          title: data?.title,
-          summary: data?.summary,
-          source: data?.source,
-          topic: data?.topic,
-          image_url: data?.image_url || data?.image || data?.thumbnail_url,
-        };
-      } catch (e) {
-        best = null;
-      }
-
-      if (!best || !best.title || !best.summary) {
-        const topicFacts = factBank[topicCtx.topic] || factBank.movies || factBank.technology;
-        const fallbackFact = topicFacts[Math.floor(Math.random() * topicFacts.length)] || topicFacts[0];
-        best = {
-          title: fallbackFact?.title,
-          summary: fallbackFact?.summary,
-          source: fallbackFact?.source,
-          topic: topicCtx.topic,
-          image_url: "",
-        };
-      }
-
-      if (disposed) return;
-
-      const lockedTopic = mapFeedbackTopicToReelTopic(state.feedbackTopicPreference);
-      const chosenTopic = String(lockedTopic || best?.topic || topicCtx.topic || "movies").toLowerCase();
-      const imageUrl = chooseVisual(chosenTopic, best?.image_url);
-      let rawTitle = String(best?.title || "Latest update").trim();
-      const recentTitles = (state.newsReelHistory || []).slice(-4).map((item) => String(item.title || "").toLowerCase());
-      if (rawTitle && recentTitles.includes(rawTitle.toLowerCase())) {
-        const stamp = ["Campus pulse", "Now trending", "Fresh reel"][stableHash(`${rawTitle}|${Date.now()}`) % 3];
-        rawTitle = `${stamp}: ${rawTitle}`;
-      }
-      const title = escapeHTML(rawTitle);
-      const source = escapeHTML(best?.source || "News");
-      const preferredInterest = lockedTopic || studentSignals.interests[0] || "";
-      const interestHook = preferredInterest
-        ? `Based on your interest in ${preferredInterest}.`
-        : "Picked from your recent answers.";
-      const baseSummary = String(best?.summary || "Quick update, now back to your test.").slice(0, 95).trim();
-      const summary = escapeHTML(`${baseSummary} ${interestHook}`.slice(0, 130));
-      const topicLabel = `${topicCtx.emoji} ${escapeHTML(chosenTopic)} reel`;
-
-      panel = document.createElement("div");
-      panel.className = "stress-news-quiz is-fact-edition";
-      panel.setAttribute("role", "dialog");
-      panel.setAttribute("aria-modal", "true");
-      panel.innerHTML = `
-        <div class="news-quiz-card fact-edition app-popup-fact insta-mini-banner">
-          <div class="fact-popup-topbar">
-            <div class="fact-app-live">
-              <span class="fact-app-dot" aria-hidden="true"></span>
-              <span class="fact-live-label">LIVE</span>
-            </div>
-            <div class="fact-app-title">For You</div>
-            <div class="fact-app-time">now</div>
-          </div>
-          <article class="insta-banner-body">
-            <img class="insta-banner-media" src="${escapeHTML(imageUrl)}" alt="${escapeHTML(chosenTopic)} update" loading="eager" decoding="async" referrerpolicy="no-referrer" />
-            <div class="insta-banner-copy">
-              <p class="fact-topic">${topicLabel}</p>
-              <h4 class="insta-banner-title">${title}</h4>
-              <p class="insta-banner-caption">${summary}</p>
-              <p class="insta-banner-meta">${source} • just now</p>
-            </div>
-          </article>
+    const intro = document.createElement("div");
+    intro.className = "stress-bounce-intro";
+    intro.setAttribute("role", "dialog");
+    intro.setAttribute("aria-live", "polite");
+    intro.innerHTML = `
+      <div class="stress-bounce-intro-card">
+        <div class="stress-bounce-ball-wrap" aria-hidden="true">
+          <div class="stress-bounce-ball">8</div>
         </div>
-      `;
+        <div class="stress-bounce-eyebrow">CHALLENGE FOR U</div>
+        <h3>Topper-level trap. Can you track and solve?</h3>
+        <div class="stress-bounce-focus-text">Watch the ball. Read the question. Both. At once.</div>
+        <p>Starting in a moment...</p>
+      </div>
+    `;
+    document.body.appendChild(intro);
 
-      document.body.appendChild(panel);
-      shell?.classList.add("stress-news-diversion-open");
+    const focusTrail = document.createElement("div");
+    focusTrail.className = "stress-bounce-focus-trail";
+    document.body.appendChild(focusTrail);
 
-      state.lastNewsTopic = chosenTopic;
-      state.lastNewsImage = imageUrl;
-      state.newsReelHistory.push({
-        topic: chosenTopic,
-        image: imageUrl,
-        title: rawTitle,
-        at: Date.now(),
+    const savedStyle = {
+      position: movingEl.style.position || "",
+      left: movingEl.style.left || "",
+      top: movingEl.style.top || "",
+      width: movingEl.style.width || "",
+      zIndex: movingEl.style.zIndex || "",
+      margin: movingEl.style.margin || "",
+      transform: movingEl.style.transform || "",
+      pointerEvents: movingEl.style.pointerEvents || "",
+      maxWidth: movingEl.style.maxWidth || "",
+      boxSizing: movingEl.style.boxSizing || "",
+      willChange: movingEl.style.willChange || "",
+    };
+
+    const placeholder = document.createElement("div");
+    placeholder.className = "stress-bounce-placeholder";
+    placeholder.style.height = `${Math.ceil(startRect.height)}px`;
+    movingEl.parentNode?.insertBefore(placeholder, movingEl);
+
+    let posX = startRect.left;
+    let posY = startRect.top;
+    let velX = 4.5;
+    let velY = 4.2;
+    const bounceRetention = 0.96;
+    const minSpeed = 4.2;
+    const maxSpeed = 7.5;
+    const steerStrength = 0.18;
+    const arriveDistance = 10;
+    const motionScale = 0.9;
+    const motionWidth = Math.round(startRect.width * motionScale);
+    const motionHeight = Math.round(startRect.height * motionScale);
+    let rafId = null;
+    let monitorTimer = null;
+    let introTimer = null;
+    let focusCooldownUntil = 0;
+    let lastTs = 0;
+    let activeMotion = false;
+    let tiltDeg = 0;
+    let targetPoint = null;
+
+    function getBounds() {
+      const margin = 12;
+      const maxX = Math.max(margin, window.innerWidth - motionWidth - margin);
+      const maxY = Math.max(margin, window.innerHeight - motionHeight - margin);
+      return { margin, maxX, maxY };
+    }
+
+    function buildTargets() {
+      const { margin, maxX, maxY } = getBounds();
+      return [
+        { x: margin, y: margin, kind: "corner" },
+        { x: maxX, y: margin, kind: "corner" },
+        { x: margin, y: maxY, kind: "corner" },
+        { x: maxX, y: maxY, kind: "corner" },
+      ];
+    }
+
+    function pickTarget(force = false) {
+      if (!force && targetPoint) return;
+      const candidates = buildTargets();
+      let filtered = candidates;
+      if (targetPoint) {
+        filtered = candidates.filter((p) => Math.hypot(p.x - targetPoint.x, p.y - targetPoint.y) > 34);
+      }
+      if (!filtered.length) filtered = candidates;
+      filtered = filtered.sort((a, b) => {
+        const da = Math.hypot(a.x - posX, a.y - posY);
+        const db = Math.hypot(b.x - posX, b.y - posY);
+        return db - da;
       });
-      if (state.newsReelHistory.length > 20) {
-        state.newsReelHistory = state.newsReelHistory.slice(-20);
+
+      const topPool = filtered.slice(0, Math.max(3, Math.min(5, filtered.length)));
+      let chosen = topPool[Math.floor(Math.random() * topPool.length)];
+      targetPoint = chosen || filtered[0] || candidates[0];
+    }
+
+    function spawnFocusTag(x, y) {
+      const now = Date.now();
+      if (now < focusCooldownUntil) return;
+      focusCooldownUntil = now + 120;
+      const tag = document.createElement("div");
+      tag.className = "stress-bounce-focus-tag";
+      tag.textContent = "FOCUS";
+      tag.style.left = `${Math.round(x)}px`;
+      tag.style.top = `${Math.round(y)}px`;
+      focusTrail.appendChild(tag);
+      setTimeout(() => tag.remove(), 200);
+    }
+
+    function applyMotionStyles() {
+      movingEl.classList.add("stress-bouncing-question-body");
+      movingEl.style.position = "fixed";
+      movingEl.style.left = `${Math.round(posX)}px`;
+      movingEl.style.top = `${Math.round(posY)}px`;
+      movingEl.style.width = `${motionWidth}px`;
+      movingEl.style.maxWidth = `${motionWidth}px`;
+      movingEl.style.zIndex = "70";
+      movingEl.style.margin = "0";
+      movingEl.style.transform = "translate3d(0, 0, 0) scale(1) rotate(0deg)";
+      movingEl.style.pointerEvents = "auto";
+      movingEl.style.boxSizing = "border-box";
+      movingEl.style.willChange = "left, top, transform";
+    }
+
+    function frame(ts) {
+      if (!activeMotion) return;
+      if (!lastTs) lastTs = ts;
+      const dt = Math.max(0.6, Math.min(2.2, (ts - lastTs) / 16.67));
+      lastTs = ts;
+
+      pickTarget();
+      if (targetPoint) {
+        const centerX = posX + (motionWidth / 2);
+        const centerY = posY + (motionHeight / 2);
+        const tx = targetPoint.x + (motionWidth / 2);
+        const ty = targetPoint.y + (motionHeight / 2);
+        const dx = tx - centerX;
+        const dy = ty - centerY;
+        const dist = Math.hypot(dx, dy) || 1;
+        const desiredSpeed = dist < 180 ? minSpeed + ((maxSpeed - minSpeed) * 0.55) : maxSpeed;
+        const desiredX = (dx / dist) * desiredSpeed;
+        const desiredY = (dy / dist) * desiredSpeed;
+        velX += (desiredX - velX) * steerStrength * dt;
+        velY += (desiredY - velY) * steerStrength * dt;
+        if (dist <= arriveDistance) {
+          targetPoint = null;
+          pickTarget(true);
+        }
       }
 
-      autoCloseTimer = setTimeout(() => {
-        deactivateTrigger("bollywoodReelTrap");
-      }, displayMs);
-    })().catch(() => {
-      deactivateTrigger("bollywoodReelTrap");
-    });
+      const speedNow = Math.hypot(velX, velY) || 1;
+      const clampedSpeed = Math.max(minSpeed, Math.min(maxSpeed, speedNow));
+      velX = (velX / speedNow) * clampedSpeed;
+      velY = (velY / speedNow) * clampedSpeed;
+
+      posX += velX * dt;
+      posY += velY * dt;
+
+      const w = motionWidth;
+      const h = motionHeight;
+      const { margin, maxX, maxY } = getBounds();
+      const cx = posX + (w / 2);
+      const cy = posY + (h / 2);
+      let collided = false;
+
+      if (posX <= margin) {
+        posX = margin;
+        velX = Math.abs(velX) * bounceRetention;
+        spawnFocusTag(margin + 56, cy);
+        targetPoint = null;
+        pickTarget(true);
+        collided = true;
+      } else if (posX >= maxX) {
+        posX = maxX;
+        velX = -Math.abs(velX) * bounceRetention;
+        spawnFocusTag(window.innerWidth - 78, cy);
+        targetPoint = null;
+        pickTarget(true);
+        collided = true;
+      }
+
+      if (posY <= margin) {
+        posY = margin;
+        velY = Math.abs(velY) * bounceRetention;
+        spawnFocusTag(cx, margin + 26);
+        targetPoint = null;
+        pickTarget(true);
+        collided = true;
+      } else if (posY >= maxY) {
+        posY = maxY;
+        velY = -Math.abs(velY) * bounceRetention;
+        spawnFocusTag(cx, window.innerHeight - 34);
+        targetPoint = null;
+        pickTarget(true);
+        collided = true;
+      }
+
+      if (collided) {
+        const postSpeed = Math.hypot(velX, velY) || 1;
+        const boosted = Math.max(minSpeed, Math.min(maxSpeed, postSpeed * 1.03));
+        velX = (velX / postSpeed) * boosted;
+        velY = (velY / postSpeed) * boosted;
+      }
+
+      const speed = Math.hypot(velX, velY);
+      const targetTilt = Math.max(-10, Math.min(10, (velX * 4.1) + (velY * 1.1)));
+      const damping = speed > 1 ? 0.22 : 0.15;
+      tiltDeg += (targetTilt - tiltDeg) * damping;
+
+      movingEl.style.left = `${Math.round(posX)}px`;
+      movingEl.style.top = `${Math.round(posY)}px`;
+      movingEl.style.transform = `translate3d(0, 0, 0) scale(${motionScale}) rotate(${tiltDeg.toFixed(2)}deg)`;
+      rafId = requestAnimationFrame(frame);
+    }
+
+    function beginMotion() {
+      if (activeMotion) return;
+      activeMotion = true;
+      intro.classList.add("closing");
+      setTimeout(() => intro.remove(), 240);
+      applyMotionStyles();
+      rafId = requestAnimationFrame(frame);
+    }
+
+    monitorTimer = setInterval(() => {
+      const movedToAnotherQuestion = String(state.currentQuestionId || "") !== targetQuestionId;
+      const hasAnswer = Boolean(String(selectedOptions[targetQuestionId] || "").trim());
+      if (movedToAnotherQuestion || hasAnswer) {
+        deactivateTrigger("boucingQuestion");
+      }
+    }, 180);
+
+    introTimer = setTimeout(beginMotion, 3200);
 
     return {
       durationMs: 0,
       cleanup: () => {
-        disposed = true;
-        clearTimeout(autoCloseTimer);
-        clearTimeout(safetyTimer);
-        shell?.classList.remove("stress-news-diversion-open");
-        panel?.remove();
-        releaseInterruptionLock("news");
+        activeMotion = false;
+        if (rafId) cancelAnimationFrame(rafId);
+        if (monitorTimer) clearInterval(monitorTimer);
+        if (introTimer) clearTimeout(introTimer);
+        intro.remove();
+        focusTrail.remove();
+        placeholder.remove();
+        movingEl.classList.remove("stress-bouncing-question-body");
+        movingEl.style.position = savedStyle.position;
+        movingEl.style.left = savedStyle.left;
+        movingEl.style.top = savedStyle.top;
+        movingEl.style.width = savedStyle.width;
+        movingEl.style.maxWidth = savedStyle.maxWidth;
+        movingEl.style.zIndex = savedStyle.zIndex;
+        movingEl.style.margin = savedStyle.margin;
+        movingEl.style.transform = savedStyle.transform;
+        movingEl.style.pointerEvents = savedStyle.pointerEvents;
+        movingEl.style.boxSizing = savedStyle.boxSizing;
+        movingEl.style.willChange = savedStyle.willChange;
       },
     };
   }
@@ -3020,11 +4200,1864 @@ const StressTriggers = (() => {
     }
   }
 
+  function applyInlineStyles(node, styles) {
+    if (!node || !styles) return node;
+    Object.entries(styles).forEach(([k, v]) => {
+      node.style[k] = String(v);
+    });
+    return node;
+  }
+
+  function showDevToast(message, options = {}) {
+    // Disabled in production - no toast notifications shown
+    return () => {}; // Return empty cleanup function
+  }
+
+  function showFocusCoach(message, options = {}) {
+    const bubble = document.createElement("div");
+    applyInlineStyles(bubble, {
+      position: "fixed",
+      right: "20px",
+      bottom: "80px",
+      zIndex: "13030",
+      maxWidth: "min(360px, 88vw)",
+      padding: "10px 12px",
+      borderRadius: "12px",
+      border: "1px solid rgba(100,255,218,0.34)",
+      background: options.background || "rgba(7, 21, 39, 0.93)",
+      color: "#dff5ff",
+      fontSize: "0.88rem",
+      lineHeight: "1.35",
+      boxShadow: "0 10px 28px rgba(0,0,0,0.34)",
+      opacity: "0",
+      transform: "translateY(8px)",
+      transition: "opacity 220ms ease, transform 220ms ease",
+    });
+    bubble.textContent = String(message || "");
+    document.body.appendChild(bubble);
+    requestAnimationFrame(() => {
+      bubble.style.opacity = "1";
+      bubble.style.transform = "translateY(0)";
+    });
+    const life = Math.max(1700, Number(options.durationMs || 2800));
+    const timer = setTimeout(() => {
+      bubble.style.opacity = "0";
+      bubble.style.transform = "translateY(8px)";
+      setTimeout(() => bubble.remove(), 240);
+    }, life);
+    return () => {
+      clearTimeout(timer);
+      bubble.remove();
+    };
+  }
+
+  function getActiveQuestionContext() {
+    const q = testQuestions[testQuestionIndex];
+    const stemText = String(questionStem?.textContent || "").replace(/\s+/g, " ").trim();
+    const selected = q ? selectedOptions[q.question_id] : "";
+    const labels = Array.from(questionOptions?.querySelectorAll("label.option input") || []).map((input) => input.value);
+    return { question: q || null, stemText, selected: String(selected || ""), labels };
+  }
+
+  function createManualOverlay(baseStyles) {
+    const layer = document.createElement("div");
+    applyInlineStyles(layer, {
+      position: "fixed",
+      inset: "0",
+      zIndex: "12920",
+      pointerEvents: "auto",
+      ...baseStyles,
+    });
+    document.body.appendChild(layer);
+    return layer;
+  }
+
+  function triggerDevMicroQuizPop() {
+    const cleanupFns = [];
+    const timers = [];
+    const speed = 0.55;
+    const deck = [
+      { prompt: "Quick: dimensional formula of Force?", options: ["MLT^-2", "ML^2T^-2", "M^-1LT^-2", "ML^-1T^-2"], answer: "MLT^-2" },
+      { prompt: "Identify the electrophile:", options: ["OH-", "NO2+", "NH2-", "CN-"], answer: "NO2+" },
+      { prompt: "Value of Rydberg constant?", options: ["1.097 x 10^7 m^-1", "9.8 m/s^2", "6.67 x 10^-11", "3 x 10^8"], answer: "1.097 x 10^7 m^-1" },
+    ];
+    const item = deck[stableRange("devMicroQuiz_item", 0, deck.length - 1)];
+    const preGlow = createManualOverlay({
+      background: "transparent",
+      pointerEvents: "none",
+      border: "2px solid rgba(227,242,253,0.25)",
+      boxShadow: "inset 0 0 28px rgba(227,242,253,0.48), inset 0 0 80px rgba(100,180,255,0.16)",
+      opacity: "0.45",
+    });
+    const pulseAnim = preGlow.animate([{ opacity: 0.25 }, { opacity: 0.72 }, { opacity: 0.25 }], { duration: 3000, iterations: Infinity, easing: "ease-in-out" });
+
+    const dim = createManualOverlay({
+      background: "rgba(8, 18, 34, 0.32)",
+      backdropFilter: "blur(3px)",
+      WebkitBackdropFilter: "blur(3px)",
+      opacity: "0",
+      transition: "opacity 220ms ease",
+      pointerEvents: "none",
+    });
+    const card = document.createElement("div");
+    applyInlineStyles(card, {
+      position: "fixed",
+      left: "50%",
+      bottom: "-440px",
+      transform: "translateX(-50%)",
+      width: "min(560px, 92vw)",
+      zIndex: "12930",
+      borderRadius: "18px",
+      overflow: "hidden",
+      color: "#ebf8ff",
+      border: "1px solid rgba(100,255,218,0.35)",
+      background: "linear-gradient(150deg, rgba(10,25,47,0.97), rgba(9,22,40,0.97))",
+      boxShadow: "0 24px 52px rgba(0,0,0,0.5)",
+      transition: "bottom 320ms cubic-bezier(0.2,0.8,0.2,1)",
+    });
+    card.innerHTML = `<div style="height:6px;background:rgba(100,255,218,0.12);position:relative;"><div id="devMicroTimer" style="position:absolute;inset:0 auto 0 0;width:100%;background:#64FFDA;transition:width linear;"></div></div><div style="padding:14px 16px 8px;font-weight:700;">Brain buffering? 🧠 Let's recalibrate.</div><div style="padding:0 16px 14px;opacity:.95;">${escapeHTML(item.prompt)}</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:0 16px 16px;">${item.options.map((o) => `<button type="button" class="dev-mq-opt" data-answer="${escapeHTML(o)}" style="border:1px solid rgba(100,255,218,0.35);background:rgba(100,255,218,0.08);color:#dff8f2;border-radius:10px;padding:10px 8px;cursor:pointer;">${escapeHTML(o)}</button>`).join("")}</div>`;
+    document.body.appendChild(card);
+
+    let done = false;
+    const finalize = (correct) => {
+      if (done) return;
+      done = true;
+      if (correct) {
+        showDevToast("Neural link re-established. ⚡ Back to the grind.", { background: "rgba(8,43,22,0.95)", border: "1px solid rgba(0,200,83,0.55)" });
+      } else {
+        showDevToast("Focus slipping. Take a deep breath and let's go again.", { background: "rgba(48,14,14,0.95)", border: "1px solid rgba(255,109,0,0.55)" });
+      }
+      deactivateTrigger("devMicroQuizPop");
+    };
+    cleanupFns.push(showFocusCoach("Coach: 2 second pause. Read stem, then only eliminate 2 wrong options first."));
+
+    card.querySelectorAll(".dev-mq-opt").forEach((btn) => btn.addEventListener("click", () => finalize(btn.getAttribute("data-answer") === item.answer)));
+    timers.push(setTimeout(() => {
+      dim.style.opacity = "1";
+      card.style.bottom = "40px";
+      const bar = card.querySelector("#devMicroTimer");
+      if (bar) {
+        bar.style.transitionDuration = `${Math.floor(5000 * speed)}ms`;
+        requestAnimationFrame(() => { bar.style.width = "0%"; });
+      }
+    }, Math.floor(12000 * speed)));
+    timers.push(setTimeout(() => finalize(false), Math.floor(17200 * speed)));
+
+    cleanupFns.push(() => timers.forEach((id) => clearTimeout(id)));
+    cleanupFns.push(() => pulseAnim.cancel());
+    cleanupFns.push(() => preGlow.remove());
+    cleanupFns.push(() => dim.remove());
+    cleanupFns.push(() => card.remove());
+    return { durationMs: Math.floor(18000 * speed), cleanup: () => cleanupFns.forEach((fn) => fn()) };
+  }
+
+  function triggerDevFocusSpotlight() {
+    const fadeTargets = [];
+    [".test-head", ".hud-panel", ".test-controls", ".score-meta", ".question-meta"].forEach((sel) => {
+      document.querySelectorAll(sel).forEach((el) => {
+        fadeTargets.push({ el, opacity: el.style.opacity });
+        el.style.opacity = "0.2";
+        el.style.transition = "opacity 300ms ease";
+      });
+    });
+
+    const vignette = createManualOverlay({
+      background: "radial-gradient(circle at center, rgba(18,18,18,0.12) 18%, rgba(18,18,18,0.9) 76%)",
+      opacity: "0",
+      transition: "opacity 300ms ease",
+    });
+    const lock = document.createElement("div");
+    applyInlineStyles(lock, {
+      position: "fixed",
+      left: "50%",
+      top: "40%",
+      transform: "translate(-50%, -50%)",
+      zIndex: "12945",
+      color: "#dff2ff",
+      fontSize: "34px",
+      textShadow: "0 0 18px rgba(100,255,218,0.5)",
+    });
+    lock.textContent = "🔒";
+    vignette.appendChild(lock);
+
+    const node = document.createElement("button");
+    node.type = "button";
+    applyInlineStyles(node, {
+      position: "fixed",
+      left: "18%",
+      top: "58%",
+      width: "34px",
+      height: "34px",
+      borderRadius: "50%",
+      border: "1px solid rgba(100,255,218,0.82)",
+      background: "radial-gradient(circle, #64ffda 0%, #0f8f7c 72%)",
+      boxShadow: "0 0 24px rgba(100,255,218,0.65)",
+      zIndex: "12950",
+      cursor: "pointer",
+      opacity: "0",
+      transition: "opacity 240ms ease",
+    });
+    document.body.appendChild(node);
+
+    const pathTrace = document.createElement("div");
+    applyInlineStyles(pathTrace, {
+      position: "fixed",
+      right: "24px",
+      bottom: "24px",
+      zIndex: "12952",
+      color: "#e3f2fd",
+      fontSize: "0.85rem",
+      padding: "8px 10px",
+      borderRadius: "10px",
+      border: "1px solid rgba(100,255,218,0.32)",
+      background: "rgba(18,18,18,0.62)",
+    });
+    pathTrace.textContent = "Tap moving Focus Node to unlock";
+    document.body.appendChild(pathTrace);
+
+    const drift = node.animate(
+      [{ transform: "translate(0,0)" }, { transform: "translate(56vw,-20vh)" }, { transform: "translate(16vw,12vh)" }],
+      { duration: 5300, easing: "ease-in-out", iterations: Infinity, direction: "alternate" }
+    );
+    vignette.style.opacity = "1";
+    node.style.opacity = "1";
+
+    let unlocked = false;
+    node.addEventListener("click", () => {
+      unlocked = true;
+      if (navigator.vibrate) {
+        try { navigator.vibrate(20); } catch (e) {}
+      }
+      showDevToast("Tunnel vision activated. 🎯 Keep your eyes on the prize.", { background: "rgba(9,44,24,0.95)", border: "1px solid rgba(0,200,83,0.55)" });
+      deactivateTrigger("devFocusSpotlight");
+    });
+
+    const failTimer = setTimeout(() => {
+      if (!unlocked) {
+        showDevToast("Focus slipped. Recalibration timed out.");
+        deactivateTrigger("devFocusSpotlight");
+      }
+    }, 9000);
+    const removeCoach = showFocusCoach("Coach: track the moving node with calm eyes, not fast clicks.");
+
+    return {
+      durationMs: 9600,
+      cleanup: () => {
+        clearTimeout(failTimer);
+        removeCoach();
+        drift.cancel();
+        vignette.remove();
+        node.remove();
+        pathTrace.remove();
+        fadeTargets.forEach(({ el, opacity }) => { el.style.opacity = opacity || ""; });
+      },
+    };
+  }
+
+  function triggerDevMatrixGlitch() {
+    if (!questionStem) return null;
+    const trapRegex = /\b(NOT|INCORRECT|EXCEPT)\b/i;
+    const sourceHtml = questionStem.innerHTML;
+    const sourceText = questionStem.textContent || "";
+    const fallbackRegex = /\b(least|most|always|never|only|maximum|minimum|all|none|must|best|correct|wrong)\b/i;
+    const numRegex = /\b\d+(\.\d+)?\b/;
+    let marker = trapRegex;
+    if (!trapRegex.test(sourceText)) {
+      if (fallbackRegex.test(sourceText)) marker = fallbackRegex;
+      else if (numRegex.test(sourceText)) marker = numRegex;
+      else marker = /\b[A-Za-z]{7,}\b/;
+    }
+    questionStem.innerHTML = sourceHtml.replace(marker, '<span data-dev-matrix-trap="1" style="font-weight:800;">$1</span>');
+    const trap = questionStem.querySelector("[data-dev-matrix-trap='1']");
+    if (!trap) {
+      questionStem.innerHTML = sourceHtml;
+      showDevToast("Could not detect a risky token in this stem.");
+      return null;
+    }
+    trap.scrollIntoView({ behavior: "smooth", block: "center" });
+    trap.animate(
+      [
+        { textShadow: "0 0 0 transparent", color: "#FF00FF", filter: "none" },
+        { textShadow: "-2px 0 #FF00FF, 2px 0 #00FFFF", color: "#00FFFF", filter: "saturate(1.45)" },
+        { textShadow: "2px 0 #FF00FF, -2px 0 #00FFFF", color: "#FF00FF", filter: "saturate(1.45)" },
+        { textShadow: "0 0 0 transparent", color: "inherit", filter: "none" },
+      ],
+      { duration: 520, easing: "steps(2, end)" }
+    );
+    if (navigator.vibrate) {
+      try { navigator.vibrate([24, 34, 24]); } catch (e) {}
+    }
+    showDevToast("Trap detector active. Slow down and parse this keyword/token.");
+    const removeCoach = showFocusCoach("Coach: line ko once silently read karo, phir option mark karo.");
+    return { durationMs: 2200, cleanup: () => { removeCoach(); questionStem.innerHTML = sourceHtml; } };
+  }
+
+  function triggerDevCognitiveMelt() {
+    if (!questionStem || !questionOptions) return null;
+    const cleanupFns = [];
+    const timers = [];
+    const tapNeeded = 3;
+    let tapCount = 0;
+    let wakeResolved = false;
+    // In manual/dev trigger testing, don't force full inactivity wait.
+    const isManual = Boolean(arguments[0]?.manual || arguments[0]?.force || arguments[0]?.immediate);
+    const inactiveMs = isManual ? 500 : stableRange("dev_cognitiveMelt_inactive", 12000, 15000);
+    const driftNodes = [];
+    const listeners = [];
+
+    const questionBits = [];
+    questionStem.querySelectorAll("p, li, span, strong, em").forEach((n) => {
+      if ((n.textContent || "").trim()) questionBits.push(n);
+    });
+    if (!questionBits.length && questionStem.firstChild) questionBits.push(questionStem);
+    const optionBits = Array.from(questionOptions.querySelectorAll("label.option"));
+    const allBits = [...questionBits.slice(0, 8), ...optionBits];
+    allBits.forEach((node, idx) => {
+      const prev = { transform: node.style.transform, transition: node.style.transition, filter: node.style.filter, opacity: node.style.opacity };
+      driftNodes.push({ node, prev });
+      node.style.transition = "transform 1200ms cubic-bezier(0.22,0.78,0.24,1), opacity 1200ms ease, filter 1200ms ease";
+      node.style.transformOrigin = "50% 50%";
+      node.style.willChange = "transform, opacity, filter";
+      timers.push(setTimeout(() => {
+        const dx = stableRange(`dev_cognitiveMelt_dx_${idx}`, -90, 90);
+        const dy = stableRange(`dev_cognitiveMelt_dy_${idx}`, 90, 220);
+        const rot = stableRange(`dev_cognitiveMelt_rot_${idx}`, -24, 24);
+        node.style.transform = `translate(${dx}px, ${dy}px) rotate(${rot}deg) scale(0.96)`;
+        node.style.opacity = "0.28";
+        node.style.filter = "blur(0.9px)";
+      }, 110 + idx * 70));
+    });
+
+    const shade = createManualOverlay({
+      zIndex: "12965",
+      background: "linear-gradient(180deg, rgba(6,15,28,0.22), rgba(6,15,28,0.58))",
+      pointerEvents: "none",
+      opacity: "0",
+      transition: "opacity 260ms ease",
+    });
+    const wakePanel = document.createElement("div");
+    const stemRect = questionStem.getBoundingClientRect();
+    const wakeTop = Math.min(window.innerHeight - 140, Math.max(92, Math.round(stemRect.bottom + 18)));
+    applyInlineStyles(wakePanel, {
+      position: "fixed",
+      left: "50%",
+      top: `${wakeTop}px`,
+      transform: "translateX(-50%)",
+      zIndex: "12970",
+      borderRadius: "16px",
+      border: "1px solid rgba(255,255,255,0.42)",
+      background: "rgba(9,23,40,0.96)",
+      color: "#f4fbff",
+      padding: "14px 16px",
+      minWidth: "min(420px, 92vw)",
+      textAlign: "center",
+      opacity: "1",
+      transition: "opacity 180ms ease",
+      boxShadow: "0 18px 48px rgba(0,0,0,0.45)",
+      pointerEvents: "auto",
+      userSelect: "none",
+    });
+    wakePanel.innerHTML = `<div style="font-weight:800;font-size:1.08rem;margin-bottom:6px;">Cognitive Melt</div><div id="devWakeGuide" style="font-size:.96rem;opacity:.97;">Move cursor to activate tapping</div><button type="button" id="devWakeBtn" tabindex="0" disabled style="margin-top:12px;min-height:60px;min-width:260px;padding:14px 22px;border-radius:14px;border:1px solid #FFD400;background:linear-gradient(135deg,#FFE347,#FFC400);color:#1b1200;font-size:1.08rem;font-weight:800;letter-spacing:.02em;cursor:not-allowed;opacity:.55;pointer-events:auto;position:relative;z-index:1;touch-action:manipulation;box-shadow:0 10px 24px rgba(255,196,0,0.5), inset 0 1px 0 rgba(255,255,255,0.45);">Tap 3 Times (0/3)</button>`;
+    document.body.appendChild(wakePanel);
+
+    const resolveWake = () => {
+      if (wakeResolved) return;
+      wakeResolved = true;
+      showDevToast("Focus restored. Back to controlled reading.", { background: "rgba(7,44,24,0.95)" });
+      deactivateTrigger("devCognitiveMelt");
+    };
+
+    const armMelt = () => {
+      shade.style.opacity = "1";
+      wakePanel.style.opacity = "1";
+      wakePanel.animate(
+        [{ transform: "translateX(-50%) scale(0.96)" }, { transform: "translateX(-50%) scale(1)" }],
+        { duration: 180, easing: "ease-out", fill: "forwards" }
+      );
+      const btn = wakePanel.querySelector("#devWakeBtn");
+      const guide = wakePanel.querySelector("#devWakeGuide");
+      const clickMessages = [
+        "Good. Breath in 2 seconds, breath out 2 seconds.",
+        "Nice. Now read only the last line of question carefully.",
+        "Perfect. Focus lock regained. Solve step-by-step.",
+      ];
+      let tapArmed = false;
+      const onTap = () => {
+        if (!tapArmed) return;
+        if (wakeResolved) return;
+        tapCount += 1;
+        if (btn) btn.textContent = `Tap 3 Times (${tapCount}/${tapNeeded})`;
+        const msg = clickMessages[Math.min(tapCount - 1, clickMessages.length - 1)];
+        showFocusCoach(`Coach: ${msg}`, { durationMs: 1800 });
+        if (tapCount >= tapNeeded) resolveWake();
+      };
+      const onPointerUp = (evt) => {
+        evt.preventDefault();
+        evt.stopPropagation();
+        onTap();
+      };
+      const onTouchStart = (evt) => {
+        evt.preventDefault();
+        evt.stopPropagation();
+        onTap();
+      };
+      const onKeyDown = (evt) => {
+        if (evt.key === "Enter" || evt.key === " ") {
+          evt.preventDefault();
+          onTap();
+        }
+      };
+      btn?.addEventListener("pointerup", onPointerUp);
+      btn?.addEventListener("touchstart", onTouchStart, { passive: false });
+      btn?.addEventListener("keydown", onKeyDown);
+      btn?.addEventListener("click", onTap);
+      listeners.push({ target: btn, type: "pointerup", fn: onPointerUp });
+      listeners.push({ target: btn, type: "touchstart", fn: onTouchStart });
+      listeners.push({ target: btn, type: "keydown", fn: onKeyDown });
+      listeners.push({ target: btn, type: "click", fn: onTap });
+
+      let moved = 0;
+      let prevX = null;
+      let prevY = null;
+      const moveArmedAt = Date.now() + 80;
+      const onMove = (evt) => {
+        if (Date.now() < moveArmedAt) return;
+        if (wakeResolved) return;
+        const x = Number(evt?.clientX || 0);
+        const y = Number(evt?.clientY || 0);
+        if (prevX == null || prevY == null) {
+          prevX = x;
+          prevY = y;
+          return;
+        }
+        if (prevX != null && prevY != null) {
+          moved += Math.hypot(x - prevX, y - prevY);
+        }
+        prevX = x;
+        prevY = y;
+        if (!tapArmed && moved >= 1000) {
+          tapArmed = true;
+          if (btn) {
+            btn.disabled = false;
+            btn.style.opacity = "1";
+            btn.style.cursor = "pointer";
+            btn.textContent = `Tap 3 Times (${tapCount}/${tapNeeded})`;
+          }
+          if (guide) guide.textContent = "Now tap the button 3 times to restore focus";
+          showFocusCoach("Coach: good, tap mode activated. Press the button 3 times.");
+        }
+      };
+      window.addEventListener("mousemove", onMove, { passive: true });
+      listeners.push({ target: window, type: "mousemove", fn: onMove });
+      cleanupFns.push(showFocusCoach("Coach: aankhon se stem ko track karo. Saans normal, phir restart."));
+    };
+
+    timers.push(setTimeout(armMelt, inactiveMs));
+
+    return {
+      // Keep enough time after wake UI appears so student can react.
+      durationMs: Math.max(38000, inactiveMs + 26000),
+      cleanup: () => {
+        timers.forEach((id) => clearTimeout(id));
+        listeners.forEach(({ target, type, fn }) => target?.removeEventListener(type, fn));
+        driftNodes.forEach(({ node, prev }) => {
+          node.style.transform = prev.transform || "";
+          node.style.transition = prev.transition || "";
+          node.style.filter = prev.filter || "";
+          node.style.opacity = prev.opacity || "";
+          node.style.willChange = "";
+        });
+        shade.remove();
+        wakePanel.remove();
+        cleanupFns.forEach((fn) => fn?.());
+      },
+    };
+  }
+
+  function triggerDevSlideToLock() {
+    if (!questionOptions) return null;
+    const ctx = getActiveQuestionContext();
+    const currentLabel = ctx.selected || ctx.labels[0] || "";
+    if (!currentLabel) return null;
+    const targetLabel = questionOptions.querySelector(`label.option input[value="${currentLabel}"]`)?.closest("label.option");
+    if (!targetLabel) return null;
+    targetLabel.classList.add("stress-mirage");
+
+    const shell = document.createElement("div");
+    applyInlineStyles(shell, {
+      marginTop: "10px",
+      padding: "10px",
+      borderRadius: "12px",
+      background: "rgba(255,215,0,0.1)",
+      border: "1px solid rgba(255,215,0,0.42)",
+    });
+    shell.innerHTML = `<div style="font-size:.9rem;color:#ffd700;margin-bottom:8px;">Slide to lock in Option ${escapeHTML(currentLabel)}.</div><input type="range" min="0" max="100" value="0" class="dev-lock-slider" style="width:100%;accent-color:#FFD700;">`;
+    targetLabel.appendChild(shell);
+    const slider = shell.querySelector(".dev-lock-slider");
+    slider?.focus();
+    slider?.addEventListener("input", () => {
+      const val = Number(slider.value || 0);
+      shell.style.background = `linear-gradient(90deg, rgba(255,215,0,0.18) ${val}%, rgba(255,215,0,0.08) ${val}%)`;
+      slider.style.accentColor = val >= 96 ? "#00C853" : "#FFD700";
+      if (val < 96) return;
+      if (navigator.vibrate) {
+        try { navigator.vibrate(45); } catch (e) {}
+      }
+      showDevToast("Locked and loaded. 🔒", { background: "rgba(8,47,23,0.95)", border: "1px solid rgba(0,200,83,0.55)" });
+      const triggerRecall = /\d/.test(ctx.stemText || "") || (ctx.question && String(ctx.question.question_type || "").toLowerCase() === "integer");
+      deactivateTrigger("devSlideToLock");
+      if (triggerRecall) {
+        setTimeout(() => activateManualShowcaseTrigger("devBlindRecall", { source: "slide_lock_chain" }), 180);
+      }
+    });
+    return {
+      durationMs: 13000,
+      cleanup: () => {
+        targetLabel.classList.remove("stress-mirage");
+        shell.remove();
+      },
+    };
+  }
+
+  function triggerDevBlindRecall() {
+    const ctx = getActiveQuestionContext();
+    const numeric = (ctx.stemText.match(/\b\d+(\.\d+)?\b/g) || []).slice(0, 3);
+    const correctVal = numeric[0] || "Not given";
+    const variants = ["Not given", "0.1", "0.2", "0.5", "1", "2", "10"];
+    const pool = [correctVal, ...variants.filter((v) => v !== correctVal)].slice(0, 4);
+    for (let i = pool.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    const layer = createManualOverlay({
+      zIndex: "12970",
+      background: "rgba(98,0,234,0.94)",
+      display: "grid",
+      placeItems: "center",
+    });
+    const card = document.createElement("div");
+    applyInlineStyles(card, {
+      width: "min(530px, 90vw)",
+      borderRadius: "16px",
+      background: "rgba(12,9,36,0.86)",
+      border: "1px solid rgba(215,183,255,0.52)",
+      boxShadow: "0 24px 64px rgba(0,0,0,0.45)",
+      padding: "18px",
+      color: "#fff",
+    });
+    card.innerHTML = `<div style="font-weight:700;font-size:1.03rem;margin-bottom:10px;">Wait, what key value did the question give?</div><div style="opacity:.9;margin-bottom:10px;">Memory check in 3 seconds. Choose fast.</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">${pool.map((v) => `<button type="button" class="dev-recall-choice" data-v="${escapeHTML(v)}" style="padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.26);background:rgba(255,255,255,0.08);color:#fff;">${escapeHTML(v)}</button>`).join("")}</div><div style="margin-top:12px;height:6px;background:rgba(255,255,255,0.16);border-radius:999px;overflow:hidden;"><div id="devRecallFuse" style="height:100%;width:100%;background:#ffb300;"></div></div>`;
+    layer.appendChild(card);
+    layer.animate([{ transform: "rotateY(0deg)" }, { transform: "rotateY(180deg)" }, { transform: "rotateY(360deg)" }], { duration: 420, easing: "ease-in-out" });
+    card.querySelector("#devRecallFuse")?.animate([{ width: "100%" }, { width: "0%" }], { duration: 3000, easing: "linear", fill: "forwards" });
+    const timeout = setTimeout(() => {
+      showDevToast("Careful! Don't lose track of your variables.");
+      deactivateTrigger("devBlindRecall");
+    }, 3050);
+    card.querySelectorAll(".dev-recall-choice").forEach((btn) => btn.addEventListener("click", () => {
+      const ok = btn.getAttribute("data-v") === correctVal;
+      showDevToast(ok ? "Memory of an elephant! +10 Accuracy XP." : "Careful! Don't lose track of your variables.", {
+        background: ok ? "rgba(9,47,24,0.95)" : "rgba(48,14,14,0.95)",
+      });
+      deactivateTrigger("devBlindRecall");
+    }));
+    return { durationMs: 3600, cleanup: () => { clearTimeout(timeout); layer.remove(); } };
+  }
+
+  function triggerDevConfidenceSlider() {
+    const host = getTestCard();
+    if (!host) return null;
+    const panel = document.createElement("div");
+    applyInlineStyles(panel, {
+      marginTop: "12px",
+      borderRadius: "14px",
+      border: "1px solid rgba(255,255,255,0.14)",
+      background: "rgba(8,20,35,0.78)",
+      padding: "12px",
+      color: "#eaf5ff",
+    });
+    panel.innerHTML = `<div style="font-weight:700;margin-bottom:7px;">Confidence Slider (Risk vs Reward)</div><input type="range" min="0" max="100" value="50" id="devConfRange" style="width:100%;accent-color:#FF6D00;"><div style="display:flex;justify-content:space-between;margin-top:6px;font-size:.9rem;"><span id="devConfBand">Calculated Risk</span><span id="devConfPts">+2 / -1</span></div><button type="button" id="devConfCommit" class="btn primary small" style="margin-top:10px;">Lock confidence</button>`;
+    host.appendChild(panel);
+    const range = panel.querySelector("#devConfRange");
+    const band = panel.querySelector("#devConfBand");
+    const pts = panel.querySelector("#devConfPts");
+    const update = () => {
+      const val = Number(range?.value || 0);
+      if (val <= 30) {
+        if (range) range.style.accentColor = "#D50000";
+        if (band) band.textContent = "High Risk";
+        if (pts) pts.textContent = "0 / 0";
+      } else if (val <= 70) {
+        if (range) range.style.accentColor = "#FF6D00";
+        if (band) band.textContent = "Calculated Risk";
+        if (pts) pts.textContent = "+2 / -1";
+      } else {
+        if (range) range.style.accentColor = "#00C853";
+        if (band) band.textContent = "Sure Shot";
+        if (pts) pts.textContent = "+4 / -2";
+      }
+    };
+    update();
+    range?.addEventListener("input", update);
+    panel.querySelector("#devConfCommit")?.addEventListener("click", () => {
+      const val = Number(range?.value || 0);
+      const confidenceBias = val >= 90 ? 0.67 : val <= 25 ? 0.38 : 0.52;
+      const correct = Math.random() < confidenceBias;
+      if (val >= 95 && correct) {
+        showDevToast("Calculated risk paid off! High conviction, high reward. 🎯");
+      } else if (val >= 95 && !correct) {
+        getAppShell()?.animate([{ transform: "translateX(0)" }, { transform: "translateX(-8px)" }, { transform: "translateX(8px)" }, { transform: "translateX(0)" }], { duration: 280, easing: "ease-in-out" });
+        showDevToast("Overconfidence penalty applied. Stay grounded.");
+      } else if (val <= 5 && !correct) {
+        showDevToast("Good thing you hedged your bets. Negative marking avoided.");
+      } else {
+        showDevToast("Confidence logged. Keep calibrating your risk.");
+      }
+      deactivateTrigger("devConfidenceSlider");
+    });
+    return { durationMs: 18000, cleanup: () => panel.remove() };
+  }
+
+  function triggerDifficultyCheckPrompt() {
+    if (state.feedbackPromptOpen) return null;
+    const qid = String(state.currentQuestionId || "");
+    const userState = currentUserState();
+    const mood = inferFeedbackMood(userState);
+    const prompt = "How was that last question?";
+    const triggerName = "difficultyCheckPrompt";
+
+    state.feedbackPromptOpen = true;
+    state.feedbackLastShownAt = Date.now();
+    state.lastFeedbackQuestionType = "difficulty";
+    acquireInterruptionLock("feedback");
+
+    const overlay = document.createElement("div");
+    overlay.className = "stress-difficulty-check-overlay";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-live", "polite");
+    overlay.innerHTML = `
+      <div class="stress-difficulty-check-card">
+        <div class="stress-difficulty-check-eyebrow">Quick Check</div>
+        <div class="stress-difficulty-check-title">${escapeHTML(prompt)}</div>
+        <div class="stress-difficulty-check-sub">Your honest rating before we continue.</div>
+        <div class="stress-difficulty-check-options">
+          <button type="button" class="stress-difficulty-check-option easy" data-level="Easy">
+            <span class="stress-difficulty-check-emoji" aria-hidden="true">😎</span>
+            <span class="stress-difficulty-check-label">Easy</span>
+          </button>
+          <button type="button" class="stress-difficulty-check-option medium" data-level="Medium">
+            <span class="stress-difficulty-check-emoji" aria-hidden="true">🤔</span>
+            <span class="stress-difficulty-check-label">Medium</span>
+          </button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    let finalized = false;
+    const closeTimer = setTimeout(() => finalizeChoice("No response"), FEEDBACK_PROMPT_MAX_OPEN_MS);
+
+    function finalizeChoice(choice) {
+      if (finalized) return;
+      finalized = true;
+      clearTimeout(closeTimer);
+      const selected = String(choice || "");
+      const selectedLower = selected.toLowerCase();
+
+      const payload = {
+        at: Date.now(),
+        reason: "trigger_difficulty_check",
+        kind: "difficulty",
+        mood,
+        answer: selected,
+        question: prompt,
+        question_id: qid || "",
+      };
+      state.feedbackResponseHistory.push(payload);
+      if (state.feedbackResponseHistory.length > 30) {
+        state.feedbackResponseHistory = state.feedbackResponseHistory.slice(-30);
+      }
+
+      if (selectedLower.includes("hard")) state.feedbackDifficultyPreference = "hard";
+      else if (selectedLower.includes("easy")) state.feedbackDifficultyPreference = "easy";
+      else state.feedbackDifficultyPreference = "medium";
+
+      const snapshot = snapshotFeedbackMetrics(userState);
+      if (sessionId) {
+        postJSON(`/session/${sessionId}/trigger-feedback`, {
+          trigger: "student_feedback_pulse:difficulty_check",
+          intensity: applyFeedbackIntensityBias("low"),
+          pre_metrics: snapshot,
+          post_metrics: snapshot,
+          recovery_metrics: snapshot,
+          note: `[difficulty-check] ${prompt} -> ${selected}`,
+        }).catch((err) => debugLog("feedback_persist_error", err?.message || String(err)));
+      }
+
+      // Trigger AI recommender again with explicit difficulty feedback context.
+      const recommendedLevel = state.feedbackDifficultyPreference;
+      setTimeout(() => {
+        requestTriggerFromAI("difficulty_feedback_submitted", {
+          source_trigger: triggerName,
+          difficulty_feedback: selected || "No response",
+          preferred_trigger_difficulty: recommendedLevel,
+          question_id: qid || "",
+        });
+      }, SCREEN_QUIET_BREAK_MS + 220);
+
+      deactivateTrigger(triggerName);
+    }
+
+    function showSelectionResult(choice) {
+      const selected = String(choice || "Medium").trim();
+      const selectedLower = selected.toLowerCase();
+      const easyPicked = selectedLower.includes("easy");
+      const resultClass = easyPicked ? "is-easy" : "is-medium";
+      const headline = easyPicked
+        ? "Easy? We'll remember you said that."
+        : "When people are unsure about the question they chose medium.";
+      const sub = "Preparing the next one...";
+      const emoji = easyPicked ? "😏" : "🤨";
+
+      const card = overlay.querySelector(".stress-difficulty-check-card");
+      if (!card) {
+        finalizeChoice(selected);
+        return;
+      }
+
+      card.className = `stress-difficulty-check-card stress-difficulty-check-result ${resultClass}`;
+      card.innerHTML = `
+        <div class="stress-difficulty-check-result-emoji" aria-hidden="true">${emoji}</div>
+        <div class="stress-difficulty-check-result-title">${escapeHTML(headline)}</div>
+        <div class="stress-difficulty-check-result-sub">${escapeHTML(sub)}</div>
+      `;
+
+      setTimeout(() => finalizeChoice(selected), 1400);
+    }
+
+    overlay.querySelectorAll(".stress-difficulty-check-option").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const level = btn.getAttribute("data-level") || "Medium";
+        showSelectionResult(level);
+      });
+    });
+
+    return {
+      durationMs: 0,
+      cleanup: () => {
+        clearTimeout(closeTimer);
+        overlay.remove();
+        state.feedbackPromptOpen = false;
+        releaseInterruptionLock("feedback");
+      },
+    };
+  }
+
+  // ========================================================================
+  // Question-Level Triggers for Focus Zones Test
+  // Using beautiful glassmorphic design matching existing triggers
+  // ========================================================================
+
+  // Q1 → SPOTLIGHT_HUNT
+  // Fires 6 seconds after Q1 loads. Dark overlay with 320px radius lit circle
+  // that drifts following sine wave. Runs indefinitely.
+  function triggerSpotlightHunt() {
+    if (!questionBody) return null;
+    
+    const spotlight = document.createElement('div');
+    spotlight.className = 'stress-spotlight-overlay';
+    spotlight.setAttribute('role', 'presentation');
+    spotlight.setAttribute('aria-hidden', 'true');
+    
+    // Start at center
+    let centerX = window.innerWidth / 2;
+    let centerY = window.innerHeight / 2;
+    let time = 0;
+    
+    spotlight.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: radial-gradient(
+        circle 160px at ${centerX}px ${centerY}px,
+        transparent 0%,
+        rgba(0,0,0,0.95) 160px
+      );
+      pointer-events: none;
+      z-index: 9998;
+    `;
+    
+    // Sine wave drift animation
+    const driftInterval = setInterval(() => {
+      time += 0.05;
+      const driftX = Math.sin(time) * 100;
+      const driftY = Math.cos(time * 0.7) * 80;
+      const spotX = centerX + driftX;
+      const spotY = centerY + driftY;
+      
+      spotlight.style.background = `radial-gradient(
+        circle 160px at ${spotX}px ${spotY}px,
+        transparent 0%,
+        rgba(0,0,0,0.95) 160px
+      )`;
+    }, 50);
+    
+    document.body.appendChild(spotlight);
+    
+    return {
+      durationMs: 0, // Runs indefinitely
+      cleanup: () => {
+        clearInterval(driftInterval);
+        spotlight.remove();
+      },
+    };
+  }
+
+  // Q2 → HARD_FOG
+  function triggerHardFog() {
+    if (!questionBody) return null;
+    
+    const timers = [];
+    let fogElement = null;
+    let stressCountdown = null;
+    let countdownInterval = null; // Store interval reference for cleanup
+    const triggerQuestionId = state.currentQuestionId; // Store the question ID when trigger starts
+    let isCleanedUp = false; // Flag to prevent actions after cleanup
+    
+    // Monitor for question changes and cleanup immediately
+    const questionChangeMonitor = setInterval(() => {
+      if (state.currentQuestionId !== triggerQuestionId && !isCleanedUp) {
+        console.log('[triggerHardFog] Question changed detected by monitor - cleaning up immediately');
+        isCleanedUp = true;
+        clearInterval(questionChangeMonitor);
+        
+        // Clear all timers
+        timers.forEach(t => clearTimeout(t));
+        if (countdownInterval) clearInterval(countdownInterval);
+        
+        // Remove all elements
+        const overlays = document.querySelectorAll('.stress-difficulty-check-overlay');
+        overlays.forEach(el => el.remove());
+        if (fogElement) fogElement.remove();
+        if (stressCountdown) stressCountdown.remove();
+      }
+    }, 100); // Check every 100ms
+    
+    const overlay = document.createElement('div');
+    overlay.className = 'stress-difficulty-check-overlay';
+    overlay.innerHTML = `
+      <div class="stress-difficulty-check-card">
+        <div class="stress-difficulty-check-emoji">🤔</div>
+        <div class="stress-difficulty-check-title">Rate Previous Question</div>
+        <div class="stress-difficulty-check-sub">How difficult was it for you?</div>
+        <div class="stress-difficulty-check-options" style="grid-template-columns: repeat(3, 1fr);">
+          <button class="stress-difficulty-check-option easy" data-rating="easy">
+            <span class="stress-difficulty-check-emoji">😊</span>
+            <span style="font-size: 18px; font-weight: 700;">Easy</span>
+          </button>
+          <button class="stress-difficulty-check-option medium" data-rating="medium">
+            <span class="stress-difficulty-check-emoji">😐</span>
+            <span style="font-size: 18px; font-weight: 700;">Medium</span>
+          </button>
+          <button class="stress-difficulty-check-option" style="border-color: rgba(255, 99, 132, 0.72); color: #ff6384;" data-rating="hard">
+            <span class="stress-difficulty-check-emoji">😰</span>
+            <span style="font-size: 18px; font-weight: 700;">Hard</span>
+          </button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    
+    const showSelectionResult = (choice) => {
+      const selected = String(choice || "Medium").trim();
+      const selectedLower = selected.toLowerCase();
+      const easyPicked = selectedLower.includes("easy");
+      const hardPicked = selectedLower.includes("hard");
+      
+      let emoji, headline;
+      if (easyPicked) {
+        emoji = "😏";
+        headline = "Easy? We'll remember you said that.";
+      } else if (hardPicked) {
+        emoji = "😰";
+        headline = "Hard? At least you're honest about your limits.";
+      } else {
+        emoji = "🤨";
+        headline = "When people are unsure they chose medium.";
+      }
+      
+      const card = overlay.querySelector('.stress-difficulty-check-card');
+      if (!card) {
+        continueSequence();
+        return;
+      }
+      
+      card.className = 'stress-difficulty-check-card stress-difficulty-check-result';
+      card.innerHTML = `
+        <div class="stress-difficulty-check-result-emoji" aria-hidden="true">${emoji}</div>
+        <div class="stress-difficulty-check-result-title">${headline}</div>
+        <div class="stress-difficulty-check-result-sub">Preparing the next one...</div>
+      `;
+      
+      setTimeout(() => continueSequence(), 1400);
+    };
+    
+    const continueSequence = () => {
+      // Check if we're still on the same question
+      if (state.currentQuestionId !== triggerQuestionId) {
+        console.log('[triggerHardFog] Question changed, stopping sequence');
+        overlay.remove();
+        return;
+      }
+      
+      overlay.remove();
+      
+      timers.push(setTimeout(() => {
+        // Check again before showing warning
+        if (state.currentQuestionId !== triggerQuestionId) {
+          console.log('[triggerHardFog] Question changed, stopping at warning');
+          return;
+        }
+        
+        const warningOverlay = document.createElement('div');
+        warningOverlay.className = 'stress-difficulty-check-overlay';
+        warningOverlay.innerHTML = `
+          <div class="binary-card">
+            <div class="stress-difficulty-check-emoji" style="font-size: 62px;">⚠️</div>
+            <div class="binary-question">Hard Question Ahead</div>
+            <div class="stress-difficulty-check-sub">Prepare yourself. This one is challenging.</div>
+          </div>
+        `;
+        document.body.appendChild(warningOverlay);
+        
+        timers.push(setTimeout(() => {
+          // Check again before showing countdown
+          if (state.currentQuestionId !== triggerQuestionId) {
+            console.log('[triggerHardFog] Question changed, stopping at countdown');
+            warningOverlay.remove();
+            return;
+          }
+          
+          warningOverlay.remove();
+          
+          stressCountdown = document.createElement('div');
+          stressCountdown.className = 'trigger-countdown';
+          document.body.appendChild(stressCountdown);
+          
+          let timeLeft = 30;
+          stressCountdown.textContent = `⏱️ ${timeLeft}s`;
+          
+          countdownInterval = setInterval(() => {
+            // Check if question changed during countdown
+            if (state.currentQuestionId !== triggerQuestionId) {
+              console.log('[triggerHardFog] Question changed during countdown, stopping');
+              clearInterval(countdownInterval);
+              if (stressCountdown) stressCountdown.remove();
+              if (fogElement) fogElement.remove();
+              return;
+            }
+            
+            timeLeft--;
+            if (timeLeft <= 0) {
+              clearInterval(countdownInterval);
+              if (typeof skipToNextQuestion === 'function') {
+                skipToNextQuestion();
+              }
+              return;
+            }
+            stressCountdown.textContent = `⏱️ ${timeLeft}s`;
+            if (timeLeft <= 10) {
+              stressCountdown.classList.add('urgent');
+            }
+          }, 1000);
+          
+          timers.push(setTimeout(() => {
+            // Check if question changed before applying fog
+            if (state.currentQuestionId !== triggerQuestionId) {
+              console.log('[triggerHardFog] Question changed, not applying fog');
+              return;
+            }
+            
+            fogElement = document.createElement('div');
+            fogElement.className = 'trigger-fog-overlay';
+            
+            if (questionBody.parentElement) {
+              questionBody.style.position = 'relative';
+              questionBody.appendChild(fogElement);
+            }
+            
+            timers.push(setTimeout(() => {
+              if (fogElement) fogElement.remove();
+            }, 45000));
+            
+          }, 3500));
+          
+        }, 6000));
+        
+      }, 2500));
+    };
+    
+    overlay.querySelectorAll('.stress-difficulty-check-option').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const rating = btn.getAttribute('data-rating') || 'medium';
+        showSelectionResult(rating);
+      });
+    });
+    
+    return {
+      durationMs: 0,
+      cleanup: () => {
+        console.log('[triggerHardFog] Cleanup called - clearing', timers.length, 'timers');
+        isCleanedUp = true;
+        clearInterval(questionChangeMonitor);
+        timers.forEach(t => clearTimeout(t));
+        if (countdownInterval) {
+          console.log('[triggerHardFog] Clearing countdown interval');
+          clearInterval(countdownInterval);
+        }
+        overlay.remove();
+        if (fogElement) {
+          console.log('[triggerHardFog] Removing fog element');
+          fogElement.remove();
+        }
+        if (stressCountdown) {
+          console.log('[triggerHardFog] Removing countdown element');
+          stressCountdown.remove();
+        }
+      },
+    };
+  }
+
+  // Q3 → FLIP_CYCLE
+  // Fires 5s after Q3 loads. Flips 180°, stays 5s, flips back, waits 5s, repeats 5 times.
+  // Final flip state stays permanently.
+  function triggerFlipCycle() {
+    const shell = getAppShell();
+    if (!shell) return null;
+    
+    let flipCount = 0;
+    const maxFlips = 5;
+    let isFlipped = false;
+    
+    shell.style.transition = 'transform 1s ease-in-out';
+    
+    const doFlip = () => {
+      if (flipCount >= maxFlips) return;
+      
+      isFlipped = !isFlipped;
+      shell.style.transform = isFlipped ? 'rotateX(180deg)' : 'rotateX(0deg)';
+      flipCount++;
+      
+      if (flipCount < maxFlips) {
+        setTimeout(doFlip, 5000); // Wait 5s before next flip
+      }
+      // If flipCount === maxFlips, leave it in final state permanently
+    };
+    
+    doFlip(); // Start first flip
+    
+    return {
+      durationMs: 0, // Runs indefinitely, final state stays
+      cleanup: () => {
+        // Don't reset transform - final flip state should stay
+      },
+    };
+  }
+
+  // Q4 → ACCURACY_TEST
+  function triggerAccuracyTest(ctx) {
+    if (!questionBody) return null;
+    
+    console.log('[triggerAccuracyTest] Starting accuracy test');
+    
+    let shakeTimeoutId = null;
+    const timePenalty = 180000; // 3 minutes penalty (180 seconds)
+    const createdOverlays = []; // Track all created overlays for cleanup
+    let isCleanedUp = false; // Flag to prevent showing popups after cleanup
+    const triggerQuestionId = state.currentQuestionId; // Store the question ID when trigger starts
+    
+    // Create the initial popup - exact colors from design
+    const overlay = document.createElement('div');
+    overlay.className = 'stress-difficulty-check-overlay';
+    overlay.style.zIndex = '10000';
+    createdOverlays.push(overlay);
+    overlay.innerHTML = `
+      <div class="stress-difficulty-check-card" style="
+        max-width: 420px; 
+        padding: 40px 28px; 
+        background: rgba(30, 25, 20, 0.98);
+        border: 1px solid rgba(120, 100, 80, 0.3);
+        border-radius: 20px;
+      ">
+        <div class="stress-difficulty-check-emoji" style="font-size: 80px; margin-bottom: 20px;">🎯</div>
+        <div class="stress-difficulty-check-eyebrow" style="
+          font-size: 11px; 
+          letter-spacing: 0.2em; 
+          text-transform: uppercase; 
+          color: #D4A574; 
+          font-weight: 700; 
+          margin-bottom: 16px;
+        ">ACCURACY CHECK</div>
+        <div class="stress-difficulty-check-title" style="
+          font-size: 26px; 
+          font-weight: 700; 
+          margin-bottom: 12px; 
+          line-height: 1.3;
+          color: #FFFFFF;
+        ">Wanna test your accuracy?</div>
+        <div class="stress-difficulty-check-sub" style="
+          font-size: 14px; 
+          color: rgba(180, 170, 160, 0.85); 
+          font-style: italic; 
+          margin-bottom: 28px;
+        ">(Say yes if you're confident you can read anything.)</div>
+        <div class="binary-actions" style="display: flex; gap: 12px; width: 100%;">
+          <button class="binary-btn" id="accuracy-no" style="
+            flex: 1; 
+            background: rgba(50, 45, 40, 0.6); 
+            border: 1px solid rgba(100, 90, 80, 0.4); 
+            color: rgba(200, 190, 180, 0.9); 
+            padding: 16px 24px; 
+            border-radius: 12px; 
+            font-size: 16px; 
+            font-weight: 600; 
+            cursor: pointer; 
+            transition: all 0.2s;
+          ">No</button>
+          <button class="binary-btn" id="accuracy-yes" style="
+            flex: 1; 
+            background: #F5A623; 
+            border: 1px solid #F5A623; 
+            color: #1A1410; 
+            padding: 16px 24px; 
+            border-radius: 12px; 
+            font-size: 16px; 
+            font-weight: 700; 
+            cursor: pointer; 
+            transition: all 0.2s;
+          ">Yes</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    
+    // Apply time penalty and show penalty UI (Image 2)
+    const applyTimePenalty = () => {
+      console.log('[triggerAccuracyTest] Applying time penalty:', timePenalty, 'ms');
+      
+      // Apply penalty by making it appear the exam started earlier
+      // This increases the elapsed time, reducing the remaining time
+      if (state.examStartedAt && state.examStartedAt > 0) {
+        state.examStartedAt -= timePenalty;
+        console.log('[triggerAccuracyTest] Exam timer reduced by', timePenalty / 1000, 'seconds. New examStartedAt:', state.examStartedAt);
+      }
+      
+      // Show penalty notification (Image 2 style)
+      const penaltyOverlay = document.createElement('div');
+      penaltyOverlay.style.cssText = `
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 10001;
+        width: calc(100% - 40px);
+        max-width: 460px;
+        animation: slideUpFade 0.3s ease;
+      `;
+      
+      const penaltySeconds = Math.floor(timePenalty / 1000);
+      const penaltyMinutes = Math.floor(penaltySeconds / 60);
+      const remainingSeconds = penaltySeconds % 60;
+      const penaltyDisplay = penaltyMinutes > 0 
+        ? `${penaltyMinutes}:${remainingSeconds.toString().padStart(2, '0')}`
+        : `${penaltySeconds}s`;
+      
+      penaltyOverlay.innerHTML = `
+        <div style="
+          background: linear-gradient(135deg, rgba(127, 29, 29, 0.95), rgba(153, 27, 27, 0.95));
+          border: 1px solid rgba(248, 113, 113, 0.4);
+          border-radius: 16px;
+          padding: 20px 24px;
+          display: flex;
+          align-items: center;
+          gap: 16px;
+          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        ">
+          <div style="
+            font-size: 42px;
+            line-height: 1;
+            flex-shrink: 0;
+          ">⏱️</div>
+          <div style="flex: 1;">
+            <div style="
+              font-size: 12px;
+              letter-spacing: 0.1em;
+              text-transform: uppercase;
+              color: rgba(252, 165, 165, 0.9);
+              font-weight: 700;
+              margin-bottom: 4px;
+            ">TIME PENALTY</div>
+            <div style="
+              font-size: 14px;
+              color: rgba(254, 202, 202, 0.95);
+              line-height: 1.4;
+            ">You declined the challenge. −${penaltyDisplay} deducted.</div>
+          </div>
+          <div style="
+            font-size: 32px;
+            font-weight: 800;
+            color: #fca5a5;
+            flex-shrink: 0;
+          ">−${penaltyDisplay}</div>
+        </div>
+      `;
+      
+      document.body.appendChild(penaltyOverlay);
+      
+      // Remove penalty notification after 5 seconds
+      setTimeout(() => {
+        penaltyOverlay.style.opacity = '0';
+        penaltyOverlay.style.transform = 'translateX(-50%) translateY(20px)';
+        penaltyOverlay.style.transition = 'all 0.3s ease';
+        setTimeout(() => penaltyOverlay.remove(), 300);
+      }, 5000);
+    };
+    
+    // Show roast message
+    const showRoast = (message, callback) => {
+      console.log('[triggerAccuracyTest] Showing roast:', message);
+      const roastOverlay = document.createElement('div');
+      roastOverlay.className = 'stress-difficulty-check-overlay';
+      roastOverlay.style.zIndex = '10002';
+      roastOverlay.innerHTML = `
+        <div class="binary-card" style="max-width: 420px; padding: 28px 24px;">
+          <div class="binary-question" style="font-size: 20px; font-weight: 600; line-height: 1.4; color: #f8fafc;">${message}</div>
+        </div>
+      `;
+      document.body.appendChild(roastOverlay);
+      
+      setTimeout(() => {
+        roastOverlay.remove();
+        if (callback) callback();
+      }, 4500);
+    };
+    
+    // Show post-shake check
+    const showPostShakeCheck = () => {
+      // Don't show if we've moved to a different question or cleanup was called
+      if (isCleanedUp || state.currentQuestionId !== triggerQuestionId) {
+        console.log('[triggerAccuracyTest] Skipping post-shake check - question changed or cleaned up');
+        return;
+      }
+      
+      console.log('[triggerAccuracyTest] Showing post-shake check');
+      const postOverlay = document.createElement('div');
+      postOverlay.className = 'stress-difficulty-check-overlay';
+      postOverlay.style.zIndex = '10002';
+      createdOverlays.push(postOverlay); // Track for cleanup
+      postOverlay.innerHTML = `
+        <div class="stress-difficulty-check-card" style="max-width: 420px; padding: 32px 24px;">
+          <div class="stress-difficulty-check-title" style="font-size: 22px; font-weight: 700; margin-bottom: 24px;">Could you read through the shake?</div>
+          <div class="binary-actions" style="display: flex; gap: 12px; width: 100%;">
+            <button class="binary-btn" id="post-no" style="flex: 1; background: rgba(248, 113, 113, 0.15); border: 1px solid rgba(248, 113, 113, 0.4); color: #f87171; padding: 14px 20px; border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer;">No, I couldn't</button>
+            <button class="binary-btn" id="post-yes" style="flex: 1; background: rgba(34, 197, 94, 0.15); border: 1px solid rgba(34, 197, 94, 0.4); color: #22c55e; padding: 14px 20px; border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer;">Yes, I could</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(postOverlay);
+      
+      // Handle "No, I couldn't"
+      document.getElementById('post-no').addEventListener('click', () => {
+        console.log('[triggerAccuracyTest] User said they could not read');
+        postOverlay.remove();
+        showRoast("Honesty is rare. But weakness still has a price. ⏱️", applyTimePenalty);
+      });
+      
+      // Handle "Yes, I could" - show explain trap
+      document.getElementById('post-yes').addEventListener('click', () => {
+        console.log('[triggerAccuracyTest] User said they could read - showing explain trap');
+        postOverlay.remove();
+        
+        const explainOverlay = document.createElement('div');
+        explainOverlay.className = 'stress-difficulty-check-overlay';
+        explainOverlay.style.zIndex = '10003';
+        createdOverlays.push(explainOverlay); // Track for cleanup
+        explainOverlay.innerHTML = `
+          <div class="stress-difficulty-check-card" style="max-width: 480px; padding: 32px 24px;">
+            <div class="stress-difficulty-check-title" style="font-size: 22px; font-weight: 700; margin-bottom: 12px;">Impressive! Explain how:</div>
+            <div class="stress-difficulty-check-sub" style="font-size: 14px; color: rgba(226, 232, 240, 0.7); margin-bottom: 16px;">Tell us your technique for reading through the shake.</div>
+            <textarea class="trigger-textarea" placeholder="Type your explanation..." style="
+              width: 100%;
+              min-height: 120px;
+              padding: 14px;
+              border-radius: 10px;
+              border: 1px solid rgba(148, 163, 184, 0.3);
+              background: rgba(15, 23, 42, 0.6);
+              color: #e2e8f0;
+              font-size: 15px;
+              font-family: inherit;
+              resize: vertical;
+              margin-bottom: 16px;
+            "></textarea>
+            <button class="binary-btn" id="explain-submit" style="
+              width: 100%;
+              background: rgba(59, 130, 246, 0.2);
+              border: 1px solid rgba(59, 130, 246, 0.5);
+              color: #3b82f6;
+              padding: 14px 20px;
+              border-radius: 12px;
+              font-size: 15px;
+              font-weight: 600;
+              cursor: pointer;
+            ">Submit Explanation</button>
+          </div>
+        `;
+        document.body.appendChild(explainOverlay);
+        
+        document.getElementById('explain-submit').addEventListener('click', () => {
+          console.log('[triggerAccuracyTest] User submitted explanation');
+          explainOverlay.remove();
+          showRoast("Interesting technique. We'll see if it actually worked. 🤔", null);
+        });
+      });
+    };
+    
+    // Handle "No" button click
+    document.getElementById('accuracy-no').addEventListener('click', () => {
+      console.log('[triggerAccuracyTest] User clicked No - applying penalty immediately');
+      overlay.remove();
+      applyTimePenalty();
+    });
+    
+    // Handle "Yes" button click - activate heartbeat shake
+    document.getElementById('accuracy-yes').addEventListener('click', () => {
+      console.log('[triggerAccuracyTest] User clicked Yes - activating heartbeat shake');
+      overlay.remove();
+      
+      // Remove accuracyTest from active map WITHOUT calling cleanup
+      // This allows heartbeatVibration to activate (max 1 active trigger)
+      // but keeps our state intact (isCleanedUp stays false)
+      if (active.has('accuracyTest')) {
+        const entry = active.get('accuracyTest');
+        // Clear any timers but don't call cleanup
+        (entry.timers || []).forEach((timerId) => clearTimeout(timerId));
+        active.delete('accuracyTest');
+        console.log('[triggerAccuracyTest] Removed accuracyTest from active map (without cleanup)');
+      }
+      
+      // Small delay to ensure overlay is removed
+      setTimeout(() => {
+        // Activate heartbeat vibration trigger
+        // Note: The system caps duration at 20 seconds max, so we use that
+        const shakeDuration = 20000; // 20 seconds (system maximum)
+        
+        console.log('[triggerAccuracyTest] Calling activateTrigger for heartbeatVibration');
+        const result = activateTrigger('heartbeatVibration', {
+          userState: currentUserState(),
+          force: true,
+          reason: 'accuracy_test:shake_challenge',
+          timeoutMs: shakeDuration
+        });
+        
+        console.log('[triggerAccuracyTest] activateTrigger result:', result);
+        
+        if (result) {
+          console.log('[triggerAccuracyTest] Heartbeat shake activated successfully for', shakeDuration, 'ms');
+          // After shake completes, show post-shake check
+          shakeTimeoutId = setTimeout(() => {
+            console.log('[triggerAccuracyTest] Shake complete - showing post-shake check');
+            showPostShakeCheck();
+          }, shakeDuration);
+        } else {
+          console.error('[triggerAccuracyTest] Failed to activate heartbeat shake');
+          // Show post-shake check immediately if activation failed
+          showPostShakeCheck();
+        }
+      }, 100);
+    });
+    
+    return {
+      durationMs: 0, // Immediate popup
+      cleanup: () => {
+        console.log('[triggerAccuracyTest] Cleanup called - removing all overlays');
+        isCleanedUp = true; // Set flag to prevent future popups
+        
+        // Remove all created overlays
+        createdOverlays.forEach(el => {
+          if (el && el.parentNode) {
+            el.remove();
+          }
+        });
+        
+        // Clear the shake timeout
+        if (shakeTimeoutId) {
+          clearTimeout(shakeTimeoutId);
+          shakeTimeoutId = null;
+        }
+      },
+    };
+  }
+
+  // Q5 → READING_TEST
+  function triggerReadingTest() {
+    if (!questionBody) return null;
+    
+    const timers = [];
+    
+    const fingerOverlay = document.createElement('div');
+    fingerOverlay.className = 'stress-difficulty-check-overlay';
+    fingerOverlay.innerHTML = `
+      <div class="binary-card">
+        <div style="font-size: 72px; line-height: 1;">👉 READ CAREFULLY 👈</div>
+      </div>
+    `;
+    document.body.appendChild(fingerOverlay);
+    
+    timers.push(setTimeout(() => {
+      fingerOverlay.remove();
+      
+      timers.push(setTimeout(() => {
+        const blurOverlay = document.createElement('div');
+        blurOverlay.className = 'trigger-blur-overlay';
+        
+        const unlockBtn = document.createElement('button');
+        unlockBtn.className = 'trigger-unlock-btn';
+        unlockBtn.textContent = '🔓 Unlock';
+        
+        blurOverlay.appendChild(unlockBtn);
+        
+        if (questionBody.parentElement) {
+          questionBody.style.position = 'relative';
+          questionBody.appendChild(blurOverlay);
+        }
+        
+        unlockBtn.addEventListener('click', () => {
+          const challengeOverlay = document.createElement('div');
+          challengeOverlay.className = 'stress-difficulty-check-overlay';
+          challengeOverlay.innerHTML = `
+            <div class="stress-difficulty-check-card" style="width: min(500px, calc(100vw - 34px));">
+              <div class="stress-difficulty-check-title">What was the question about?</div>
+              <textarea class="trigger-textarea" id="reading-answer" placeholder="Type what you remember..."></textarea>
+              <div class="binary-actions">
+                <button class="binary-btn" id="reading-submit" style="background: rgba(26, 215, 181, 0.15); border-color: rgba(26, 215, 181, 0.5); color: #28d8af;">Submit</button>
+                <button class="binary-btn" id="reading-giveup">I gave up</button>
+              </div>
+            </div>
+          `;
+          document.body.appendChild(challengeOverlay);
+          
+          const showRoastAndUnlock = (message) => {
+            challengeOverlay.remove();
+            
+            const roastOverlay = document.createElement('div');
+            roastOverlay.className = 'stress-difficulty-check-overlay';
+            roastOverlay.innerHTML = `
+              <div class="binary-card">
+                <div class="binary-question">${message}</div>
+              </div>
+            `;
+            document.body.appendChild(roastOverlay);
+            
+            setTimeout(() => {
+              roastOverlay.remove();
+              blurOverlay.remove();
+            }, 4500);
+          };
+          
+          document.getElementById('reading-submit').addEventListener('click', () => {
+            const answer = document.getElementById('reading-answer').value.trim();
+            if (answer.length < 10) {
+              showRoastAndUnlock("That's barely an attempt! But fine, you're unlocked. 😤");
+            } else {
+              showRoastAndUnlock("Nice try, but you still wasted time! Focus better next time. 😏");
+            }
+          });
+          
+          document.getElementById('reading-giveup').addEventListener('click', () => {
+            showRoastAndUnlock("Giving up already? Weak! But at least you're honest. 😈");
+          });
+        });
+        
+      }, 8000));
+      
+    }, 4000));
+    
+    return {
+      durationMs: 0,
+      cleanup: () => {
+        timers.forEach(t => clearTimeout(t));
+        fingerOverlay.remove();
+      },
+    };
+  }
+
+  // Q6 → HARD_PEER_DOUBT
+  function triggerHardPeerDoubt() {
+    if (!questionBody) return null;
+    
+    const timers = [];
+    let fogElement = null;
+    let stressCountdown = null;
+    let countdownInterval = null; // Store interval reference for cleanup
+    let interceptionCount = 0;
+    const maxInterceptions = 2;
+    
+    const overlay = document.createElement('div');
+    overlay.className = 'stress-difficulty-check-overlay';
+    overlay.innerHTML = `
+      <div class="stress-difficulty-check-card">
+        <div class="stress-difficulty-check-emoji">🤔</div>
+        <div class="stress-difficulty-check-title">Rate Previous Question</div>
+        <div class="stress-difficulty-check-sub">How difficult was it for you?</div>
+        <div class="stress-difficulty-check-options" style="grid-template-columns: repeat(3, 1fr);">
+          <button class="stress-difficulty-check-option easy">
+            <span class="stress-difficulty-check-emoji">😊</span>
+            <span style="font-size: 18px; font-weight: 700;">Easy</span>
+          </button>
+          <button class="stress-difficulty-check-option medium">
+            <span class="stress-difficulty-check-emoji">😐</span>
+            <span style="font-size: 18px; font-weight: 700;">Medium</span>
+          </button>
+          <button class="stress-difficulty-check-option" style="border-color: rgba(255, 99, 132, 0.72); color: #ff6384;">
+            <span class="stress-difficulty-check-emoji">😰</span>
+            <span style="font-size: 18px; font-weight: 700;">Hard</span>
+          </button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    
+    const showSelectionResult = (choice) => {
+      const selected = String(choice || "Medium").trim();
+      const selectedLower = selected.toLowerCase();
+      const easyPicked = selectedLower.includes("easy");
+      const hardPicked = selectedLower.includes("hard");
+      
+      let emoji, headline;
+      if (easyPicked) {
+        emoji = "😏";
+        headline = "Easy? We'll remember you said that.";
+      } else if (hardPicked) {
+        emoji = "😰";
+        headline = "Hard? At least you're honest about your limits.";
+      } else {
+        emoji = "🤨";
+        headline = "When people are unsure they chose medium.";
+      }
+      
+      const card = overlay.querySelector('.stress-difficulty-check-card');
+      if (!card) {
+        continueSequence();
+        return;
+      }
+      
+      card.className = 'stress-difficulty-check-card stress-difficulty-check-result';
+      card.innerHTML = `
+        <div class="stress-difficulty-check-result-emoji" aria-hidden="true">${emoji}</div>
+        <div class="stress-difficulty-check-result-title">${headline}</div>
+        <div class="stress-difficulty-check-result-sub">Preparing the next one...</div>
+      `;
+      
+      setTimeout(() => continueSequence(), 1400);
+    };
+    
+    const continueSequence = () => {
+      overlay.remove();
+      
+      timers.push(setTimeout(() => {
+        const warningOverlay = document.createElement('div');
+        warningOverlay.className = 'stress-difficulty-check-overlay';
+        warningOverlay.innerHTML = `
+          <div class="binary-card">
+            <div class="stress-difficulty-check-emoji" style="font-size: 62px;">⚠️</div>
+            <div class="binary-question">Hard Question Ahead</div>
+          </div>
+        `;
+        document.body.appendChild(warningOverlay);
+        
+        timers.push(setTimeout(() => {
+          warningOverlay.remove();
+          
+          stressCountdown = document.createElement('div');
+          stressCountdown.className = 'trigger-countdown';
+          document.body.appendChild(stressCountdown);
+          
+          let timeLeft = 30;
+          stressCountdown.textContent = `⏱️ ${timeLeft}s`;
+          
+          countdownInterval = setInterval(() => {
+            timeLeft--;
+            if (timeLeft <= 0) {
+              clearInterval(countdownInterval);
+              if (typeof skipToNextQuestion === 'function') {
+                skipToNextQuestion();
+              }
+              return;
+            }
+            stressCountdown.textContent = `⏱️ ${timeLeft}s`;
+            if (timeLeft <= 10) {
+              stressCountdown.classList.add('urgent');
+            }
+          }, 1000);
+          
+          timers.push(setTimeout(() => {
+            fogElement = document.createElement('div');
+            fogElement.className = 'trigger-fog-overlay';
+            
+            if (questionBody.parentElement) {
+              questionBody.style.position = 'relative';
+              questionBody.appendChild(fogElement);
+            }
+            
+            timers.push(setTimeout(() => {
+              if (fogElement) fogElement.remove();
+            }, 45000));
+            
+          }, 3500));
+          
+        }, 6000));
+        
+      }, 2500));
+    };
+    
+    overlay.querySelectorAll('.stress-difficulty-check-option').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const rating = btn.textContent.trim().toLowerCase();
+        showSelectionResult(rating);
+      });
+    });
+    
+    const interceptSubmission = (e) => {
+      if (interceptionCount >= maxInterceptions) return;
+      
+      e.preventDefault();
+      e.stopPropagation();
+      interceptionCount++;
+      
+      const doubtMessages = [
+        "73% of toppers picked option B. Are you sure?",
+        "Most high scorers chose differently. Reconsider?",
+        "Top students disagree with your choice. Final answer?"
+      ];
+      
+      const doubtOverlay = document.createElement('div');
+      doubtOverlay.className = 'stress-difficulty-check-overlay';
+      doubtOverlay.innerHTML = `
+        <div class="binary-card">
+          <div class="stress-difficulty-check-emoji" style="font-size: 48px;">⚠️</div>
+          <div class="binary-question">Peer Doubt Alert</div>
+          <div class="stress-difficulty-check-sub">${doubtMessages[Math.min(interceptionCount - 1, doubtMessages.length - 1)]}</div>
+          <button class="binary-btn" id="doubt-continue" style="width: 100%; background: rgba(26, 215, 181, 0.15); border-color: rgba(26, 215, 181, 0.5); color: #28d8af;">Continue Anyway</button>
+        </div>
+      `;
+      document.body.appendChild(doubtOverlay);
+      
+      document.getElementById('doubt-continue').addEventListener('click', () => {
+        doubtOverlay.remove();
+      });
+    };
+    
+    const submitBtn = document.querySelector('#submit-answer-btn');
+    if (submitBtn) {
+      submitBtn.addEventListener('click', interceptSubmission, true);
+    }
+    
+    return {
+      durationMs: 0,
+      cleanup: () => {
+        timers.forEach(t => clearTimeout(t));
+        if (countdownInterval) clearInterval(countdownInterval);
+        overlay.remove();
+        if (fogElement) fogElement.remove();
+        if (stressCountdown) stressCountdown.remove();
+        if (submitBtn) {
+          submitBtn.removeEventListener('click', interceptSubmission, true);
+        }
+      },
+    };
+  }
+
+  // Q7 → BILLIARD_BALL
+  function triggerBilliardBall() {
+    if (!questionBody) return null;
+    
+    const timers = [];
+    let rafId = null;
+    
+    const tauntOverlay = document.createElement('div');
+    tauntOverlay.className = 'stress-difficulty-check-overlay';
+    tauntOverlay.innerHTML = `
+      <div class="binary-card">
+        <div class="stress-difficulty-check-emoji" style="font-size: 48px;">⚠️</div>
+        <div class="binary-question">This one breaks 80% of students. Watch. 😈</div>
+      </div>
+    `;
+    document.body.appendChild(tauntOverlay);
+    
+    timers.push(setTimeout(() => {
+      tauntOverlay.remove();
+      
+      timers.push(setTimeout(() => {
+        const card = questionBody.parentElement;
+        if (!card) return;
+        
+        const originalPosition = card.style.position;
+        const originalWidth = card.style.width;
+        const originalTransform = card.style.transform;
+        const originalLeft = card.style.left;
+        const originalTop = card.style.top;
+        const originalZIndex = card.style.zIndex;
+        
+        // Set up for bouncing - 65% scale for better readability and clickability
+        card.style.position = 'fixed';
+        card.style.width = '600px';
+        card.style.transform = 'scale(0.65)';
+        card.style.transformOrigin = 'top left';
+        card.style.zIndex = '9999';
+        card.style.transition = 'none';
+        
+        // Physics variables - adjusted for 65% scale
+        const cardWidth = 390; // 600 * 0.65
+        const cardHeight = 325; // ~500 * 0.65
+        let x = window.innerWidth / 2 - cardWidth / 2;
+        let y = window.innerHeight / 2 - cardHeight / 2;
+        let vx = 4 + Math.random() * 2;
+        let vy = 3 + Math.random() * 2;
+        
+        const animate = () => {
+          x += vx;
+          y += vy;
+          
+          let bounced = false;
+          
+          if (x <= 0) {
+            x = 0;
+            vx = Math.abs(vx);
+            bounced = true;
+          } else if (x + cardWidth >= window.innerWidth) {
+            x = window.innerWidth - cardWidth;
+            vx = -Math.abs(vx);
+            bounced = true;
+          }
+          
+          if (y <= 0) {
+            y = 0;
+            vy = Math.abs(vy);
+            bounced = true;
+          } else if (y + cardHeight >= window.innerHeight) {
+            y = window.innerHeight - cardHeight;
+            vy = -Math.abs(vy);
+            bounced = true;
+          }
+          
+          if (bounced) {
+            const callout = document.createElement('div');
+            callout.className = 'trigger-focus-callout';
+            callout.style.left = `${x + cardWidth / 2}px`;
+            callout.style.top = `${y + cardHeight / 2}px`;
+            callout.textContent = 'FOCUS!';
+            document.body.appendChild(callout);
+            
+            if (navigator.vibrate) {
+              navigator.vibrate(100);
+            }
+            
+            setTimeout(() => callout.remove(), 500);
+          }
+          
+          card.style.left = x + 'px';
+          card.style.top = y + 'px';
+          
+          rafId = requestAnimationFrame(animate);
+        };
+        
+        rafId = requestAnimationFrame(animate);
+        
+        const cleanup = () => {
+          if (rafId) cancelAnimationFrame(rafId);
+          card.style.position = originalPosition;
+          card.style.width = originalWidth;
+          card.style.transform = originalTransform;
+          card.style.left = originalLeft;
+          card.style.top = originalTop;
+          card.style.zIndex = originalZIndex;
+        };
+        
+        timers.push(cleanup);
+        
+      }, 800));
+      
+    }, 4000));
+    
+    return {
+      durationMs: 0,
+      cleanup: () => {
+        timers.forEach(t => {
+          if (typeof t === 'function') t();
+          else clearTimeout(t);
+        });
+        if (tauntOverlay.parentElement) tauntOverlay.remove();
+        if (rafId) cancelAnimationFrame(rafId);
+      },
+    };
+  }
+
+  // ========================================================================
+  // End of Question-Level Triggers
+  // ========================================================================
+
+  const devNarrativeTriggerHandlers = {
+    devMicroQuizPop: triggerDevMicroQuizPop,
+    devFocusSpotlight: triggerDevFocusSpotlight,
+    devCognitiveMelt: triggerDevCognitiveMelt,
+    devMatrixGlitch: triggerDevMatrixGlitch,
+    devSlideToLock: triggerDevSlideToLock,
+    devBlindRecall: triggerDevBlindRecall,
+    devConfidenceSlider: triggerDevConfidenceSlider,
+  };
+
+  function activateManualShowcaseTrigger(name, context) {
+    if (!manualStressTriggerMode || !enableDevTriggerPanel) return false;
+    if (active.has(name)) {
+      deactivateTrigger(name);
+      return false;
+    }
+    if (active.size >= 1) {
+      showDevToast("Another trigger is active. Clear it first.");
+      return false;
+    }
+    const handler = devNarrativeTriggerHandlers[name];
+    if (!handler) return false;
+    let out = null;
+    try {
+      out = handler(context || {});
+    } catch (err) {
+      debugLog("manual_showcase_error", `${name}:${err?.message || String(err)}`);
+      return false;
+    }
+    if (!out) return false;
+    const durationMs = Math.max(1800, Math.min(30000, Number(out.durationMs || 8000)));
+    registerTrigger(name, out.cleanup, durationMs, {
+      ...(context || {}),
+      force: true,
+      manual: true,
+      intensity: "medium",
+      reason: `dev_showcase:${name}`,
+      userState: currentUserState(),
+    });
+    return true;
+  }
+
   const triggerHandlers = {
     optionShuffle: triggerOptionShuffle,
     phantomCompetitor: triggerPhantomCompetitor,
     stressTimer: triggerStressTimer,
     confidenceBreaker: triggerConfidenceBreaker,
+    focusHandSignal: triggerFocusHandSignal,
+    focusReadGate: triggerFocusReadGate,
+    premiumImagePopup: triggerPremiumImagePopup,
+    optionFeedbackPopups: triggerOptionFeedbackPopups,
     mirageHighlight: triggerMirageHighlight,
     blurAttack: triggerBlurAttack,
     screenFlip: triggerScreenFlip,
@@ -3039,25 +6072,42 @@ const StressTriggers = (() => {
     fakeCrashScreen: triggerFakeCrashScreen,
     blackout: triggerBlackout,
     hesitationHeatmap: triggerHesitationHeatmap,
-    bollywoodReelTrap: triggerBollywoodReelTrap,
+    torchlightSpotlight: triggerTorchlightSpotlight,
+    difficultyCheckPrompt: triggerDifficultyCheckPrompt,
+    boucingQuestion: triggerBouncingQuestion,
+    // Question-level triggers for Focus Zones test
+    hardFog: triggerHardFog,
+    accuracyTest: triggerAccuracyTest,
+    readingTest: triggerReadingTest,
+    hardPeerDoubt: triggerHardPeerDoubt,
+    billiardBall: triggerBilliardBall,
   };
 
   function activateTrigger(name, context) {
+    console.log('[activateTrigger] Attempting to activate:', name);
     const check = canActivateTrigger(name, context);
     if (!check.ok) {
+      console.log('[activateTrigger] Cannot activate:', name, 'reason:', check.reason);
       debugLog("rejected", `${name}:${check.reason}`);
       return false;
     }
     const handler = triggerHandlers[name];
-    if (!handler) return false;
+    if (!handler) {
+      console.log('[activateTrigger] No handler found for:', name);
+      return false;
+    }
+    console.log('[activateTrigger] Handler found, calling it for:', name);
     let out = null;
     try {
       out = handler(context);
+      console.log('[activateTrigger] Handler returned:', out);
     } catch (err) {
+      console.error('[activateTrigger] Handler error for', name, ':', err);
       debugLog("handler_error", `${name}:${err?.message || String(err)}`);
       return false;
     }
     if (!out) {
+      console.log('[activateTrigger] Handler returned null/falsy for:', name);
       debugLog("rejected", `${name}:no-effect`);
       return false;
     }
@@ -3065,8 +6115,9 @@ const StressTriggers = (() => {
     const handlerDuration = Number(out.durationMs || 0);
     let durationMs = requestedDuration > 0 ? requestedDuration : handlerDuration;
     if (durationMs > 0) {
-      durationMs = Math.max(2000, Math.min(12000, durationMs));
+      durationMs = Math.max(2000, Math.min(20000, durationMs)); // Max 20 seconds instead of 12
     }
+    console.log('[activateTrigger] Registering trigger:', name, 'duration:', durationMs);
     registerTrigger(name, out.cleanup, durationMs, context);
     return true;
   }
@@ -3127,6 +6178,15 @@ const StressTriggers = (() => {
   async function requestTriggerFromAI(eventType, extra) {
     if (disableStressMode) return false;
     if (state.stage !== "popups") return false;
+    
+    // Disable AI trigger system for questions with custom trigger sequences (Q1-Q7 in Focus Zones test)
+    const questionNumber = testQuestionIndex + 1;
+    const triggerInfo = getQuestionTrigger(questionNumber);
+    if (triggerInfo && triggerInfo.name) {
+      console.log('[requestTriggerFromAI] Skipping AI triggers - question has custom trigger sequence:', triggerInfo.name);
+      return false;
+    }
+    
     if (isInterruptionActive()) return false;
     if (isInQuietBreak()) return false;
     if (!testQuestions.length) return false;
@@ -3301,14 +6361,12 @@ const StressTriggers = (() => {
       actions.push({ name: "colorInversion", score: 94 });
       actions.push({ name: "chaosBackground", score: 91 });
       actions.push({ name: "fakeMentorCount", score: 88 });
-      actions.push({ name: "bollywoodReelTrap", score: 99 });
     }
     if (userState.answerChangeCount >= 3) {
       actions.push({ name: "optionShuffle", score: 86 });
       actions.push({ name: "screenFlip", score: 90 });
       actions.push({ name: "hesitationHeatmap", score: 92 });
       actions.push({ name: "waveDistortion", score: 89 });
-      actions.push({ name: "bollywoodReelTrap", score: 97 });
     }
     if (userState.answerLatencyMs < 3000) {
       actions.push({ name: "confidenceBreaker", score: 84 });
@@ -3319,7 +6377,6 @@ const StressTriggers = (() => {
       actions.push({ name: "phantomCompetitor", score: 82 });
       actions.push({ name: "colorInversion", score: 86 });
       actions.push({ name: "spatialTicking", score: 88 });
-      actions.push({ name: "bollywoodReelTrap", score: 98 });
     }
     if (userState.timeRemainingMs < 300000) {
       actions.push({ name: "heartbeatVibration", score: 92 });
@@ -3344,10 +6401,18 @@ const StressTriggers = (() => {
   }
 
   function getTriggerNames() {
-    return Object.keys(triggerHandlers);
+    return Object.keys(triggerHandlers).filter(isTriggerEnabled);
   }
 
   function onQuestionRendered(question) {
+    if (state.optionFeedbackActive && state.optionFeedbackQuestionId &&
+        String(state.optionFeedbackQuestionId) !== String(question?.question_id || "")) {
+      closeOptionFeedbackPopup();
+    }
+    
+    // Clean up any active triggers from previous question
+    deactivateAllTriggers();
+    
     state.currentQuestionId = question?.question_id || "";
     state.questionDifficulty = String(question?.difficulty || "");
     state.questionStartedAt = Date.now();
@@ -3356,13 +6421,348 @@ const StressTriggers = (() => {
     state.hoverOptionEl = null;
     state.interactionHesitationMs = 0;
     state.interactionHesitationStartedAt = 0;
-    requestTriggerFromAI("question_loaded", {
-      question_id: state.currentQuestionId,
-      difficulty: state.questionDifficulty,
-    });
+    
+    // Check if this is a hard question
+    const isHard = isHardDifficulty(question?.difficulty);
+    const questionNumber = testQuestionIndex + 1;
+    
+    console.log('[onQuestionRendered] Current testQuestionIndex:', testQuestionIndex);
+    console.log('[onQuestionRendered] Calculated questionNumber:', questionNumber);
+    console.log('[onQuestionRendered] Question ID:', question?.question_id);
+    console.log('[onQuestionRendered] Question difficulty:', question?.difficulty);
+    
+    // Check if this question has a custom trigger sequence
+    const triggerInfo = getQuestionTrigger(questionNumber);
+    const hasCustomTriggerSequence = triggerInfo && triggerInfo.name;
+    
+    // ONLY use custom trigger sequences for Q1-Q7, disable all automatic trigger activation
+    if (hasCustomTriggerSequence) {
+      console.log('[onQuestionRendered] Activating custom trigger sequence for question:', questionNumber);
+      
+      if (triggerInfo && triggerInfo.name) {
+        // Different delays and sequences for different triggers per specifications
+        let delayMs = 5000; // Default 5 seconds
+        
+        // Q1 → TORCHLIGHT_SPOTLIGHT
+        // Fires 6 seconds after Q1 loads
+        if (triggerInfo.name === 'torchlightSpotlight') {
+          delayMs = 6000;
+          const timeoutId = setTimeout(() => {
+            console.log(`[onQuestionRendered] Activating Q1 trigger: torchlightSpotlight`);
+            activateTrigger('torchlightSpotlight', {
+              userState: currentUserState(),
+              force: true,
+              reason: `question_trigger:Q${questionNumber}:torchlightSpotlight`,
+              intensity: 'mild',
+              questionNumber: questionNumber
+            });
+          }, delayMs);
+          pendingTriggerTimeouts.push(timeoutId);
+        }
+        
+        // Q2 → HARD_FOG (with pre-sequence)
+        // Pre-sequence: difficultyCheckPrompt → 2.5s pause → hardQuestion (activateHardQuestionChallenge) → includes 30s timer + fog
+        else if (triggerInfo.name === 'hardFog') {
+          // Hide question immediately for Q2
+          if (questionStem) questionStem.style.visibility = 'hidden';
+          if (questionOptions) questionOptions.style.visibility = 'hidden';
+          
+          delayMs = 0; // Show difficulty check instantly
+          const timeoutId1 = setTimeout(() => {
+            console.log(`[onQuestionRendered] Starting Q2 pre-sequence: difficultyCheckPrompt`);
+            console.log(`[onQuestionRendered] state.feedbackPromptOpen:`, state.feedbackPromptOpen);
+            
+            // Force close any existing feedback prompt to ensure difficultyCheckPrompt can activate
+            if (state.feedbackPromptOpen) {
+              console.log(`[onQuestionRendered] Forcing feedbackPromptOpen to false`);
+              state.feedbackPromptOpen = false;
+              releaseInterruptionLock("feedback");
+            }
+            
+            console.log(`[onQuestionRendered] About to call activateTrigger for difficultyCheckPrompt`);
+            
+            // Step 1: Difficulty rating popup (difficultyCheckPrompt trigger)
+            const difficultyCheckResult = activateTrigger('difficultyCheckPrompt', {
+              userState: currentUserState(),
+              force: true,
+              reason: `question_trigger:Q${questionNumber}:pre_sequence`,
+              questionNumber: questionNumber
+            });
+            
+            console.log(`[onQuestionRendered] difficultyCheckPrompt activation result:`, difficultyCheckResult);
+            
+            if (!difficultyCheckResult) {
+              console.error(`[onQuestionRendered] Failed to activate difficultyCheckPrompt! Skipping to hardQuestion.`);
+              // If difficultyCheckPrompt fails, skip directly to hardQuestion
+              const timeoutId2 = setTimeout(() => {
+                console.log(`[onQuestionRendered] Activating hardQuestion challenge (fallback)`);
+                const q = testQuestions[testQuestionIndex];
+                if (q) {
+                  const hardQuestion = { ...q, difficulty: "hard" };
+                  activateHardQuestionChallenge(hardQuestion);
+                }
+              }, 2500);
+              pendingTriggerTimeouts.push(timeoutId2);
+              return;
+            }
+            
+            // Wait for difficulty check to complete, then continue sequence
+            const waitForDifficultyCheck = setInterval(() => {
+              const isActive = isTriggerActive('difficultyCheckPrompt');
+              console.log(`[onQuestionRendered] Checking if difficultyCheckPrompt is active:`, isActive);
+              
+              if (!isActive) {
+                clearInterval(waitForDifficultyCheck);
+                
+                console.log(`[onQuestionRendered] Difficulty check complete, waiting 2.5s`);
+                
+                // Step 2: 2.5s pause, then activate hardQuestion
+                const timeoutId3 = setTimeout(() => {
+                  console.log(`[onQuestionRendered] Activating hardQuestion challenge`);
+                  
+                  // Step 3: Activate hardQuestion challenge
+                  // This shows "Hard Question Ahead" warning for ~2.1s, then starts 30s countdown with scratch-to-reveal fog
+                  const q = testQuestions[testQuestionIndex];
+                  if (q) {
+                    // Force the question to be treated as hard difficulty
+                    const hardQuestion = { ...q, difficulty: "hard" };
+                    activateHardQuestionChallenge(hardQuestion);
+                  }
+                  
+                }, 2500); // 2.5 second pause
+                pendingTriggerTimeouts.push(timeoutId3);
+              }
+            }, 100); // Check every 100ms
+            
+          }, delayMs);
+          pendingTriggerTimeouts.push(timeoutId1);
+        }
+        
+        // Q3 → SCREEN_FLIP
+        // Fires 5 seconds after Q3 loads. Flips 180°, stays 5s, flips back, waits 5s, repeats 5 times
+        else if (triggerInfo.name === 'screenFlip') {
+          delayMs = 5000;
+          const timeoutId = setTimeout(() => {
+            console.log(`[onQuestionRendered] Activating Q3 trigger: screenFlip with 5 flip cycles`);
+            activateTrigger('screenFlip', {
+              userState: currentUserState(),
+              force: true,
+              reason: `question_trigger:Q${questionNumber}:screenFlip`,
+              intensity: 'strong',
+              questionNumber: questionNumber,
+              flipCycles: 5, // 5 total flips
+              flipDuration: 5000, // Stay flipped for 5s
+              waitDuration: 5000, // Wait 5s between flips
+              permanentFinalState: true // Final flip state stays permanently
+            });
+          }, delayMs);
+          pendingTriggerTimeouts.push(timeoutId);
+        }
+        
+        // Q4 → ACCURACY_TEST
+        // Fires 1 second after Q4 loads
+        else if (triggerInfo.name === 'accuracyTest') {
+          delayMs = 1000;
+          const timeoutId = setTimeout(() => {
+            console.log(`[onQuestionRendered] Activating Q4 trigger: accuracyTest`);
+            activateTrigger('accuracyTest', {
+              userState: currentUserState(),
+              force: true,
+              reason: `question_trigger:Q${questionNumber}:accuracyTest`,
+              questionNumber: questionNumber
+            });
+          }, delayMs);
+          pendingTriggerTimeouts.push(timeoutId);
+        }
+        
+        // Q5 → READING_TEST
+        // Fires 3 seconds after Q5 loads
+        // Sequence: focusHandSignal (4s) → 8s clear reading → focusReadGate (blur + unlock)
+        else if (triggerInfo.name === 'readingTest') {
+          delayMs = 3000;
+          const timeoutId1 = setTimeout(() => {
+            console.log(`[onQuestionRendered] Starting Q5 sequence: focusHandSignal`);
+            
+            // Step 1: Pointing finger popup for 4 seconds
+            const handSignalActivated = activateTrigger('focusHandSignal', {
+              userState: currentUserState(),
+              force: true,
+              reason: `question_trigger:Q${questionNumber}:focusHandSignal`,
+              timeoutMs: 4000,
+              questionNumber: questionNumber
+            });
+            
+            if (handSignalActivated) {
+              console.log(`[onQuestionRendered] Hand signal activated, scheduling 8s clear reading time`);
+              
+              // Step 2: Wait for hand signal to complete (4s) + 8s clear reading time = 12s total
+              const timeoutId2 = setTimeout(() => {
+                console.log(`[onQuestionRendered] Clear reading time complete, activating focusReadGate`);
+                
+                // Step 3: Blur and lock with unlock button
+                activateTrigger('focusReadGate', {
+                  userState: currentUserState(),
+                  force: true,
+                  reason: `question_trigger:Q${questionNumber}:focusReadGate`,
+                  questionNumber: questionNumber,
+                  roastDuration: 4500, // 4.5 second roast
+                  noAutoTimeout: true // Stays blurred until user interacts
+                });
+              }, 12000); // 4s hand signal + 8s clear reading
+              pendingTriggerTimeouts.push(timeoutId2);
+            } else {
+              console.error(`[onQuestionRendered] Failed to activate focusHandSignal`);
+            }
+          }, delayMs);
+          pendingTriggerTimeouts.push(timeoutId1);
+        }
+        
+        // Q6 → HARD_PEER_DOUBT (with pre-sequence + interception)
+        // Same pre-sequence as Q2: difficultyCheckPrompt → 2.5s pause → hardQuestion challenge
+        else if (triggerInfo.name === 'hardPeerDoubt') {
+          // Hide question immediately for Q6
+          if (questionStem) questionStem.style.visibility = 'hidden';
+          if (questionOptions) questionOptions.style.visibility = 'hidden';
+          
+          delayMs = 0; // Show difficulty check instantly
+          setTimeout(() => {
+            console.log(`[onQuestionRendered] Starting Q6 pre-sequence: difficultyCheckPrompt`);
+            
+            // Enable option feedback interception for this question
+            state.optionFeedbackInterceptionEnabled = true;
+            state.optionFeedbackInterceptionCount = 0;
+            state.optionFeedbackMaxInterceptions = 2;
+            
+            // Force close any existing feedback prompt
+            if (state.feedbackPromptOpen) {
+              console.log(`[onQuestionRendered] Forcing feedbackPromptOpen to false for Q6`);
+              state.feedbackPromptOpen = false;
+              releaseInterruptionLock("feedback");
+            }
+            
+            // Step 1: Difficulty rating popup (difficultyCheckPrompt trigger)
+            const difficultyCheckResult = activateTrigger('difficultyCheckPrompt', {
+              userState: currentUserState(),
+              force: true,
+              reason: `question_trigger:Q${questionNumber}:pre_sequence`,
+              questionNumber: questionNumber
+            });
+            
+            if (!difficultyCheckResult) {
+              console.error(`[onQuestionRendered] Failed to activate difficultyCheckPrompt for Q6! Skipping to hardQuestion.`);
+              setTimeout(() => {
+                const q = testQuestions[testQuestionIndex];
+                if (q) {
+                  const hardQuestion = { ...q, difficulty: "hard" };
+                  activateHardQuestionChallenge(hardQuestion);
+                }
+              }, 2500);
+              return;
+            }
+            
+            // Wait for difficulty check to complete, then continue sequence
+            const waitForDifficultyCheck = setInterval(() => {
+              if (!isTriggerActive('difficultyCheckPrompt')) {
+                clearInterval(waitForDifficultyCheck);
+                
+                console.log(`[onQuestionRendered] Difficulty check complete, waiting 2.5s`);
+                
+                // Step 2: 2.5s pause, then activate hardQuestion
+                setTimeout(() => {
+                  console.log(`[onQuestionRendered] Activating hardQuestion challenge for Q6`);
+                  
+                  // Step 3: Activate hardQuestion challenge
+                  const q = testQuestions[testQuestionIndex];
+                  if (q) {
+                    const hardQuestion = { ...q, difficulty: "hard" };
+                    activateHardQuestionChallenge(hardQuestion);
+                  }
+                  
+                }, 2500);
+              }
+            }, 100);
+            
+          }, delayMs);
+        }
+        
+        // Q7 → BILLIARD_BALL
+        // Fires 1.5 seconds after Q7 loads
+        // Sequence: premiumImagePopup (4s taunt) → 0.8s gap → bouncingQuestion (indefinite)
+        else if (triggerInfo.name === 'billiardBall') {
+          delayMs = 1500;
+          const timeoutId1 = setTimeout(() => {
+            console.log(`[onQuestionRendered] Starting Q7 sequence: premiumImagePopup taunt`);
+            
+            // Step 1: Pre-roast taunt for 4 seconds
+            const tauntActivated = activateTrigger('premiumImagePopup', {
+              userState: currentUserState(),
+              force: true,
+              reason: `question_trigger:Q${questionNumber}:pre_taunt`,
+              timeoutMs: 4000,
+              questionNumber: questionNumber,
+              customMessage: "Final question. Let's see if you can focus now."
+            });
+            
+            if (tauntActivated) {
+              console.log(`[onQuestionRendered] Taunt activated, scheduling bouncing question`);
+              
+              // Step 2: Wait for taunt (4s) + gap (0.8s) = 4.8s total
+              const timeoutId2 = setTimeout(() => {
+                console.log(`[onQuestionRendered] Activating bouncingQuestion`);
+                
+                // Step 3: Bouncing question (indefinite)
+                activateTrigger('boucingQuestion', {
+                  userState: currentUserState(),
+                  force: true,
+                  reason: `question_trigger:Q${questionNumber}:bouncingQuestion`,
+                  questionNumber: questionNumber,
+                  shrinkTo: 0.5, // 50% size
+                  showFocusCallout: true, // "FOCUS!" on each bounce
+                  enableVibration: true, // Vibrate on bounce
+                  indefinite: true // Runs until submission
+                });
+              }, 4800); // 4s taunt + 0.8s gap
+              pendingTriggerTimeouts.push(timeoutId2);
+            } else {
+              console.error(`[onQuestionRendered] Failed to activate premiumImagePopup taunt`);
+            }
+          }, delayMs);
+          pendingTriggerTimeouts.push(timeoutId1);
+        }
+        
+        console.log(`[onQuestionRendered] Trigger sequence initiated for Q${questionNumber}:`, triggerInfo.name);
+        
+        // Don't call requestTriggerFromAI - we already have a planned trigger
+        return;
+      }
+    } else if (!hasCustomTriggerSequence) {
+      console.log('[onQuestionRendered] Hard question detected - using hardQuestionChallenge only');
+    }
+    
+    // Only call AI trigger system if no question-level trigger was activated
+    // Skip AI triggers for questions with custom trigger sequences
+    if (!triggerInfo || !triggerInfo.name) {
+      requestTriggerFromAI("question_loaded", {
+        question_id: state.currentQuestionId,
+        difficulty: state.questionDifficulty,
+      });
+    }
+    
     setTimeout(() => {
       showFeedbackPulse("question_rendered");
     }, 1200);
+    
+    // DISABLED: Automatic hard question activation - only use custom trigger sequences
+    // All trigger activation is now handled by the custom sequence logic above
+    console.log('[onQuestionRendered] Automatic trigger activation disabled - using custom sequences only');
+    
+    // Clean up any existing hard question challenge if it's for a different question
+    if (
+      state.hardQuestionChallenge &&
+      state.hardQuestionChallenge.questionId !== String(question?.question_id || "")
+    ) {
+      clearHardQuestionChallenge();
+    }
   }
 
   function onOptionChange(questionId, prevValue, nextValue) {
@@ -3379,6 +6779,11 @@ const StressTriggers = (() => {
       previous_value: prevValue || "",
       next_value: nextValue || "",
     });
+    maybeShowOptionFeedbackPopup(questionId, nextValue);
+  }
+
+  function onOptionClick(questionId, value) {
+    maybeShowOptionFeedbackPopup(questionId, value);
   }
 
   function onOptionHover(optionEl) {
@@ -3416,8 +6821,125 @@ const StressTriggers = (() => {
   function beginExamTimer() {
     if (!state.examStartedAt) {
       state.examStartedAt = Date.now();
+      console.log('[beginExamTimer] Exam started at:', state.examStartedAt, 'Date:', new Date(state.examStartedAt).toISOString());
       state.stressBudget = STRESS_BUDGET_MAX;
+      
+      // Increment total_sessions when test actually starts
+      const user = window.StressDostAuth?.getUser();
+      if (user && user.user_id) {
+        console.log('[beginExamTimer] Incrementing session count for user:', user.user_id);
+        fetch(`/api/user/${user.user_id}/session-start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        })
+        .then(res => res.json())
+        .then(data => {
+          console.log('[beginExamTimer] Session started:', data);
+          // Update local storage with new session count
+          if (user) {
+            user.total_sessions = data.total_sessions;
+            window.StressDostAuth.setUser(user);
+          }
+        })
+        .catch(err => {
+          console.error('[beginExamTimer] Failed to increment session:', err);
+        });
+      }
+    } else {
+      console.log('[beginExamTimer] Exam already started at:', state.examStartedAt, 'Date:', new Date(state.examStartedAt).toISOString());
     }
+    startExamClock();
+  }
+  
+  function stopExamTimer() {
+    if (state.examTimerId) {
+      clearInterval(state.examTimerId);
+      state.examTimerId = null;
+      console.log('[stopExamTimer] Exam timer stopped');
+    }
+  }
+
+  function startExamClock() {
+    if (state.examTimerId) {
+      console.log('[startExamClock] Timer already running with ID:', state.examTimerId);
+      return;
+    }
+    
+    console.log('[startExamClock] Starting new timer interval');
+    let tickCount = 0;
+    state.examTimerId = setInterval(() => {
+      tickCount++;
+      console.log('[startExamClock] Tick #' + tickCount);
+      
+      const el = document.getElementById("questionTimer");
+      if (!el) {
+        console.warn('[startExamClock] Timer element not found!');
+        return;
+      }
+      
+      // If exam hasn't started yet, show initial time
+      if (!state.examStartedAt || state.examStartedAt <= 0) {
+        el.textContent = "15:00";
+        return;
+      }
+      
+      // If hard question is active, show its countdown instead
+      if (state.hardQuestionChallenge && state.hardQuestionChallenge.deadlineAt) {
+        const remainingMs = Math.max(0, state.hardQuestionChallenge.deadlineAt - Date.now());
+        const totalSeconds = Math.ceil(remainingMs / 1000);
+        el.textContent = `00:${String(Math.max(0, totalSeconds)).padStart(2, "0")}`;
+        return;
+      }
+      
+      // Normal exam timer - countdown from 15:00
+      const now = Date.now();
+      const elapsed = now - state.examStartedAt;
+      const remainingMs = state.examDurationMs - elapsed;
+      
+      // Debug logging (remove after fixing)
+      if (remainingMs > state.examDurationMs || remainingMs < -60000) {
+        console.log('[startExamClock] DEBUG:', {
+          now,
+          examStartedAt: state.examStartedAt,
+          elapsed,
+          examDurationMs: state.examDurationMs,
+          remainingMs,
+          elapsedMinutes: (elapsed / 60000).toFixed(2),
+          remainingMinutes: (remainingMs / 60000).toFixed(2)
+        });
+      }
+      
+      // Cap remaining time to valid range
+      const cappedRemainingMs = Math.max(0, Math.min(remainingMs, state.examDurationMs));
+      
+      const totalSeconds = Math.max(0, Math.ceil(cappedRemainingMs / 1000));
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      el.textContent = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+      
+      // Check if time is up
+      if (cappedRemainingMs <= 0) {
+        console.log('[startExamClock] Time is up! Showing end screen');
+        clearInterval(state.examTimerId);
+        state.examTimerId = null;
+        
+        // Capture the time used (should be full exam duration)
+        const timeUsedAtEnd = StressTriggers.timeUsedMs();
+        
+        // Cancel all pending triggers
+        cancelPendingTriggers();
+        
+        // Deactivate all active triggers
+        if (typeof StressTriggers !== 'undefined' && StressTriggers.deactivateAllTriggers) {
+          StressTriggers.deactivateAllTriggers();
+        }
+        
+        // Show test end screen
+        setTimeout(() => {
+          showTestEndScreen(timeUsedAtEnd);
+        }, 500);
+      }
+    }, 1000);
   }
 
   function onPopupsEntered() {
@@ -3457,6 +6979,25 @@ const StressTriggers = (() => {
       state.lastAnswerWasCorrect = Boolean(correct);
     }
     if (!hasAnswerKey) return;
+    const hardActive = Boolean(
+      state.hardQuestionChallenge &&
+      state.hardQuestionChallenge.questionId === String(state.currentQuestionId || "")
+    );
+    if (hardActive) {
+      state.hardQuestionChallenge.resolved = true;
+      if (correct) {
+        clearHardQuestionChallenge();
+      } else {
+        // Wrong answer - show fail-wrong screen with shaky skull
+        state.hardQuestionPostSubmitDelayMs = 3200;
+        const failOverlay = showHardQuestionFullScreen("fail-wrong");
+        state.hardQuestionChallenge.failOverlay = failOverlay;
+        setTimeout(() => {
+          failOverlay.remove();
+          clearHardQuestionChallenge();
+        }, 3200);
+      }
+    }
     if (correct) {
       state.correctStreak += 1;
       addBudget(3);
@@ -3476,7 +7017,20 @@ const StressTriggers = (() => {
     setTimeout(() => showFeedbackPulse("post_wrong_answer"), 900);
   }
 
+  function consumePostSubmitDelayMs() {
+    const value = Number(state.hardQuestionPostSubmitDelayMs || 0);
+    state.hardQuestionPostSubmitDelayMs = 0;
+    return Math.max(0, value);
+  }
+
   function onReset() {
+    // Clear the exam timer
+    if (state.examTimerId) {
+      clearInterval(state.examTimerId);
+      state.examTimerId = null;
+      console.log('[onReset] Cleared exam timer');
+    }
+    
     state.examStartedAt = 0;
     state.questionStartedAt = 0;
     state.currentQuestionId = "";
@@ -3519,6 +7073,15 @@ const StressTriggers = (() => {
     state.newsReelHistory = [];
     state.lastNewsTopic = "";
     state.lastNewsImage = "";
+    clearHardQuestionChallenge();
+    state.hardQuestionPostSubmitDelayMs = 0;
+    state.optionFeedbackActive = false;
+    state.optionFeedbackQuestionId = "";
+    state.optionFeedbackLastOption = "";
+    // Reset Q6 option feedback interception state
+    state.optionFeedbackInterceptionEnabled = false;
+    state.optionFeedbackInterceptionCount = 0;
+    closeOptionFeedbackPopup();
     deactivateAllTriggers();
   }
 
@@ -3537,9 +7100,15 @@ const StressTriggers = (() => {
     }
   }
 
+  // Dev panel completely removed for production
+  /*
   function mountDevPanel() {
     if (!enableDevTriggerPanel || !hudPanel) return;
-    if (document.getElementById("devTriggerPanel")) return;
+    const existingPanel = document.getElementById("devTriggerPanel");
+    if (existingPanel) {
+      existingPanel.remove();
+      devButtons.clear();
+    }
 
     const panel = document.createElement("div");
     panel.className = "hud-section dev-trigger-panel";
@@ -3569,25 +7138,74 @@ const StressTriggers = (() => {
       row.appendChild(btn);
     });
 
+    const hardQuestionBtn = document.createElement("button");
+    hardQuestionBtn.type = "button";
+    hardQuestionBtn.className = "btn ghost small dev-trigger-btn";
+    hardQuestionBtn.textContent = "hardQuestion";
+    hardQuestionBtn.addEventListener("click", () => {
+      if (state.hardQuestionChallenge) {
+        clearHardQuestionChallenge();
+        showDevToast("Hard question cleared.");
+        return;
+      }
+      const q = testQuestions[testQuestionIndex];
+      if (!q || !q.question_id || !questionBody) {
+        showDevToast("No active question available for hard question.");
+        return;
+      }
+      const devQuestion = { ...q, difficulty: "hard" };
+      activateHardQuestionChallenge(devQuestion);
+      showDevToast("Hard question challenge activated.");
+    });
+    row.appendChild(hardQuestionBtn);
+
+
+
+
+
     const clearBtn = document.createElement("button");
     clearBtn.type = "button";
     clearBtn.className = "btn danger small dev-trigger-clear";
     clearBtn.textContent = "Clear Triggers";
     clearBtn.addEventListener("click", () => deactivateAllTriggers());
 
+    const showFollowupsBtn = document.createElement("button");
+    showFollowupsBtn.type = "button";
+    showFollowupsBtn.className = "btn ghost small dev-trigger-followups";
+    showFollowupsBtn.textContent = "Show Follow-up Answers";
+    showFollowupsBtn.addEventListener("click", () => {
+      const rows = getFollowupAnswers();
+      log("followup_answers_count", rows.length);
+      log("followup_answers", rows);
+    });
+
+    const clearFollowupsBtn = document.createElement("button");
+    clearFollowupsBtn.type = "button";
+    clearFollowupsBtn.className = "btn danger small dev-trigger-followups-clear";
+    clearFollowupsBtn.textContent = "Clear Follow-up Answers";
+    clearFollowupsBtn.addEventListener("click", () => {
+      state.followupAnswers = [];
+      log("followup_answers_cleared");
+    });
+
     const fallbackBtn = document.createElement("button");
     fallbackBtn.type = "button";
     fallbackBtn.className = "btn primary small dev-fallback-open";
     fallbackBtn.textContent = "Open Fallback Questions";
-    fallbackBtn.addEventListener("click", () => {
-      openDevFallbackQuestionsDirect();
+    fallbackBtn.addEventListener("click", async () => {
+      await openDevFallbackQuestionsDirect();
     });
 
     panel.appendChild(row);
+
+
     panel.appendChild(fallbackBtn);
     panel.appendChild(clearBtn);
+    panel.appendChild(showFollowupsBtn);
+    panel.appendChild(clearFollowupsBtn);
     hudPanel.appendChild(panel);
   }
+  */
 
   function attachGlobalListeners() {
     ["click", "keydown", "scroll", "pointerdown"].forEach((eventName) => {
@@ -3646,30 +7264,47 @@ const StressTriggers = (() => {
     isScreenBusyForPopup,
     requestFeedbackPulse: showFeedbackPulse,
     evaluateUserState,
+    currentUserState,
     setStage,
     onQuestionRendered,
     onOptionChange,
+    onOptionClick,
     onOptionHover,
     onOptionPointerDown,
     onOptionPointerUp,
     beginExamTimer,
+    stopExamTimer,
     onPopupsEntered,
     beforeSubmitDelay,
     afterSubmit,
     noteAnswerOutcome,
     onReset,
     attachGlobalListeners,
-    mountDevPanel,
+    // mountDevPanel removed for production
     getTriggerNames,
+    activateManualShowcaseTrigger,
     recordFollowupAnswer,
     getFollowupAnswers,
+    consumePostSubmitDelayMs,
+    // Q6 interception helpers
+    isOptionFeedbackInterceptionEnabled: () => state.optionFeedbackInterceptionEnabled,
+    getOptionFeedbackInterceptionCount: () => state.optionFeedbackInterceptionCount,
+    getOptionFeedbackMaxInterceptions: () => state.optionFeedbackMaxInterceptions,
+    incrementOptionFeedbackInterceptionCount: () => { state.optionFeedbackInterceptionCount++; },
+    // Timer helpers
+    timeUsedMs,
+    timeRemainingMs,
   };
 })();
+
+// Expose StressTriggers to window for access from other scripts
+window.StressTriggers = StressTriggers;
 
 // Socket -------------------------------------------------------------------
 function initSocket() {
   if (socketInitialized) return;
-  socket = io({ transports: ["websocket"] });
+  // Allow polling fallback so users on strict networks still connect.
+  socket = io({ transports: ["polling", "websocket"] });
   socketInitialized = true;
 
   socket.on("connect", () => {
@@ -3698,13 +7333,7 @@ function initSocket() {
   socket.on("joined", (data) => log("joined room", data));
 
   socket.on("popup", (payload) => {
-    log("popup event", payload);
-    logPopupEvent({ event: "popup", payload });
-    if (!stageEls.popups?.classList.contains("active")) {
-      logPopupEvent({ event: "popup_ignored_not_in_test_stage" });
-      return;
-    }
-    enqueuePopup(payload);
+    void payload;
   });
 
   socket.on("suggestions", (payload) => {
@@ -3733,12 +7362,10 @@ function joinSessionRoom(targetId) {
 
 // Popup rendering ----------------------------------------------------------
 function logPopupEvent(obj) {
-  if (!popupConsole) return;
-  const row = document.createElement("div");
-  row.className = "row";
-  row.textContent = `[${new Date().toLocaleTimeString()}] ${JSON.stringify(obj)}`;
-  popupConsole.prepend(row);
-  if (popupConsole.children.length > 200) popupConsole.removeChild(popupConsole.lastChild);
+  if (!logBox) return;
+  const line = `[DBG ${new Date().toLocaleTimeString()}] ${JSON.stringify(obj)}`;
+  logBox.textContent = (logBox.textContent + line + "\n").slice(-20000);
+  logBox.scrollTop = logBox.scrollHeight;
 }
 
 function normalizePopupMessage(rawMessage) {
@@ -3778,97 +7405,16 @@ function normalizePopupMessage(rawMessage) {
 }
 
 function enqueuePopup(payload) {
-  if (!stageEls.popups?.classList.contains("active")) return;
-  if (!payload) return;
-  const message = normalizePopupMessage(payload.message);
-  if (!message) return;
-
-  // Keep all question prompts in the feedback system only.
-  if (/\?\s*$/.test(message) || /^quick\s+check[- ]?in\b/i.test(message)) {
-    if (StressTriggers.requestFeedbackPulse) {
-      StressTriggers.requestFeedbackPulse("popup_question_redirect", message);
-    }
-    return;
-  }
-
-  const safePayload = { ...payload, message };
-  const parts = message
-    .split("\n")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const keyBase = `${safePayload.type || "unknown"}|${message}`;
-  if (recentPopups.has(keyBase)) {
-    return;
-  }
-  recentPopups.add(keyBase);
-  if (recentPopups.size > 50) {
-    const first = recentPopups.values().next().value;
-    recentPopups.delete(first);
-  }
-
-  if (parts.length <= 1) {
-    popupQueue.push(safePayload);
-  } else {
-    const ttl = safePayload.ttl || 4000;
-    const perTtl = Math.max(2500, Math.floor(ttl / parts.length));
-    parts.forEach((part) => {
-      popupQueue.push({
-        ...safePayload,
-        message: part,
-        ttl: perTtl,
-      });
-    });
-  }
-  processPopupQueue();
+  void payload;
 }
 
 function processPopupQueue() {
-  if (popupActive || popupQueue.length === 0) return;
-  if (StressTriggers.isScreenBusyForPopup && StressTriggers.isScreenBusyForPopup()) {
-    if (!popupSuppressionTimer) {
-      popupSuppressionTimer = setTimeout(() => {
-        popupSuppressionTimer = null;
-        processPopupQueue();
-      }, 350);
-    }
-    return;
-  }
-  popupActive = true;
-  const payload = popupQueue.shift();
-  showPopupCard(payload, () => {
-    popupActive = false;
-    processPopupQueue();
-  });
+  return;
 }
 
 function showPopupCard(payload, done) {
-  if (!popupOverlay) {
-    done?.();
-    return;
-  }
-  if (StressTriggers.isScreenBusyForPopup && StressTriggers.isScreenBusyForPopup()) {
-    if (payload) popupQueue.unshift(payload);
-    done?.();
-    return;
-  }
-  popupOverlay.innerHTML = "";
-  const type = payload?.type || "pulse";
-  const msg = payload?.message || "";
-
-  const el = document.createElement("div");
-  el.className = `popup ${escapeHTML(type)}`;
-  el.innerHTML = `
-    <div class="type">${escapeHTML(type)}</div>
-    <div class="msg">${escapeHTML(msg)}</div>
-  `;
-  popupOverlay.prepend(el);
-
-  clearTimeout(popupTimer);
-  const duration = Math.min(Math.max(payload?.ttl || 3500, 2000), 7000);
-  popupTimer = setTimeout(() => {
-    el.remove();
-    done?.();
-  }, duration);
+  void payload;
+  done?.();
 }
 
 function escapeHTML(str) {
@@ -3885,31 +7431,274 @@ function setTestHint(text) {
   if (testHint) testHint.textContent = text || "";
 }
 
+function ensureTestBankLoadingOverlay() {
+  if (!testCard) return null;
+  let overlay = testCard.querySelector(".test-bank-loading");
+  if (overlay) return overlay;
+  overlay = document.createElement("div");
+  overlay.className = "test-bank-loading";
+  overlay.innerHTML = `
+    <div class="test-bank-loading-card">
+      <div class="test-bank-loading-spinner" aria-hidden="true"></div>
+      <div class="test-bank-loading-title">Loading Test</div>
+      <div class="test-bank-loading-status">Preparing your complete test set...</div>
+    </div>
+  `;
+  testCard.appendChild(overlay);
+  return overlay;
+}
+
+function setTestBankLoading(loading, message) {
+  if (!testCard) return;
+  const overlay = ensureTestBankLoadingOverlay();
+  isLoadingTestBank = Boolean(loading);
+  testCard.classList.toggle("is-loading-bank", isLoadingTestBank);
+  testCard.setAttribute("aria-busy", isLoadingTestBank ? "true" : "false");
+  const statusNode = overlay?.querySelector(".test-bank-loading-status");
+  if (statusNode) {
+    statusNode.textContent = message || "Preparing your complete test set...";
+  }
+  if (isLoadingTestBank) {
+    if (btnSubmitQuestion) btnSubmitQuestion.disabled = true;
+  } else {
+    updateTestSubmitButtonState();
+  }
+}
+
+function ensureStemOptionsInQuestion(q, parts) {
+  if (!q || !Array.isArray(q.options) || !q.options.length) return;
+  const html = String(q.question_html || "");
+  const normalizedHtmlText = html
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/\s+/g, " ")
+    .toLowerCase()
+    .trim();
+
+  const optionTextsInStem = q.options.reduce((count, opt) => {
+    const text = String(opt?.text || "")
+      .replace(/<[^>]*>/g, " ")
+      .replace(/\s+/g, " ")
+      .toLowerCase()
+      .trim();
+    if (!text || text.length < 2) return count;
+    return normalizedHtmlText.includes(text) ? count + 1 : count;
+  }, 0);
+
+  const labelPatternInStem =
+    /(?:^|[\s>])(a|b|c|d)\s*[\)\.\:\-]\s*/i.test(normalizedHtmlText) ||
+    /option\s*(a|b|c|d)/i.test(normalizedHtmlText);
+
+  const hasBuiltInOptions =
+    /class\s*=\s*["'][^"']*stem-options[^"']*["']/i.test(html) ||
+    /<ol[\s>]/i.test(html) ||
+    /<ul[\s>]/i.test(html) ||
+    optionTextsInStem >= 2 ||
+    (optionTextsInStem >= 1 && labelPatternInStem);
+  if (hasBuiltInOptions) return;
+  const rows = q.options
+    .map((opt) => {
+      const label = (opt?.label || "").trim();
+      const text = (opt?.text || "").trim();
+      if (!label && !text) return "";
+      return `<div class="stem-option-row"><strong>${label}${label ? ")" : ""}</strong> ${text}</div>`;
+    })
+    .filter(Boolean);
+  if (!rows.length) return;
+  parts.push(`<div class="stem-options">${rows.join("")}</div>`);
+}
+
+function stripEmbeddedOptionsFromQuestionHtml(html) {
+  const source = String(html || "");
+  if (!source) return "";
+  const markerMatch = source.match(/\([A-D]\)|(?:^|[\s>])[A-D]\s*[\)\.\:\-]\s*/i);
+  if (!markerMatch || markerMatch.index === undefined || markerMatch.index <= 0) {
+    return source;
+  }
+  const stem = source.slice(0, markerMatch.index).trim();
+  return stem || source;
+}
+
+function collectQuestionImageUrls(q) {
+  const urls = [];
+  if (Array.isArray(q?.question_images)) {
+    q.question_images.forEach((src) => {
+      if (typeof src === "string" && src.trim()) urls.push(src.trim());
+    });
+  }
+  const html = q?.question_html || "";
+  const regex = /<img[^>]+src=["']([^"']+)["']/gi;
+  let match = regex.exec(html);
+  while (match) {
+    if (match[1]) urls.push(match[1]);
+    match = regex.exec(html);
+  }
+  return urls;
+}
+
+function preloadImage(src) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(true);
+    img.onerror = () => resolve(false);
+    img.src = src;
+  });
+}
+
+async function preloadQuestionAssets(questions) {
+  if (!Array.isArray(questions) || !questions.length) return;
+  const uniqueUrls = new Set();
+  questions.forEach((q) => {
+    collectQuestionImageUrls(q).forEach((url) => uniqueUrls.add(url));
+  });
+  if (!uniqueUrls.size) return;
+  await Promise.all([...uniqueUrls].map((url) => preloadImage(url)));
+}
+
+function updateTestSubmitButtonState() {
+  if (!btnSubmitQuestion) return;
+  const q = testQuestions[testQuestionIndex];
+  if (!q) {
+    btnSubmitQuestion.disabled = true;
+    return;
+  }
+  const picked = selectedOptions[q.question_id];
+  const hasValue = Boolean(String(picked || "").trim());
+  btnSubmitQuestion.disabled = !hasValue;
+}
+
+function updateSolutionButtonState() {
+  if (!btnShowSolution) return;
+  const q = testQuestions[testQuestionIndex];
+  if (!q) {
+    btnShowSolution.hidden = true;
+    btnShowSolution.classList.add("is-disabled");
+    return;
+  }
+  const answered = Boolean(answeredMap[q.question_id]);
+  btnShowSolution.hidden = !answered;
+  btnShowSolution.classList.toggle("is-disabled", !answered);
+}
+
+function updateTestHintForQuestion(q) {
+  if (!q) {
+    setTestHint("");
+    return;
+  }
+  const row = answeredMap[q.question_id];
+  if (!row || !row.selected) {
+    setTestHint("");
+    return;
+  }
+  const qType = (q.question_type || "").toLowerCase();
+  if (qType === "integer") {
+    setTestHint("Answer saved.");
+    return;
+  }
+  setTestHint(row.correct ? "Correct answer." : "Wrong answer.");
+}
+
+function advanceAfterSubmit() {
+  if (!testQuestions.length) return;
+  if (solutionModalOpen) {
+    pendingAdvanceAfterSubmit = true;
+    return;
+  }
+  const atLastQuestion = testQuestionIndex >= testQuestions.length - 1;
+  if (atLastQuestion) {
+    setTestHint("Last question saved. You can finish the test.");
+    return;
+  }
+  
+  // Cancel any pending triggers from the current question
+  cancelPendingTriggers();
+  
+  // Deactivate all active triggers from the current question
+  if (typeof StressTriggers !== 'undefined' && StressTriggers.deactivateAllTriggers) {
+    StressTriggers.deactivateAllTriggers();
+    console.log('[advanceAfterSubmit] Deactivated all active triggers');
+  }
+  
+  testQuestionIndex += 1;
+  renderTestQuestion();
+}
+
+function applyAdaptiveQuestionDensity(q) {
+  if (!questionPanel || !questionStem) return;
+  questionPanel.classList.remove("size-normal", "size-compact", "size-dense");
+
+  const stemText = String(questionStem.textContent || "").replace(/\s+/g, " ").trim();
+  const optionText = Array.isArray(q?.options)
+    ? q.options.map((opt) => String(opt?.text || "")).join(" ")
+    : "";
+  const totalLen = stemText.length + optionText.length;
+  const hasManyOptions = Array.isArray(q?.options) && q.options.length >= 4;
+  const hasImages =
+    (Array.isArray(q?.question_images) && q.question_images.length > 0) ||
+    /<img[\s>]/i.test(String(q?.question_html || ""));
+
+  let mode = "size-normal";
+  if (totalLen > 1300 || (totalLen > 1000 && hasManyOptions) || (hasImages && totalLen > 900)) {
+    mode = "size-dense";
+  } else if (totalLen > 850 || (hasImages && totalLen > 650)) {
+    mode = "size-compact";
+  }
+
+  questionPanel.classList.add(mode);
+
+  // Ensure density reacts to real rendered height too.
+  requestAnimationFrame(() => {
+    if (!questionPanel || !questionStem) return;
+    const overflowGap = questionStem.scrollHeight - questionPanel.clientHeight;
+    if (overflowGap > 420 && !questionPanel.classList.contains("size-dense")) {
+      questionPanel.classList.remove("size-normal", "size-compact");
+      questionPanel.classList.add("size-dense");
+    } else if (overflowGap > 220 && questionPanel.classList.contains("size-normal")) {
+      questionPanel.classList.remove("size-normal");
+      questionPanel.classList.add("size-compact");
+    }
+  });
+}
+
+function stripHardQuestionLabel(html) {
+  // Remove "HARD QUESTION:" label from question HTML
+  if (!html) return html;
+  return html.replace(/<strong>\s*HARD\s+QUESTION\s*:\s*<\/strong>\s*/gi, '');
+}
+
 function renderTestQuestion() {
   if (!questionStem || !questionOptions || !questionCounter) return;
+  if (isLoadingTestBank) return;
 
   if (!testQuestions.length) {
     questionStem.textContent = "Questions will appear here with options.";
     questionOptions.innerHTML = "";
-    questionCounter.textContent = "Questions —";
-    if (questionSubject) questionSubject.textContent = "—";
+    questionCounter.textContent = "Q. 1 of 1";
+    if (questionSubject) questionSubject.textContent = "ID: —";
+    if (questionTypeSelect) questionTypeSelect.options[0].textContent = "Math-Single Type";
     if (questionProgress) questionProgress.style.width = "0%";
     if (mutateBadge) mutateBadge.style.display = "none";
     if (btnPrevQuestion) btnPrevQuestion.disabled = true;
     if (btnNextQuestion) btnNextQuestion.disabled = true;
+    updateSolutionButtonState();
     return;
   }
 
   testQuestionIndex = Math.min(Math.max(testQuestionIndex, 0), testQuestions.length - 1);
   const q = testQuestions[testQuestionIndex];
   if (questionCounter) {
-    questionCounter.textContent = `Question ${testQuestionIndex + 1} of ${testQuestions.length}`;
+    questionCounter.textContent = `Q. ${testQuestionIndex + 1} of ${testQuestions.length}`;
   }
   if (questionSubject) {
-    const parts = [];
-    if (q.subject) parts.push(q.subject);
-    if (q.difficulty) parts.push(q.difficulty);
-    questionSubject.textContent = parts.join(" · ") || "—";
+    questionSubject.textContent = `ID: ${q.question_id || "—"}`;
+  }
+  if (questionTypeSelect) {
+    const rawType = q.subject || q.chapter || q.topic || "Math";
+    const label = `${rawType}-Single Type`;
+    questionTypeSelect.options[0].textContent = label;
   }
   if (questionProgress) {
     const pct = ((testQuestionIndex + 1) / testQuestions.length) * 100;
@@ -3920,6 +7709,9 @@ function renderTestQuestion() {
     mutateBadge.style.display = mutated ? "inline-flex" : "none";
   }
   const qType = (q.question_type || "").toLowerCase();
+  if (questionBody) {
+    questionBody.classList.toggle("integer-mode", qType === "integer");
+  }
   if (qType === "integer") {
     if (questionOptions) questionOptions.style.display = "none";
     if (integerPanel) {
@@ -3932,16 +7724,22 @@ function renderTestQuestion() {
     if (questionOptions) questionOptions.style.display = "grid";
     if (integerPanel) integerPanel.style.display = "none";
   }
+  updateSolutionButtonState();
+  updateTestHintForQuestion(q);
   const parts = [];
   if (q.question_html) {
-    parts.push(q.question_html);
+    // Strip "HARD QUESTION:" label before rendering
+    const cleanedHtml = stripHardQuestionLabel(q.question_html);
+    parts.push(stripEmbeddedOptionsFromQuestionHtml(cleanedHtml));
   }
+  ensureStemOptionsInQuestion(q, parts);
   if (Array.isArray(q.question_images)) {
     q.question_images.forEach((src) => {
       parts.push(`<div class="q-img"><img src="${src}" alt="question image" /></div>`);
     });
   }
   questionStem.innerHTML = parts.join("");
+  applyAdaptiveQuestionDensity(q);
   questionOptions.innerHTML = "";
 
   const opts = q.options || [];
@@ -3963,6 +7761,7 @@ function renderTestQuestion() {
         const prev = selectedOptions[q.question_id] || "";
         selectedOptions[q.question_id] = opt.label;
         StressTriggers.onOptionChange(q.question_id, prev, opt.label);
+        updateTestSubmitButtonState();
       });
       wrapper.addEventListener("mouseenter", () => {
         StressTriggers.onOptionHover(wrapper);
@@ -3976,15 +7775,22 @@ function renderTestQuestion() {
       wrapper.addEventListener("pointercancel", () => {
         StressTriggers.onOptionPointerUp();
       });
+      wrapper.addEventListener("click", () => {
+        StressTriggers.onOptionClick(q.question_id, opt.label);
+      });
 
       const body = document.createElement("div");
       const labelEl = document.createElement("div");
       labelEl.className = "option-label";
       labelEl.textContent = opt.label || "";
+      const markEl = document.createElement("div");
+      markEl.className = "option-mark";
+      markEl.textContent = "";
       const textEl = document.createElement("div");
       textEl.className = "option-text";
-      textEl.innerHTML = opt.text || "";
+      textEl.textContent = "";
       body.appendChild(labelEl);
+      body.appendChild(markEl);
       body.appendChild(textEl);
 
       wrapper.appendChild(input);
@@ -3995,21 +7801,76 @@ function renderTestQuestion() {
 
   if (btnPrevQuestion) btnPrevQuestion.disabled = testQuestionIndex === 0;
   if (btnNextQuestion) btnNextQuestion.disabled = testQuestionIndex >= testQuestions.length - 1;
+  updateTestSubmitButtonState();
   updateScoreMeta();
+  updateLifelineState();
+  renderResultStateForCurrentQuestion();
   StressTriggers.onQuestionRendered(q);
+}
+
+/* ── question prefetch metadata ─────────────────────────────────────── */
+let _prefetchMeta = null;  // {subject, topics}
+
+/**
+ * Store subject/topics so loadTestQuestions can skip the /debug roundtrip.
+ * Call this as soon as subject/topics are known.
+ */
+function startQuestionPrefetch(subject, topics) {
+  console.log("[prefetch] storing meta for", subject, topics);
+  _prefetchMeta = {
+    subject: subject || null,
+    topics: topics || [],
+  };
 }
 
 async function loadTestQuestions() {
   if (!questionStem || !questionCounter) return;
-  setTestHint("Loading questions…");
-  questionCounter.textContent = "Loading questions…";
-  if (questionSubject) questionSubject.textContent = "—";
+  let hasRenderableQuestions = false;
+  setTestBankLoading(true, "Fetching all questions...");
+  setTestHint("");
+  questionCounter.textContent = "";
+  if (questionSubject) questionSubject.textContent = "";
+  if (questionTypeSelect) questionTypeSelect.options[0].textContent = "";
   if (questionProgress) questionProgress.style.width = "0%";
   clearMutationTimers();
-  questionStem.textContent = "Fetching questions from server...";
+  questionStem.textContent = "";
   questionOptions.innerHTML = "";
   try {
-    const data = await getJSON("/api/questions/load-test-questions");
+    let payload = {};
+
+    // Get user profile for question selection
+    const user = window.StressDostAuth?.getUser?.();
+    const userProfile = {
+      completed_sessions: user?.completed_sessions || 0,
+      total_sessions: user?.total_sessions || 0
+    };
+
+    // Use stored metadata if available (skips the /debug roundtrip)
+    if (_prefetchMeta) {
+      console.log("[loadTestQuestions] using prefetched meta:", _prefetchMeta);
+      payload = { ..._prefetchMeta, user_profile: userProfile };
+      _prefetchMeta = null;
+    } else if (sessionId) {
+      // Fallback: fetch meta from debug endpoint
+      try {
+        const dbg = await getJSON(`/session/${sessionId}/debug`);
+        const meta = dbg?.meta || {};
+        payload = {
+          subject: meta.selected_subject || null,
+          topics: meta.selected_topics || [],
+          user_profile: userProfile
+        };
+      } catch (err) {
+        log("session_debug_error", err);
+        payload = { user_profile: userProfile };
+      }
+    } else {
+      payload = { user_profile: userProfile };
+    }
+
+    console.log("[loadTestQuestions] User profile:", userProfile);
+    const data = await postJSON("/api/questions/load-test-questions", payload);
+
     testQuestions = data.questions || [];
     testQuestionIndex = 0;
     if (!testQuestions.length) {
@@ -4019,23 +7880,136 @@ async function loadTestQuestions() {
     }
     selectedOptions = {};
     answeredMap = {};
+    
+    // Fetch trigger plan for Focus Zones test
+    await fetchQuestionTriggerPlan();
+    
+    setTestBankLoading(true, "Caching question assets...");
+    await preloadQuestionAssets(testQuestions);
+    hasRenderableQuestions = testQuestions.length > 0;
     setTestHint("");
-    scheduleMutationsForQuestions();
-    renderTestQuestion();
   } catch (err) {
+    _prefetchMeta = null;
+    console.error("[loadTestQuestions] FAILED:", err, err?.stack);
     testQuestions = cloneClientFallbackQuestions();
     testQuestionIndex = 0;
     selectedOptions = {};
     answeredMap = {};
+    setTestBankLoading(true, "Caching fallback assets...");
+    await preloadQuestionAssets(testQuestions);
+    hasRenderableQuestions = testQuestions.length > 0;
     setTestHint("Server unavailable. Loaded local demo questions for trigger testing.");
     log("questions_load_error", err.message || String(err));
-    scheduleMutationsForQuestions();
-    renderTestQuestion();
+  } finally {
+    setTestBankLoading(false, "Question bank ready");
+    if (hasRenderableQuestions) {
+      renderTestQuestion();
+    }
   }
 }
 
+async function fetchQuestionTriggerPlan() {
+  try {
+    // Get user from auth system
+    const user = window.StressDostAuth?.getUser?.();
+    
+    // Get previous triggers from localStorage
+    const previousTriggers = JSON.parse(localStorage.getItem('previousTriggers') || '[]');
+    
+    const userProfile = {
+      name: user?.display_name || '',
+      test_count: user?.completed_sessions || 0,
+      completed_sessions: user?.completed_sessions || 0,  // Send both fields for backend compatibility
+      previous_triggers: previousTriggers
+    };
+    
+    // Extract question difficulties from loaded questions
+    const questionDifficulties = testQuestions.map(q => (q.level || 'MEDIUM').toUpperCase());
+    
+    console.log('[fetchQuestionTriggerPlan] Fetching trigger plan for user:', userProfile);
+    console.log('[fetchQuestionTriggerPlan] Question difficulties:', questionDifficulties);
+    
+    const response = await postJSON('/api/questions/trigger-plan', {
+      user_profile: userProfile,
+      question_difficulties: questionDifficulties
+    });
+    
+    questionTriggerPlan = response;
+    console.log('[fetchQuestionTriggerPlan] Trigger plan received:', questionTriggerPlan);
+    console.log('[fetchQuestionTriggerPlan] Sequence:', questionTriggerPlan?.sequence);
+    console.log('[fetchQuestionTriggerPlan] User type:', questionTriggerPlan?.user_type);
+    console.log('[fetchQuestionTriggerPlan] Is new user:', questionTriggerPlan?.is_new_user);
+    
+    // Store for next test
+    if (response.sequence && Array.isArray(response.sequence)) {
+      const triggerNames = response.sequence.map(t => t.trigger_name);
+      localStorage.setItem('previousTriggers', JSON.stringify(triggerNames));
+    }
+  } catch (err) {
+    console.error('[fetchQuestionTriggerPlan] Failed to fetch trigger plan:', err);
+    console.error('[fetchQuestionTriggerPlan] Error details:', err.message, err.stack);
+    questionTriggerPlan = null;
+  }
+}
+
+function getQuestionTrigger(questionNumber) {
+  console.log('[getQuestionTrigger] Called for question:', questionNumber);
+  console.log('[getQuestionTrigger] questionTriggerPlan:', questionTriggerPlan);
+  
+  if (!questionTriggerPlan || !questionTriggerPlan.sequence) {
+    console.log('[getQuestionTrigger] No trigger plan available');
+    return null;
+  }
+  
+  // questionNumber is 1-indexed
+  const triggerConfig = questionTriggerPlan.sequence[questionNumber - 1];
+  if (!triggerConfig) {
+    console.log('[getQuestionTrigger] No trigger config for question', questionNumber);
+    return null;
+  }
+  
+  console.log('[getQuestionTrigger] Trigger config:', triggerConfig);
+  
+  // Convert backend trigger name to frontend trigger name
+  // Backend: TORCHLIGHT_SPOTLIGHT -> Frontend: torchlightSpotlight
+  const triggerName = triggerConfig.trigger_name;
+  if (!triggerName) {
+    console.log('[getQuestionTrigger] No trigger_name in config');
+    return null;
+  }
+  
+  const frontendTriggerName = triggerName
+    .split('_')
+    .map((word, idx) => {
+      if (idx === 0) return word.toLowerCase();
+      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    })
+    .join('');
+  
+  console.log('[getQuestionTrigger] Converted', triggerName, 'to', frontendTriggerName);
+  
+  return {
+    name: frontendTriggerName,
+    difficulty: triggerConfig.difficulty,
+    intensity: triggerConfig.intensity,
+    isHard: triggerConfig.is_hard,
+    metadata: triggerConfig
+  };
+}
+
+
 function gotoQuestion(delta) {
   if (!testQuestions.length) return;
+  
+  // Cancel any pending triggers from the previous question
+  cancelPendingTriggers();
+  
+  // Deactivate all active triggers from the previous question
+  if (typeof StressTriggers !== 'undefined' && StressTriggers.deactivateAllTriggers) {
+    StressTriggers.deactivateAllTriggers();
+    console.log('[gotoQuestion] Deactivated all active triggers');
+  }
+  
   testQuestionIndex = Math.min(
     Math.max(testQuestionIndex + delta, 0),
     testQuestions.length - 1
@@ -4097,10 +8071,49 @@ async function mutateQuestionAt(index) {
 }
 
 async function submitCurrentQuestion() {
+  console.log('[submitCurrentQuestion] Called');
+  
   if (!testQuestions.length) {
     setTestHint("Load questions first.");
     return;
   }
+  
+  // Q6 HARD_PEER_DOUBT: Intercept submission with option feedback popup (up to 2 times)
+  // Only intercept if we're actually on Q6 (question number 6)
+  const currentQuestionNumber = testQuestionIndex + 1;
+  
+  if (currentQuestionNumber === 6 &&
+      StressTriggers.isOptionFeedbackInterceptionEnabled() && 
+      StressTriggers.getOptionFeedbackInterceptionCount() < StressTriggers.getOptionFeedbackMaxInterceptions()) {
+    
+    const q = testQuestions[testQuestionIndex];
+    const picked = selectedOptions[q.question_id];
+    
+    if (picked) {
+      StressTriggers.incrementOptionFeedbackInterceptionCount();
+      const count = StressTriggers.getOptionFeedbackInterceptionCount();
+      const max = StressTriggers.getOptionFeedbackMaxInterceptions();
+      console.log(`[submitCurrentQuestion] Q6 Interception ${count}/${max}`);
+      
+      // Activate the trigger to set the flags
+      StressTriggers.activateTrigger('optionFeedbackPopups', {
+        userState: StressTriggers.currentUserState(),
+        force: true,
+        reason: `question_trigger:Q6:peer_doubt_interception`,
+        selectedOption: picked,
+        questionId: q.question_id,
+        interceptionNumber: count
+      });
+      
+      // Show the actual popup (maybeShowOptionFeedbackPopup is inside StressTriggers)
+      // We need to trigger it through option click
+      StressTriggers.onOptionClick(q.question_id, picked);
+      
+      // Don't proceed with submission
+      return;
+    }
+  }
+  
   await StressTriggers.beforeSubmitDelay();
   try {
     const q = testQuestions[testQuestionIndex];
@@ -4126,9 +8139,43 @@ async function submitCurrentQuestion() {
         }
       }
       answeredMap[q.question_id] = { selected: value, correct };
+      updateSolutionButtonState();
       updateScoreMeta();
+      const lifelinesBeforeDecrement = _lifelines;
+      if (!correct && _lifelines > 0) _lifelines -= 1;
+      console.log('[submitCurrentQuestion] Lifelines:', lifelinesBeforeDecrement, '→', _lifelines, 'Correct:', correct);
+      updateLifelineState();
+      
+      // Check if test should end due to lifeline loss
+      if (_lifelines <= 0) {
+        console.log('[submitCurrentQuestion] All lifelines lost! Showing end screen');
+        
+        // Capture the time used at this moment
+        const timeUsedAtEnd = StressTriggers.timeUsedMs();
+        console.log('[submitCurrentQuestion] timeUsedAtEnd:', timeUsedAtEnd);
+        
+        // Cancel all pending triggers
+        cancelPendingTriggers();
+        
+        // Deactivate all active triggers immediately
+        if (typeof StressTriggers !== 'undefined' && StressTriggers.deactivateAllTriggers) {
+          StressTriggers.deactivateAllTriggers();
+          console.log('[submitCurrentQuestion] Deactivated all triggers');
+        }
+        
+        showLifelineLostBanner();
+        setTimeout(() => {
+          showTestEndScreen(timeUsedAtEnd);
+        }, 2000);
+        return; // Don't advance to next question
+      }
+      
       StressTriggers.noteAnswerOutcome(correct, hasAnswerKey);
-      setTestHint(correct ? "Correct ✅" : "Saved. (Either incorrect or no answer key provided.)");
+      setTestHint("Answer saved.");
+      const extraDelayMs = StressTriggers.consumePostSubmitDelayMs?.() || 0;
+      if (extraDelayMs > 0) await sleep(extraDelayMs);
+      await sleep(SOLUTION_GRACE_MS);
+      advanceAfterSubmit();
       return;
     }
 
@@ -4148,10 +8195,45 @@ async function submitCurrentQuestion() {
     } else if (typeof correctAnswer === "string") {
       correct = picked.trim().toUpperCase() === correctAnswer.trim().toUpperCase();
     }
-    answeredMap[q.question_id] = { selected: picked, correct };
+    const primaryCorrectLabel = Array.isArray(correctAnswer)
+      ? normalizeAnswerLabel(correctAnswer[0])
+      : normalizeAnswerLabel(correctAnswer);
+    answeredMap[q.question_id] = { selected: picked, correct, correctLabel: primaryCorrectLabel };
+    updateSolutionButtonState();
     updateScoreMeta();
+    if (!correct && _lifelines > 0) _lifelines -= 1;
+    updateLifelineState();
+    
+    // Check if test should end due to lifeline loss
+    if (_lifelines <= 0) {
+      console.log('[submitCurrentQuestion] All lifelines lost! Showing end screen');
+      
+      // Capture the time used at this moment
+      const timeUsedAtEnd = StressTriggers.timeUsedMs();
+      console.log('[submitCurrentQuestion] timeUsedAtEnd:', timeUsedAtEnd);
+      
+      // Cancel all pending trigger timeouts
+      cancelPendingTriggers();
+      
+      // Deactivate all active triggers immediately
+      if (typeof StressTriggers !== 'undefined' && StressTriggers.deactivateAllTriggers) {
+        StressTriggers.deactivateAllTriggers();
+        console.log('[submitCurrentQuestion] Deactivated all triggers');
+      }
+      
+      showLifelineLostBanner();
+      setTimeout(() => {
+        showTestEndScreen(timeUsedAtEnd);
+      }, 2000);
+      return; // Don't advance to next question
+    }
+    
+    renderResultStateForCurrentQuestion();
     StressTriggers.noteAnswerOutcome(correct, hasAnswerKey);
-    setTestHint(correct ? "Correct ✅" : "Saved. (Either incorrect or no answer key provided.)");
+    setTestHint(correct ? "Correct answer." : "Wrong answer.");
+    const extraDelayMs = StressTriggers.consumePostSubmitDelayMs?.() || 0;
+    await sleep(900 + extraDelayMs + SOLUTION_GRACE_MS);
+    advanceAfterSubmit();
   } finally {
     StressTriggers.afterSubmit();
   }
@@ -4173,6 +8255,8 @@ async function startSessionFlow() {
       showStage("intro");
       return;
     }
+
+    lastAnswerEcho = text;
 
     setIntroHint("");
     showStage("loading", "Absorbing your story…");
@@ -4215,6 +8299,11 @@ async function fetchNextQuestion(message) {
       return;
     }
 
+    if (data.followups_complete) {
+      await handleCompletion();
+      return;
+    }
+
     setQuestionUI(data);
     showStage("qa");
   } catch (err) {
@@ -4225,6 +8314,10 @@ async function fetchNextQuestion(message) {
 }
 
 async function submitAnswer() {
+  // CRITICAL: Deactivate all triggers immediately when user submits
+  // This prevents triggers from overlapping with the next question
+  StressTriggers.deactivateAllTriggers();
+  
   if (!sessionId || btnAnswer.disabled) return;
   const answer = answerInput.value.trim();
   if (!answer) {
@@ -4235,6 +8328,7 @@ async function submitAnswer() {
   }
 
   try {
+    lastAnswerEcho = answer;
     btnAnswer.disabled = true;
     showStage("loading", "Reading your answer…");
 
@@ -4245,7 +8339,7 @@ async function submitAnswer() {
     };
     const data = await postJSON(`/session/${sessionId}/answer`, payload);
     log("answer", data);
-    StressTriggers.recordFollowupAnswer(answer, currentDomain, currentSlot, $("questionText")?.textContent || "");
+    StressTriggers.recordFollowupAnswer?.(answer, currentDomain, currentSlot, $("questionText")?.textContent || "");
 
     if (data.need_clarification) {
       setHint("Quick clarifier requested: keep it tight.");
@@ -4267,12 +8361,21 @@ async function submitAnswer() {
 }
 
 async function skipRemainingQuestions() {
+  // CRITICAL: Deactivate all triggers when skipping
+  StressTriggers.deactivateAllTriggers();
+  
   if (!sessionId || !btnSkip || btnSkip.hidden || btnSkip.disabled) return;
   try {
     btnSkip.disabled = true;
     btnAnswer.disabled = true;
     showStage("loading", "Skipping remaining questions…");
     await postJSON(`/session/${sessionId}/complete`, {});
+    
+    // Increment test count for trigger plan
+    const testCount = parseInt(localStorage.getItem('testCount')) || 0;
+    localStorage.setItem('testCount', testCount + 1);
+    console.log('[skipRemainingQuestions] Test count incremented to:', testCount + 1);
+    
     await handleCompletion();
   } catch (err) {
     log("skip_error", err.message);
@@ -4284,35 +8387,73 @@ async function skipRemainingQuestions() {
 }
 
 async function handleCompletion() {
-  showStage("loading", "The devil is designing your pressure test…");
+  showStage("loading", "Wrapping up your follow-ups…");
   try {
-    popupSummary.textContent = "Pressure simulation is ready. Accept challenge to begin.";
+    if (popupSummary) {
+      popupSummary.textContent = "Pressure simulation is ready. Accept challenge to begin.";
+    }
+
+    let initialText = "";
+    let conversationHistory = [];
+    try {
+      const dbg = await getJSON(`/session/${sessionId}/debug`);
+      initialText = String(dbg?.raw_initial_text || "");
+      conversationHistory = Array.isArray(dbg?.history) ? dbg.history : [];
+      console.log("[handleCompletion] initialText:", initialText?.substring(0, 80), "history entries:", conversationHistory.length);
+    } catch (e) { console.warn("[handleCompletion] debug fetch failed:", e); }
+
+    // Build devil brief page and show it
+    const extractionPromise = window.academicTopics?.decideAndStore?.(sessionId, initialText, conversationHistory);
+    try { await buildDevilBriefPage(); } catch (e) { console.warn("[handleCompletion] devil brief build failed:", e); }
+
+    const decision = await extractionPromise;
+    console.log("[handleCompletion] extraction decision:", JSON.stringify(decision));
+    window.__academicDecision = decision || null;
+
+    // Show the devil stage
+    showStage("devil");
   } catch (err) {
-    log("simulation_error", err.message);
+    console.error("[handleCompletion] error, falling through to subject selection:", err);
+    window.__academicDecision = null;
+    try { await acceptDevilChallenge(); } catch (_) { showStage("subjectSelection"); }
   }
-  await loadTestQuestions();
-  await buildDevilBriefPage();
-  showStage("devil");
 }
 
 async function acceptDevilChallenge() {
   if (!sessionId) return;
-  if (devilHint) devilHint.textContent = "Challenge accepted. Entering test arena...";
-  if (btnAcceptChallenge) btnAcceptChallenge.disabled = true;
-  StressTriggers.beginExamTimer();
-  showStage("popups");
 
-  try {
-    const data = await postJSON(`/session/${sessionId}/start-simulation`, {});
-    log("start_simulation", data);
-    popupSummary.textContent = "Pressure simulation is live. Keep your focus.";
-  } catch (err) {
-    log("simulation_error", err.message || String(err));
-    popupSummary.textContent = "Could not start popup simulation.";
+  const decision = window.__academicDecision;
+  const autoSubject = decision?.autoPickedSubject || null;
+  const autoTopics  = decision?.autoPickedTopics  || null;
+  console.log("[acceptDevilChallenge] autoSubject:", autoSubject, "autoTopics:", autoTopics);
+
+  // Only show fullscreen if we have both subject AND topics (ready to start test)
+  if (autoSubject && autoTopics) {
+    // Store the test parameters for later (after fullscreen)
+    pendingTestStart = { autoSubject, autoTopics };
+    
+    // Show fullscreen requirement stage
+    showStage("fullscreen");
+    
+    // Reset fullscreen status
+    if (fullscreenStatus) {
+      fullscreenStatus.textContent = 'Please enter fullscreen mode to continue';
+      fullscreenStatus.className = 'fullscreen-status error';
+    }
+    return;
   }
 
-  StressTriggers.onPopupsEntered();
-  if (btnAcceptChallenge) btnAcceptChallenge.disabled = false;
+  // If subject is known but topics are not, go to topic selection
+  if (autoSubject && !autoTopics) {
+    console.log("[acceptDevilChallenge] subject known, topics unknown → chapter screen");
+    await window.academicTopics?.loadTopicsForSubject?.(autoSubject, sessionId);
+    return;
+  }
+
+  // If no subject, go to subject selection
+  console.log("[acceptDevilChallenge] no subject → subject screen");
+  showStage("subjectSelection");
+  await window.academicTopics?.initializeSubjectSelection?.(sessionId, null);
 }
 
 // HUD ----------------------------------------------------------------------
@@ -4327,13 +8468,6 @@ btnCloseHud?.addEventListener("click", () => toggleHud(false));
 
 // Events -------------------------------------------------------------------
 btnStart?.addEventListener("click", startSessionFlow);
-btnNameNext?.addEventListener("click", proceedFromNameStep);
-userNameInput?.addEventListener("keydown", (evt) => {
-  if (evt.key === "Enter") {
-    evt.preventDefault();
-    proceedFromNameStep();
-  }
-});
 btnRecord?.addEventListener("click", async () => {
   try {
     if (mediaRecorder && mediaRecorder.state === "recording") {
@@ -4352,21 +8486,770 @@ btnRestart?.addEventListener("click", resetFlow);
 btnReset?.addEventListener("click", resetFlow);
 btnAcceptChallenge?.addEventListener("click", acceptDevilChallenge);
 btnLogout?.addEventListener("click", () => {
-  window.StressDostAuth?.clearUser?.();
-  window.location.href = "/login";
+  if (confirm('Are you sure you want to logout?')) {
+    window.StressDostAuth?.clearUser?.();
+    // Clear localStorage
+    try {
+      localStorage.removeItem('sd_user');
+      localStorage.removeItem('sd_mood');
+    } catch (e) {
+      console.error('Failed to clear localStorage:', e);
+    }
+    window.location.href = "/login";
+  }
 });
 btnPrevQuestion?.addEventListener("click", () => gotoQuestion(-1));
 btnNextQuestion?.addEventListener("click", () => gotoQuestion(1));
 btnReloadQuestions?.addEventListener("click", () => loadTestQuestions());
+
+// Fullscreen Management
+const btnEnterFullscreen = document.getElementById('btnEnterFullscreen');
+const fullscreenStatus = document.getElementById('fullscreenStatus');
+let isTestActive = false;
+let fullscreenWarningOverlay = null;
+
+function isFullscreen() {
+  return !!(document.fullscreenElement || document.webkitFullscreenElement || 
+            document.mozFullScreenElement || document.msFullscreenElement);
+}
+
+function enterFullscreen() {
+  const elem = document.documentElement;
+  if (elem.requestFullscreen) {
+    return elem.requestFullscreen();
+  } else if (elem.webkitRequestFullscreen) {
+    return elem.webkitRequestFullscreen();
+  } else if (elem.mozRequestFullScreen) {
+    return elem.mozRequestFullScreen();
+  } else if (elem.msRequestFullscreen) {
+    return elem.msRequestFullscreen();
+  }
+  return Promise.reject(new Error('Fullscreen not supported'));
+}
+
+function showFullscreenWarning() {
+  // Remove existing warning if any
+  if (fullscreenWarningOverlay) {
+    fullscreenWarningOverlay.remove();
+  }
+
+  // Create warning overlay
+  fullscreenWarningOverlay = document.createElement('div');
+  fullscreenWarningOverlay.style.cssText = `
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.95);
+    z-index: 99999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(10px);
+  `;
+
+  fullscreenWarningOverlay.innerHTML = `
+    <div style="
+      background: white;
+      border-radius: 20px;
+      padding: 48px;
+      max-width: 500px;
+      text-align: center;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    ">
+      <div style="font-size: 64px; margin-bottom: 20px;">⚠️</div>
+      <h2 style="
+        font-size: 28px;
+        font-weight: 700;
+        color: #1A202C;
+        margin: 0 0 16px 0;
+      ">Fullscreen Mode Required</h2>
+      <p style="
+        font-size: 16px;
+        line-height: 1.6;
+        color: #4A5568;
+        margin: 0 0 32px 0;
+      ">
+        You have exited fullscreen mode. The test is paused.<br/>
+        Please return to fullscreen mode to continue.
+      </p>
+      <button id="btnReturnFullscreen" style="
+        width: 100%;
+        padding: 16px 32px;
+        font-size: 16px;
+        font-weight: 600;
+        border-radius: 12px;
+        background: linear-gradient(135deg, #6366f1, #7c3aed);
+        border: none;
+        color: white;
+        cursor: pointer;
+        box-shadow: 0 4px 16px rgba(124, 58, 237, 0.3);
+      ">Return to Fullscreen</button>
+    </div>
+  `;
+
+  document.body.appendChild(fullscreenWarningOverlay);
+
+  // Add click handler to return button
+  const btnReturn = fullscreenWarningOverlay.querySelector('#btnReturnFullscreen');
+  btnReturn?.addEventListener('click', async () => {
+    try {
+      await enterFullscreen();
+    } catch (err) {
+      console.error('[Fullscreen] Error returning to fullscreen:', err);
+    }
+  });
+}
+
+function hideFullscreenWarning() {
+  if (fullscreenWarningOverlay) {
+    fullscreenWarningOverlay.remove();
+    fullscreenWarningOverlay = null;
+  }
+}
+
+function updateFullscreenStatus() {
+  const inFullscreen = isFullscreen();
+  
+  // Handle fullscreen requirement stage
+  if (fullscreenStatus) {
+    if (inFullscreen) {
+      fullscreenStatus.textContent = '✓ Fullscreen mode active - Starting test...';
+      fullscreenStatus.className = 'fullscreen-status success';
+      // Auto-proceed to test after entering fullscreen
+      setTimeout(() => {
+        proceedToTest();
+      }, 1000);
+    } else {
+      fullscreenStatus.textContent = 'Please enter fullscreen mode to continue';
+      fullscreenStatus.className = 'fullscreen-status error';
+    }
+  }
+
+  // Handle during test
+  if (isTestActive) {
+    if (inFullscreen) {
+      hideFullscreenWarning();
+    } else {
+      showFullscreenWarning();
+    }
+  }
+}
+
+btnEnterFullscreen?.addEventListener('click', async () => {
+  try {
+    await enterFullscreen();
+    updateFullscreenStatus();
+  } catch (err) {
+    console.error('[Fullscreen] Error:', err);
+    if (fullscreenStatus) {
+      fullscreenStatus.textContent = '✗ Could not enter fullscreen. Please try F11 or try again.';
+      fullscreenStatus.className = 'fullscreen-status error';
+    }
+  }
+});
+
+// Listen for fullscreen changes
+document.addEventListener('fullscreenchange', updateFullscreenStatus);
+document.addEventListener('webkitfullscreenchange', updateFullscreenStatus);
+document.addEventListener('mozfullscreenchange', updateFullscreenStatus);
+document.addEventListener('MSFullscreenChange', updateFullscreenStatus);
+
+// Store the original acceptDevilChallenge logic
+let pendingTestStart = null;
+
+async function proceedToTest() {
+  if (!pendingTestStart) return;
+  
+  const { autoSubject, autoTopics } = pendingTestStart;
+  
+  // Mark test as active to monitor fullscreen
+  isTestActive = true;
+  
+  // Continue with the original test start logic
+  if (autoSubject && autoTopics) {
+    try {
+      await postJSON(`/api/session/${sessionId}/meta`, {
+        selected_subject: autoSubject,
+        selected_topics: autoTopics,
+      });
+    } catch (_) {}
+
+    startQuestionPrefetch(autoSubject, autoTopics);
+
+    if (devilHint) devilHint.textContent = "Challenge accepted. Entering test arena...";
+    StressTriggers.beginExamTimer();
+    showStage("popups");
+
+    await loadTestQuestions();
+
+    try {
+      const data = await postJSON(`/session/${sessionId}/start-simulation`, {});
+      log("start_simulation", data);
+      if (popupSummary) popupSummary.textContent = "Pressure simulation is live. Keep your focus.";
+    } catch (err) {
+      log("simulation_error", err.message || String(err));
+      if (popupSummary) popupSummary.textContent = "Could not start popup simulation.";
+    }
+    StressTriggers.onPopupsEntered();
+    pendingTestStart = null;
+    return;
+  }
+
+  if (autoSubject && !autoTopics) {
+    console.log("[proceedToTest] subject known, topics unknown → chapter screen");
+    await window.academicTopics?.loadTopicsForSubject?.(autoSubject, sessionId);
+    pendingTestStart = null;
+    return;
+  }
+
+  console.log("[proceedToTest] no subject → subject screen");
+  showStage("subjectSelection");
+  await window.academicTopics?.initializeSubjectSelection?.(sessionId, null);
+  pendingTestStart = null;
+}
+
+let _lifelines = 3;  // top-level lifeline counter (state.lifelines is inside the IIFE)
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeAnswerLabel(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function getPrimaryCorrectAnswer(q) {
+  const answer = q?.correct_answer || q?.correct_answers;
+  if (Array.isArray(answer) && answer.length) return normalizeAnswerLabel(answer[0]);
+  if (typeof answer === "string") return normalizeAnswerLabel(answer);
+  return "";
+}
+
+function renderResultStateForCurrentQuestion() {
+  const q = testQuestions[testQuestionIndex];
+  if (!q || (q.question_type || "").toLowerCase() !== "scq" || !questionOptions) return;
+  const row = answeredMap[q.question_id];
+  questionOptions.querySelectorAll("label.option").forEach((node) => {
+    const mark = node.querySelector(".option-mark");
+    node.classList.remove("option-result-correct", "option-result-wrong");
+    if (mark) mark.textContent = "";
+  });
+  if (!row || !row.selected) return;
+  const picked = normalizeAnswerLabel(row.selected);
+  const correctLabel = normalizeAnswerLabel(row.correctLabel || getPrimaryCorrectAnswer(q));
+  questionOptions.querySelectorAll("label.option").forEach((node) => {
+    const input = node.querySelector("input[type=radio]");
+    const mark = node.querySelector(".option-mark");
+    const label = normalizeAnswerLabel(input?.value);
+    if (!label) return;
+    if (label === correctLabel) {
+      node.classList.add("option-result-correct");
+      if (mark) mark.textContent = "✓";
+    } else if (label === picked && picked !== correctLabel) {
+      node.classList.add("option-result-wrong");
+      if (mark) mark.textContent = "✗";
+    }
+  });
+}
+
+function updateLifelineState() {
+  if (!btnLifeline) return;
+  const lifelineCount = Math.max(0, _lifelines);
+  btnLifeline.textContent = `Lifelines: ${lifelineCount}`;
+  
+  // Add visual feedback when lifelines are lost
+  if (lifelineCount === 0) {
+    btnLifeline.classList.add('lifeline-lost');
+  } else {
+    btnLifeline.classList.remove('lifeline-lost');
+  }
+  
+  const q = testQuestions[testQuestionIndex];
+  if (lifelineCount <= 0 || !q || (q.question_type || "").toLowerCase() !== "scq" || answeredMap[q.question_id] || q.lifelineUsed) {
+    btnLifeline.disabled = true;
+  } else {
+    btnLifeline.disabled = false;
+  }
+}
+
+function showLifelineLostBanner() {
+  const banner = document.createElement('div');
+  banner.style.cssText = `
+    position: fixed;
+    top: 60px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10000;
+    width: calc(100% - 40px);
+    max-width: 440px;
+    background: linear-gradient(135deg, rgba(120, 53, 15, 0.95), rgba(146, 64, 14, 0.95));
+    border: 1px solid rgba(217, 119, 6, 0.4);
+    border-radius: 12px;
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    animation: slideDown 0.3s ease;
+  `;
+  
+  banner.innerHTML = `
+    <div style="font-size: 24px;">💀</div>
+    <div style="
+      flex: 1;
+      font-size: 15px;
+      font-weight: 600;
+      color: #FEF3C7;
+      letter-spacing: 0.02em;
+    ">All lifelines lost!</div>
+  `;
+  
+  document.body.appendChild(banner);
+  
+  // Auto-remove after 2 seconds
+  setTimeout(() => {
+    banner.style.opacity = '0';
+    banner.style.transform = 'translateX(-50%) translateY(-10px)';
+    banner.style.transition = 'all 0.3s ease';
+    setTimeout(() => banner.remove(), 300);
+  }, 2000);
+}
+
+async function showTestEndScreen(timeUsedMs) {
+  console.log('[showTestEndScreen] Called with timeUsedMs:', timeUsedMs);
+  
+  // Mark test as inactive - stop monitoring fullscreen
+  isTestActive = false;
+  hideFullscreenWarning();
+  
+  // Stop the exam timer immediately
+  if (StressTriggers && StressTriggers.stopExamTimer) {
+    StressTriggers.stopExamTimer();
+    console.log('[showTestEndScreen] Stopped exam timer');
+  }
+  
+  // Hide the timer element
+  const timerEl = document.getElementById('questionTimer');
+  if (timerEl) {
+    timerEl.style.display = 'none';
+  }
+  
+  // Calculate stats
+  const totalQuestions = testQuestions.length;
+  const correctCount = Object.values(answeredMap).filter(a => a.correct).length;
+  const accuracy = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0;
+  const lifelinesLeft = Math.max(0, _lifelines);
+  const lifelinesTotal = 3;
+  
+  // Validate the provided time - should be between 0 and 15 minutes
+  if (!timeUsedMs || timeUsedMs < 0 || timeUsedMs > 900000) {
+    console.warn('[showTestEndScreen] Invalid timeUsedMs:', timeUsedMs, '- using 0');
+    timeUsedMs = 0;
+  }
+  
+  const minutes = Math.floor(timeUsedMs / 60000);
+  const seconds = Math.floor((timeUsedMs % 60000) / 1000);
+  const timeUsedStr = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  
+  console.log('[showTestEndScreen] Final stats:', { totalQuestions, correctCount, accuracy, lifelinesLeft, timeUsedStr, timeUsedMs });
+  
+  // Calculate focus score (out of 100)
+  const focusScore = Math.min(100, Math.max(0, Math.round(accuracy * 0.7 + (lifelinesLeft / lifelinesTotal) * 30)));
+  
+  // Determine verdict
+  let verdict = "Lifelines gone. Lessons earned.";
+  if (lifelinesLeft > 0 && accuracy >= 80) {
+    verdict = "Strong focus. Keep it sharp.";
+  } else if (lifelinesLeft > 0 && accuracy >= 60) {
+    verdict = "Decent effort. Room to grow.";
+  } else if (lifelinesLeft > 0) {
+    verdict = "Focus wavered. Try again.";
+  }
+  
+  const overlay = document.createElement('div');
+  overlay.style.cssText = `
+    position: fixed;
+    inset: 0;
+    background: #0A0A0A;
+    z-index: 10001;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    animation: fadeIn 0.4s ease;
+  `;
+  
+  overlay.innerHTML = `
+    <style>
+      @keyframes fadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+      @keyframes slideDown {
+        from { transform: translateX(-50%) translateY(-20px); opacity: 0; }
+        to { transform: translateX(-50%) translateY(0); opacity: 1; }
+      }
+      .focus-score-ring {
+        width: 240px;
+        height: 240px;
+        position: relative;
+      }
+      .focus-score-ring svg {
+        transform: rotate(-90deg);
+      }
+      .focus-score-ring circle {
+        fill: none;
+        stroke-width: 12;
+      }
+      .focus-score-bg {
+        stroke: rgba(255, 255, 255, 0.1);
+      }
+      .focus-score-fill {
+        stroke: #F59E0B;
+        stroke-linecap: round;
+        stroke-dasharray: 628;
+        stroke-dashoffset: ${628 - (628 * focusScore / 100)};
+        transition: stroke-dashoffset 1.5s ease;
+      }
+      .breakdown-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 20px 24px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      }
+      .breakdown-row:last-child {
+        border-bottom: none;
+      }
+      .breakdown-label {
+        font-size: 16px;
+        color: rgba(255, 255, 255, 0.5);
+        font-weight: 400;
+      }
+      .breakdown-value {
+        font-size: 18px;
+        color: #FFFFFF;
+        font-weight: 600;
+      }
+      .breakdown-value.success {
+        color: #4ADE80;
+      }
+      .breakdown-value.danger {
+        color: #F87171;
+      }
+    </style>
+    
+    <div style="position: absolute; top: 20px; left: 20px; font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; color: rgba(255, 255, 255, 0.4); font-weight: 600;">FOCUSDOST</div>
+    
+    <button onclick="this.parentElement.remove()" style="
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      background: none;
+      border: none;
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 24px;
+      cursor: pointer;
+      padding: 8px;
+      line-height: 1;
+    ">×</button>
+    
+    <div style="text-align: center; margin-bottom: 40px;">
+      <div style="
+        font-size: 11px;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: #D4A574;
+        font-weight: 700;
+        margin-bottom: 32px;
+      ">FOCUS SCORE</div>
+      
+      <div class="focus-score-ring">
+        <svg width="240" height="240">
+          <circle class="focus-score-bg" cx="120" cy="120" r="100"></circle>
+          <circle class="focus-score-fill" cx="120" cy="120" r="100"></circle>
+        </svg>
+        <div style="
+          position: absolute;
+          inset: 0;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+        ">
+          <div style="font-size: 72px; font-weight: 700; color: #FFFFFF; line-height: 1;">${focusScore}</div>
+          <div style="font-size: 13px; color: rgba(255, 255, 255, 0.5); margin-top: 8px; letter-spacing: 0.1em; text-transform: uppercase;">OUT OF 100</div>
+        </div>
+      </div>
+    </div>
+    
+    <div style="margin-bottom: 40px; text-align: center;">
+      <div style="
+        font-size: 11px;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: #D4A574;
+        font-weight: 700;
+        margin-bottom: 12px;
+      ">VERDICT</div>
+      <div style="
+        font-size: 20px;
+        font-weight: 400;
+        color: #FFFFFF;
+        line-height: 1.4;
+      ">${verdict}</div>
+    </div>
+    
+    <div id="breakdown-toggle" style="
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.5);
+      font-style: italic;
+      cursor: pointer;
+      margin-bottom: 20px;
+      user-select: none;
+    ">tap for breakdown ↓</div>
+    
+    <div id="breakdown-panel" style="
+      width: 100%;
+      max-width: 440px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 16px;
+      overflow: hidden;
+      margin-bottom: 32px;
+      display: none;
+    ">
+      <div class="breakdown-row">
+        <div class="breakdown-label">Accuracy</div>
+        <div class="breakdown-value success">${accuracy}%</div>
+      </div>
+      <div class="breakdown-row">
+        <div class="breakdown-label">Correct</div>
+        <div class="breakdown-value">${correctCount} of ${totalQuestions}</div>
+      </div>
+      <div class="breakdown-row">
+        <div class="breakdown-label">Lifelines left</div>
+        <div class="breakdown-value ${lifelinesLeft === 0 ? 'danger' : ''}">${lifelinesLeft} of ${lifelinesTotal}</div>
+      </div>
+      <div class="breakdown-row">
+        <div class="breakdown-label">Time used</div>
+        <div class="breakdown-value">${timeUsedStr}</div>
+      </div>
+      <div class="breakdown-row">
+        <div class="breakdown-label">Distractions survived</div>
+        <div class="breakdown-value">0 of 0</div>
+      </div>
+    </div>
+    
+    <button onclick="window.location.href='/'" style="
+      width: 100%;
+      max-width: 440px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 12px;
+      color: #FFFFFF;
+      font-size: 16px;
+      font-weight: 600;
+      padding: 16px 24px;
+      cursor: pointer;
+      transition: all 0.2s;
+    " onmouseover="this.style.background='rgba(255, 255, 255, 0.08)'" onmouseout="this.style.background='rgba(255, 255, 255, 0.05)'">Home</button>
+  `;
+  
+  document.body.appendChild(overlay);
+  
+  // Increment completed_sessions when test ends (await to ensure it completes)
+  const user = window.StressDostAuth?.getUser();
+  if (user && user.user_id) {
+    console.log('[showTestEndScreen] Incrementing completed session count for user:', user.user_id);
+    try {
+      const response = await fetch(`/api/user/${user.user_id}/session-complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await response.json();
+      console.log('[showTestEndScreen] Session completed:', data);
+      
+      // Update local storage with new completed session count
+      if (user && data.completed_sessions !== undefined) {
+        user.completed_sessions = data.completed_sessions;
+        window.StressDostAuth.setUser(user);
+        console.log('[showTestEndScreen] Updated user completed_sessions to:', data.completed_sessions);
+        // Update UI to show new session count
+        syncUserUI();
+      }
+    } catch (err) {
+      console.error('[showTestEndScreen] Failed to increment completed session:', err);
+    }
+  }
+  
+  // Toggle breakdown
+  const toggle = overlay.querySelector('#breakdown-toggle');
+  const panel = overlay.querySelector('#breakdown-panel');
+  let isExpanded = false;
+  
+  toggle.addEventListener('click', () => {
+    isExpanded = !isExpanded;
+    if (isExpanded) {
+      panel.style.display = 'block';
+      toggle.textContent = 'hide breakdown ↑';
+    } else {
+      panel.style.display = 'none';
+      toggle.textContent = 'tap for breakdown ↓';
+    }
+  });
+  
+  // Home button handler
+  const homeBtn = overlay.querySelector('button');
+  if (homeBtn) {
+    homeBtn.addEventListener('click', () => {
+      overlay.remove();
+      window.location.href = '/';
+    });
+  }
+}
+
+function openSolutionModal() {
+  if (btnShowSolution?.hidden || btnShowSolution?.classList.contains("is-disabled")) return;
+  const q = testQuestions[testQuestionIndex];
+  if (!q || !solutionModal) return;
+  const labelAnswer = getPrimaryCorrectAnswer(q);
+  const integerAnswer =
+    q.integer_answer !== undefined && q.integer_answer !== null ? String(q.integer_answer) : "";
+  const answer = labelAnswer || integerAnswer || "Not available";
+  if (solutionAnswerLine) solutionAnswerLine.textContent = `Correct answer: ${answer}`;
+  if (solutionContent) {
+    solutionContent.innerHTML = q.solution_html || "<p>Solution not available.</p>";
+  }
+  solutionModalOpen = true;
+  solutionModal.hidden = false;
+}
+
+function closeSolutionModal() {
+  if (solutionModal) solutionModal.hidden = true;
+  solutionModalOpen = false;
+  if (pendingAdvanceAfterSubmit) {
+    pendingAdvanceAfterSubmit = false;
+    advanceAfterSubmit();
+  }
+}
+
+btnLifeline?.addEventListener("click", () => {
+  if (_lifelines <= 0) return;
+  const q = testQuestions[testQuestionIndex];
+  if (!q || (q.question_type || "").toLowerCase() !== "scq") return;
+  if (q.lifelineUsed || answeredMap[q.question_id]) return;
+  
+  // Add temporary animation when using lifeline
+  btnLifeline.style.transform = 'scale(0.95)';
+  setTimeout(() => {
+    btnLifeline.style.transform = 'scale(1)';
+  }, 150);
+  
+  // Find incorrect options
+  const correct = q.correct_answer || "A";
+  const incorrects = (q.options || []).filter(o => o.label !== correct).map(o => o.label);
+  
+  // Pick 2 at random to hide
+  const toHide = [];
+  while(toHide.length < 2 && incorrects.length > 0) {
+    const idx = Math.floor(Math.random() * incorrects.length);
+    toHide.push(incorrects.splice(idx, 1)[0]);
+  }
+  
+  // Hide them visually
+  const inputs = questionOptions.querySelectorAll("input[type=radio]");
+  inputs.forEach(input => {
+    if (toHide.includes(input.value)) {
+      input.closest("label").style.opacity = "0.3";
+      input.closest("label").style.pointerEvents = "none";
+    }
+  });
+  
+  _lifelines--;
+  q.lifelineUsed = true;
+  updateLifelineState();
+  
+  // Show feedback
+  setTestHint("Lifeline used! Two incorrect options removed.");
+});
+btnShowSolution?.addEventListener("click", openSolutionModal);
+btnShowSolution?.addEventListener("keydown", (evt) => {
+  if (evt.key === "Enter" || evt.key === " ") {
+    evt.preventDefault();
+    openSolutionModal();
+  }
+});
+btnCloseSolution?.addEventListener("click", closeSolutionModal);
+solutionModal?.addEventListener("click", (evt) => {
+  if (evt.target === solutionModal) closeSolutionModal();
+});
+
 btnSubmitQuestion?.addEventListener("click", submitCurrentQuestion);
+btnFinishTest?.addEventListener("click", () => skipRemainingQuestions());
+btnReportError?.addEventListener("click", () => {
+  setTestHint("Thanks - the report was captured.");
+});
+// Handle save button in subject selection
+btnSaveQuestionSubject?.addEventListener("click", () => {
+  btnSaveQuestionSubject.classList.toggle("is-saved");
+  const isSaved = btnSaveQuestionSubject.classList.contains("is-saved");
+  
+  // Update emoji based on save state
+  if (isSaved) {
+    btnSaveQuestionSubject.textContent = "💎"; // Premium emoji for saved state
+    setSubjectHint("Subject preference saved!");
+  } else {
+    btnSaveQuestionSubject.textContent = "🔖"; // Original emoji
+    setSubjectHint("Save preference removed.");
+  }
+});
+
+// Question header save button handler
+btnSaveQuestionHeader?.addEventListener("click", () => {
+  btnSaveQuestionHeader.classList.toggle("is-saved");
+  const isSaved = btnSaveQuestionHeader.classList.contains("is-saved");
+  
+  // Update SVG fill based on save state
+  const svg = btnSaveQuestionHeader.querySelector("svg");
+  if (isSaved) {
+    svg.setAttribute("fill", "currentColor"); // Filled when saved
+    setTestHint("Question saved for review.");
+  } else {
+    svg.setAttribute("fill", "none"); // Outline when not saved
+    setTestHint("Save removed.");
+  }
+});
+
+// Original save button handler (for any remaining instances)
+btnSaveQuestion?.addEventListener("click", () => {
+  btnSaveQuestion.classList.toggle("is-saved");
+  const isSaved = btnSaveQuestion.classList.contains("is-saved");
+  
+  // Update emoji based on save state
+  if (isSaved) {
+    btnSaveQuestion.textContent = "💎"; // Premium emoji for saved state
+    setTestHint("Saved for review.");
+  } else {
+    btnSaveQuestion.textContent = "🔖"; // Original emoji
+    setTestHint("Save removed.");
+  }
+});
+btnZoomQuestion?.addEventListener("click", () => {
+  const panel = document.querySelector(".question-panel");
+  if (!panel) return;
+  panel.classList.toggle("is-zoomed");
+});
 
 // Live suggestions for initial text ---------------------------------------
 function setSuggestions(items) {
   if (!suggestionWrap || !suggestionList) return;
+  const focusShell = document.getElementById("focusShell");
   suggestionList.innerHTML = "";
   const list = Array.isArray(items) ? items.filter(Boolean) : [];
   if (!list.length) {
     suggestionWrap.hidden = true;
+    focusShell?.classList.remove("has-suggestions");
     return;
   }
   list.forEach((text) => {
@@ -4378,14 +9261,54 @@ function setSuggestions(items) {
     suggestionList.appendChild(pill);
   });
   suggestionWrap.hidden = false;
+  focusShell?.classList.add("has-suggestions");
 }
 
 function applySuggestion(text) {
   const input = $("initialText");
   if (!input) return;
-  input.value = String(text || "");
+  const current = String(input.value || "");
+  const suggestion = String(text || "").trim();
+  if (!suggestion) return;
+  input.value = mergeSuggestionText(current, suggestion);
+  input.selectionStart = input.selectionEnd = input.value.length;
   input.focus();
   setSuggestions([]);
+}
+
+function mergeSuggestionText(current, suggestion) {
+  const base = String(current || "").trimEnd();
+  const next = String(suggestion || "").trim();
+  if (!base) return next;
+
+  const baseKey = normalizeSuggestionCompare(base);
+  const nextKey = normalizeSuggestionCompare(next);
+  if (!nextKey || baseKey.endsWith(nextKey)) return base;
+  if (nextKey.startsWith(baseKey)) return next;
+
+  return shouldAppendSuggestion(next) ? appendSuggestion(base, next) : next;
+}
+
+function normalizeSuggestionCompare(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function shouldAppendSuggestion(suggestion) {
+  const text = String(suggestion || "").trim();
+  if (!text) return false;
+  if (/^[,;:)\]}]/.test(text)) return true;
+  if (/^[a-z]/.test(text)) return true;
+  return /^(and|but|or|so|because|while|when|then|also|plus|which|that|who|where|with|without|for|to|from|about|like|especially|instead|even|as)\b/i.test(text);
+}
+
+function appendSuggestion(base, suggestion) {
+  const next = suggestion.trim();
+  if (/^[,;:)\]}]/.test(next)) return `${base}${next}`;
+  if (/[([{/\-]$/.test(base) || /[–—]$/.test(base)) return `${base}${next}`;
+  return `${base} ${next}`;
 }
 
 function requestSuggestionsDebounced(rawText) {
@@ -4420,6 +9343,7 @@ function attachKeypadListeners() {
       const next = current + key;
       selectedOptions[q.question_id] = next;
       if (integerInput) integerInput.value = next;
+      updateTestSubmitButtonState();
     });
   }
   btnClearInteger?.addEventListener("click", () => {
@@ -4427,6 +9351,7 @@ function attachKeypadListeners() {
     if (!q) return;
     selectedOptions[q.question_id] = "";
     if (integerInput) integerInput.value = "";
+    updateTestSubmitButtonState();
   });
   btnBackspace?.addEventListener("click", () => {
     const q = testQuestions[testQuestionIndex];
@@ -4435,11 +9360,13 @@ function attachKeypadListeners() {
     const next = current.slice(0, -1);
     selectedOptions[q.question_id] = next;
     if (integerInput) integerInput.value = next;
+    updateTestSubmitButtonState();
   });
   integerInput?.addEventListener("input", (evt) => {
     const q = testQuestions[testQuestionIndex];
     if (!q) return;
     selectedOptions[q.question_id] = evt.target.value;
+    updateTestSubmitButtonState();
   });
 }
 
@@ -4448,6 +9375,15 @@ answerInput?.addEventListener("keydown", (evt) => {
     submitAnswer();
   }
 });
+
+answerInput?.addEventListener("input", updateAnswerButtonState);
+
+function updateAnswerButtonState() {
+  if (!btnAnswer || !answerInput) return;
+  const hasText = Boolean(String(answerInput.value || "").trim());
+  btnAnswer.disabled = !hasText;
+  btnAnswer.hidden = !hasText;
+}
 
 // Init ---------------------------------------------------------------------
 if (!window.StressDostAuth?.getUser?.()) {
@@ -4458,8 +9394,38 @@ if (!window.StressDostAuth?.getUser?.()) {
   }
 } else {
   syncUserUI();
+  
+  // Show logout button, user name, and session counter if logged in
+  const user = window.StressDostAuth?.getUser?.();
+  console.log('[Init] User data for session counter:', user);
+  if (user && user.display_name) {
+    const userNameDisplay = document.getElementById('userNameDisplay');
+    if (userNameDisplay) {
+      userNameDisplay.textContent = user.display_name;
+    }
+    if (btnLogout) {
+      btnLogout.style.display = 'block';
+    }
+    
+    // Show session counter
+    const sessionCounter = document.getElementById('sessionCounter');
+    console.log('[Init] Session counter element:', sessionCounter);
+    if (sessionCounter) {
+      const completedSessions = user.completed_sessions || 0;
+      console.log('[Init] Completed sessions:', completedSessions);
+      sessionCounter.textContent = `Sessions: ${completedSessions}`;
+      sessionCounter.style.setProperty('display', 'inline-block', 'important');
+      console.log('[Init] Session counter display set to:', sessionCounter.style.display);
+      console.log('[Init] Session counter computed display:', window.getComputedStyle(sessionCounter).display);
+    } else {
+      console.error('[Init] Session counter element not found!');
+    }
+  } else {
+    console.log('[Init] No user or display_name, not showing session counter');
+  }
+  
   StressTriggers.attachGlobalListeners();
-  StressTriggers.mountDevPanel();
+  // Dev panel removed for production
   resetFlow();
   initSocket();
   setRecordButtonState();
@@ -4471,12 +9437,20 @@ window.__stressApp = {
   fetchNextQuestion,
   submitAnswer,
   loadTestQuestions,
+  startQuestionPrefetch,
   submitCurrentQuestion,
   evaluateUserState: StressTriggers.evaluateUserState,
   activateTrigger: (name, context = {}) =>
     StressTriggers.activateTrigger(name, { force: true, manual: true, ...context }),
   activateTriggerManual: (name) =>
     StressTriggers.activateTrigger(name, { force: true, manual: true }),
+  activateNarrativeTriggerManual: (name) =>
+    StressTriggers.activateManualShowcaseTrigger(name, { force: true, manual: true }),
   deactivateTrigger: StressTriggers.deactivateTrigger,
   getUserId: () => window.StressDostAuth?.getUserId?.() ?? null,
+  buildDevilBriefPage,
+  showStage,
+  setPendingTestStart: (params) => {
+    pendingTestStart = params;
+  },
 };

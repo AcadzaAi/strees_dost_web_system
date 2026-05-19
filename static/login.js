@@ -50,17 +50,80 @@
     var display_name = opts.display_name != null ? opts.display_name : (document.getElementById("displayName") || {}).value || "";
     var user_id = opts.user_id != null ? opts.user_id : (document.getElementById("userId") || {}).value || "";
     var mood = opts.mood != null ? opts.mood : (document.getElementById("mood") || {}).value || "";
-    try {
-      window.StressDostAuth.setUser({
-        user_id: user_id,
-        display_name: display_name,
-        mood: mood,
+    
+    // If user entered a name, check if they have a profile
+    if (display_name && display_name.trim()) {
+      console.log('[Login] Checking profile for:', display_name.trim());
+      fetch("/api/user/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: display_name.trim() })
+      })
+      .then(res => res.json())
+      .then(data => {
+        console.log('[Login] API response:', data);
+        if (data.error) {
+          if (hint) hint.textContent = data.error;
+          return;
+        }
+        
+        // Store user profile data
+        try {
+          window.StressDostAuth.setUser({
+            user_id: data.user_id,
+            display_name: data.name,
+            mood: mood,
+            total_sessions: data.total_sessions,
+            completed_sessions: data.completed_sessions,
+            is_new_user: data.is_new_user
+          });
+          persistMood(mood);
+          
+          // Show welcome message with session count for returning users
+          var welcomeMsg = data.is_new_user 
+            ? MOOD_MESSAGES[mood] || MOOD_MESSAGES[""]
+            : "Welcome back! You've completed " + data.completed_sessions + " session" + (data.completed_sessions === 1 ? "" : "s") + ".";
+          
+          console.log('[Login] Welcome message:', welcomeMsg);
+          console.log('[Login] is_new_user:', data.is_new_user, 'total_sessions:', data.total_sessions);
+          
+          var heading = document.getElementById("welcomeHeading");
+          var msg = document.getElementById("welcomeMessage");
+          if (heading) heading.textContent = "Hey, " + data.name;
+          if (msg) msg.textContent = welcomeMsg;
+          
+          if (loginStage) {
+            loginStage.classList.remove("is-active");
+            loginStage.hidden = true;
+          }
+          if (welcomeStage) {
+            welcomeStage.hidden = false;
+            welcomeStage.classList.add("is-active");
+          }
+        } catch (err) {
+          console.error('[Login] Error:', err);
+          if (hint) hint.textContent = err.message || "Could not continue.";
+        }
+      })
+      .catch(err => {
+        console.error('[Login] Network error:', err);
+        if (hint) hint.textContent = "Network error. Please try again.";
+        console.error("Login error:", err);
       });
-      persistMood(mood);
-      var trimmedName = String(display_name || "").trim();
-      showWelcome(trimmedName || "", mood);
-    } catch (err) {
-      if (hint) hint.textContent = err.message || "Could not continue.";
+    } else {
+      // Guest mode - no profile
+      try {
+        window.StressDostAuth.setUser({
+          user_id: user_id,
+          display_name: display_name,
+          mood: mood,
+        });
+        persistMood(mood);
+        var trimmedName = String(display_name || "").trim();
+        showWelcome(trimmedName || "", mood);
+      } catch (err) {
+        if (hint) hint.textContent = err.message || "Could not continue.";
+      }
     }
   }
 
