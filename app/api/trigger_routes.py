@@ -406,6 +406,8 @@ Content rules:
 - If reels/movies/fantasy/scrolling are mentioned, frame them as borrowed dopamine, passive consumption, or attention rot.
 - If followups mention attraction, beauty, obsession, distraction, laziness, or loss of control, fuse that with the first query.
 - The output must feel dynamic and inferential, not like copied input.
+- If a celebrity is named, lines like "they don't even know you exist" are allowed when they fit naturally.
+- If the first query is celebrity + reels/movies, do not soften it into "content is distracting"; make it personal and concrete.
 
 Allowed style:
 - Sharp, mocking, psychologically pointed.
@@ -428,6 +430,7 @@ Hard rules:
 - Do NOT sound like a movie trailer or dramatic roast comic.
 - Do NOT overuse metaphors. Direct observation is better.
 - Do make it feel like the line could come from a real person sitting next to them.
+- Avoid safe generic lines like "X is on your mind" or "X is distracting you."
 - Prefer implication, comparison, status contrast, wasted-time framing, exposure, or parasitic attention framing.
 - headline: 8-22 words
 - sub: 0-18 words
@@ -1163,8 +1166,8 @@ def question_warning_copy():
 
         headline = " ".join(str(parsed.get("headline") or "").split())[:220]
         sub = " ".join(str(parsed.get("sub") or "").split())[:240]
-        if not headline or not sub:
-            raise ValueError("missing headline/sub")
+        if not headline:
+            raise ValueError("missing headline")
 
         return jsonify({
             "headline": headline,

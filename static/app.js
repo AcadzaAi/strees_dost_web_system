@@ -3595,6 +3595,30 @@ const StressTriggers = (() => {
     });
   }
 
+  function extractNamedPersonFromText(rawText) {
+    const text = String(rawText || "").trim();
+    if (!text) return "";
+    const cleaned = text
+      .replace(/\b(?:reels?|shorts?|movies?|movie|videos?|video|songs?|edits?|photos?|pics?|images?|and|with|of|about|on|watching|watch)\b/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!cleaned) return "";
+    const parts = cleaned.split(/\s+/).filter(Boolean);
+    if (parts.length >= 1 && parts.length <= 4) {
+      return parts.join(" ");
+    }
+    return "";
+  }
+
+  function detectMediaCue(rawText) {
+    const text = String(rawText || "").toLowerCase();
+    if (/\breels?\b|\bshorts?\b/.test(text)) return "reels";
+    if (/\bmovies?\b|\bmovie\b/.test(text)) return "movies";
+    if (/\bedits?\b/.test(text)) return "edits";
+    if (/\bvideos?\b|\bvideo\b/.test(text)) return "videos";
+    return "";
+  }
+
   function buildQuestionWarningFallbackCopy(questionNumber) {
     const { initialText, followupAnswers, contextParts } = getQuestionWarningInputs(questionNumber);
     const baseSource = contextParts.join(" | ") || initialText || "your distraction";
@@ -3607,18 +3631,64 @@ const StressTriggers = (() => {
     const topicLead = literalTopic ? `"${literalTopic}"` : fallbackTopic;
     const second = followupAnswers[0] ? `"${followupAnswers[0]}"` : "the same weakness";
     const third = followupAnswers[1] ? `"${followupAnswers[1]}"` : "the excuse you keep feeding";
+    const personName = extractNamedPersonFromText(initialText);
+    const mediaCue = detectMediaCue(initialText);
+
+    if (personName) {
+      const personCopyMap = {
+        1: {
+          headline: `${personName} is moving ahead in life. You're still giving away attention like it costs you nothing.`,
+          sub: "",
+        },
+        2: {
+          headline: `${personName} does not know you exist, but your focus is still working harder for ${personName} than for you.`,
+          sub: "",
+        },
+        3: {
+          headline: `${personName}, ${second}, and now ${third} make it look like distraction is not the problem. You are.`,
+          sub: "",
+        },
+        4: {
+          headline: `${personName} got the attention, ${second} kept it alive, and ${third} made the weakness obvious to anyone watching.`,
+          sub: "",
+        },
+        5: {
+          headline: `At this point ${personName} is just the surface. ${second} and ${third} are the real reason your focus keeps folding.`,
+          sub: "",
+        },
+        6: {
+          headline: `${personName}, ${second}, and ${third} together make your priorities look embarrassingly easy to read.`,
+          sub: "",
+        },
+        7: {
+          headline: `${personName} was the bait. ${second} lowered your guard. ${third} finished the job and left your focus looking cheap.`,
+          sub: "",
+        },
+      };
+
+      if (mediaCue === "reels" && questionNumber <= 2) {
+        personCopyMap[1].headline = `${personName} is building a career while you sit here feeding reels and calling it harmless.`;
+        personCopyMap[2].headline = `${personName} does not know you exist. The reels still get your time, and your own work gets whatever is left.`;
+      }
+      if (mediaCue === "movies" && questionNumber <= 2) {
+        personCopyMap[1].headline = `${personName} keeps moving forward. You keep sitting still and calling it entertainment.`;
+        personCopyMap[2].headline = `${personName} is not ruining your focus. You're the one choosing fantasy over your own work again.`;
+      }
+
+      return personCopyMap[questionNumber] || personCopyMap[1];
+    }
 
     const copyMap = {
       1: {
-        headline: `${topicLead} is still on your mind, and the question has barely had a chance.`,
+        headline: `${topicLead} is already getting more of your attention than the question in front of you.`,
         sub: "",
       },
       2: {
-        headline: `${topicLead} looks harmless until you notice how easily it pulls you away from your own work.`,
+        headline: `${topicLead} looks small until you notice how easily it keeps pulling you away from your own life.`,
         sub: "",
       },
       3: {
-        headline: `${topicLead}, ${second}, and now it is starting to look less like distraction and more like your usual pattern.`,
+        headline: `${topicLead}, ${second}, and ${third} together make this look less like bad luck and more like your usual pattern.`,
         sub: "",
       },
       4: {
@@ -3630,11 +3700,11 @@ const StressTriggers = (() => {
         sub: "",
       },
       6: {
-        headline: `${topicLead}, ${second}, and ${third} together make your weak spot look very easy to predict.`,
+        headline: `${topicLead}, ${second}, and ${third} together make your weak spot look embarrassingly easy to predict.`,
         sub: "",
       },
       7: {
-        headline: `${topicLead} took your attention, ${second} lowered your guard, and ${third} finished what was left.`,
+        headline: `${topicLead} took your attention, ${second} lowered your guard, and ${third} finished what was left of your focus.`,
         sub: "",
       },
     };
@@ -3699,6 +3769,16 @@ const StressTriggers = (() => {
 
     questionWarningCopyPromises.set(cacheKey, promise);
     return promise;
+  }
+
+  async function prefetchQuestionWarningCopies() {
+    const initialText = getSessionInitialQuery();
+    if (!initialText) return [];
+    const jobs = [];
+    for (let qNum = 1; qNum <= 7; qNum += 1) {
+      jobs.push(fetchQuestionWarningCopy(qNum));
+    }
+    return Promise.allSettled(jobs);
   }
 
   function buildQ2PopupCopy() {
@@ -9371,7 +9451,12 @@ async function handleCompletion() {
 
     // Build devil brief page and show it
     const extractionPromise = window.academicTopics?.decideAndStore?.(sessionId, initialText, conversationHistory);
+    const popupPrefetchPromise = prefetchQuestionWarningCopies().catch((err) => {
+      console.warn("[handleCompletion] popup prefetch failed:", err);
+      return [];
+    });
     try { await buildDevilBriefPage(initialText, conversationHistory); } catch (e) { console.warn("[handleCompletion] devil brief build failed:", e); }
+    await popupPrefetchPromise;
 
     const decision = await extractionPromise;
     console.log("[handleCompletion] extraction decision:", JSON.stringify(decision));
