@@ -261,45 +261,42 @@
 
       <section class="stage" id="stageDevil">
         <div class="glass devil-brief-card devil-brief-redesign">
-          <!-- Hero row: avatar + name/intro -->
+          <!-- Hero row: avatar + name -->
           <div class="devil-hero-row">
             <div class="devil-avatar-img">😈</div>
             <div class="devil-hero-text">
-              <h2 id="devilTitle">Meet Lucifer the Tempter</h2>
-              <p class="devil-subtitle" id="devilIntro">I designed your focus test.</p>
+              <h2 id="devilTitle">The Focus Breaker</h2>
+              <p class="devil-subtitle" id="devilIntro">I've analyzed your patterns.</p>
             </div>
           </div>
 
-          <!-- Taunt quote -->
-          <blockquote class="devil-taunt" id="devilTaunt">
-            <p id="devilChallengeLine">Dare you think you can outsmart the flames of the underworld? Let's see if you burn or rise!</p>
-          </blockquote>
-
-          <!-- "I know what's bothering you" section -->
+          <!-- Core issue with explanation points -->
           <div class="devil-insight-section">
-            <p class="devil-insight-label">I KNOW WHAT'S BOTHERING YOU</p>
+            <p class="devil-insight-label">YOUR CORE ISSUE</p>
             <div class="devil-insight-card">
-              <p class="devil-insight-summary" id="devilInsightSummary">stress related to your academics</p>
+              <p class="devil-insight-summary" id="devilInsightSummary">Unclear focus patterns need measurement</p>
               <hr class="devil-divider" />
               <p class="devil-insight-sub">Specifically:</p>
               <ul id="devilProblems" class="devil-insight-list"></ul>
             </div>
           </div>
 
-          <!-- Warning line -->
-          <p class="devil-warning" id="devilWarning">
-            <span class="devil-warning-icon">⚠️</span>
-            Face the flames and prove your mettle, or be consumed by your own hesitation!
-          </p>
+          <!-- Challenge quote -->
+          <blockquote class="devil-taunt" id="devilTaunt">
+            <p id="devilChallengeLine">Let's see what breaks your concentration first.</p>
+          </blockquote>
+
+          <!-- Warning line (hidden by default, minimal) -->
+          <p class="devil-warning" id="devilWarning" style="display:none;"></p>
 
           <!-- CTA -->
           <button id="btnAcceptChallenge" class="btn primary devil-cta" type="button">
-            I'm Ready — Bring It On
+            I'm Ready
           </button>
           <p class="devil-cta-hint">Accept the challenge and pick your subject.</p>
           <div class="stage-hint" id="devilHint"></div>
 
-          <!-- Hidden panels (blueprint/design kept for data but not shown in new UI) -->
+          <!-- Hidden panels -->
           <div hidden>
             <ul id="devilDesign"></ul>
             <div id="devilBlueprint"></div>
@@ -346,6 +343,7 @@
       <section class="stage" id="stagePopups">
         <div class="pop-card">
           <div class="test-card" id="testCard">
+
             <div class="test-topbar">
               <button class="test-close" type="button" aria-label="Close">×</button>
               <div class="test-timer-pill" id="questionTimer">15:00</div>
@@ -445,6 +443,10 @@
             </div>
           </div>
         </div>
+      </section>
+
+      <section class="stage" id="stageResults">
+        <div class="results-screen" id="resultsScreen"></div>
       </section>
     </main>
   </div>

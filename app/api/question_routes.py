@@ -478,7 +478,7 @@ class AcadzaQuestionFetcher:
     def __init__(self, api_url: str, headers: Dict):
         self.api_url = api_url
         self.headers = _build_acadza_headers()
-        self.request_timeout = 10
+        self.request_timeout = 15
         raw_verify = os.getenv("ACADZA_VERIFY", "true").strip().lower()
         self.verify_ssl = raw_verify not in {"0", "false", "no"}
         self.cert_path = _CERTIFI_PATH if self.verify_ssl and _CERTIFI_PATH else self.verify_ssl
@@ -523,32 +523,53 @@ class AcadzaQuestionFetcher:
             return None
 
     def fetch_multiple(self, question_ids: List[str]) -> List[Dict]:
-        """Fetch multiple questions in parallel for better performance."""
-        questions: list[Dict] = []
+        """Fetch multiple questions in parallel with retry for failed ones."""
         if not question_ids:
-            return questions
+            return []
 
         import concurrent.futures
-        import threading
         
-        # Use ThreadPoolExecutor for parallel HTTP requests
-        max_workers = min(10, len(question_ids))  # Max 10 parallel requests
+        target_count = len(question_ids)
+        fetched: dict[str, Dict] = {}  # qid -> data
+        failed_ids: list[str] = []
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all fetch tasks
-            future_to_qid = {executor.submit(self.fetch_question, qid): qid for qid in question_ids}
+        def _fetch_batch(ids: list[str]) -> tuple[dict, list]:
+            """Fetch a batch of IDs, return (successes, failures)."""
+            successes = {}
+            failures = []
+            max_workers = min(10, len(ids))
             
-            # Collect results as they complete
-            for future in concurrent.futures.as_completed(future_to_qid):
-                qid = future_to_qid[future]
-                try:
-                    data = future.result()
-                    if data:
-                        questions.append(data)
-                except Exception as exc:
-                    logger.error("Question %s fetch failed: %s", qid, exc)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_qid = {executor.submit(self.fetch_question, qid): qid for qid in ids}
+                for future in concurrent.futures.as_completed(future_to_qid):
+                    qid = future_to_qid[future]
+                    try:
+                        data = future.result()
+                        if data:
+                            successes[qid] = data
+                        else:
+                            failures.append(qid)
+                    except Exception as exc:
+                        logger.error("Question %s fetch failed: %s", qid, exc)
+                        failures.append(qid)
+            return successes, failures
         
-        logger.info("Fetched %s/%s questions in parallel", len(questions), len(question_ids))
+        # First attempt
+        batch_result, failed_ids = _fetch_batch(question_ids)
+        fetched.update(batch_result)
+        
+        # Retry failed ones once (with slightly longer timeout)
+        if failed_ids:
+            logger.info("Retrying %d failed question fetches: %s", len(failed_ids), failed_ids)
+            retry_result, still_failed = _fetch_batch(failed_ids)
+            fetched.update(retry_result)
+            if still_failed:
+                logger.warning("Still failed after retry: %s", still_failed)
+        
+        # Preserve original order
+        questions = [fetched[qid] for qid in question_ids if qid in fetched]
+        
+        logger.info("Fetched %s/%s questions (target=%d)", len(questions), len(question_ids), target_count)
         return questions
 
 
@@ -758,6 +779,18 @@ def load_test_questions():
                 "timestamp": datetime.utcnow().isoformat(),
             }
         )
+
+    # If we got fewer than 7, try to fetch more from the pool
+    if len(raw_questions) < 7:
+        fetched_ids = {q.get("_id") for q in raw_questions}
+        extra_ids = [qid for qid in question_loader.question_ids if qid not in fetched_ids]
+        needed = 7 - len(raw_questions)
+        if extra_ids:
+            import random as _rand
+            extra_pick = _rand.sample(extra_ids, min(needed * 2, len(extra_ids)))  # Try double to account for failures
+            extra_questions = acadza_fetcher.fetch_multiple(extra_pick)
+            raw_questions.extend(extra_questions[:needed])
+            logger.info("Backfilled %d extra questions (needed %d)", len(extra_questions[:needed]), needed)
 
     formatted = [QuestionFormatter.format_question(q, idx) for idx, q in enumerate(raw_questions)]
 

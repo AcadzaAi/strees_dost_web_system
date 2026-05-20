@@ -2796,11 +2796,11 @@ pre {
 
 /* Card — matches the app's test-card / confirm-card language */
 .psyq-card {
-  width: min(440px, 100%);
+  width: min(520px, 100%);
   background: #ffffff;
   border: 1px solid rgba(15, 23, 42, 0.1);
-  border-radius: 20px;
-  padding: 24px 22px 20px;
+  border-radius: 24px;
+  padding: 40px 36px 34px;
   box-shadow: 0 20px 60px rgba(15, 23, 42, 0.18), 0 2px 8px rgba(15, 23, 42, 0.06);
   color: var(--text);
   animation: psyqSlideUp 260ms cubic-bezier(0.22, 0.78, 0.24, 1) both;
@@ -2825,18 +2825,18 @@ pre {
 .psyq-header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 14px;
+  gap: 14px;
+  margin-bottom: 22px;
 }
 
 .psyq-icon {
-  font-size: 26px;
+  font-size: 40px;
   line-height: 1;
   flex-shrink: 0;
 }
 
 .psyq-label {
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -2845,11 +2845,11 @@ pre {
 
 /* The "you said…" reflection sentence */
 .psyq-reflection {
-  font-size: 15px;
+  font-size: 22px;
   font-weight: 600;
   line-height: 1.5;
   color: var(--text);
-  margin: 0 0 6px;
+  margin: 0 0 10px;
   min-height: 3em;
 }
 
@@ -2857,29 +2857,29 @@ pre {
 .psyq-divider {
   height: 1px;
   background: var(--border);
-  margin: 12px 0;
+  margin: 18px 0;
 }
 
 /* The yes/no question */
 .psyq-question {
-  font-size: 14px;
+  font-size: 18px;
   font-weight: 500;
   color: var(--muted);
   line-height: 1.55;
-  margin: 0 0 16px;
+  margin: 0 0 24px;
 }
 
 /* Yes / No buttons */
 .psyq-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  gap: 12px;
 }
 
 .psyq-btn {
-  border-radius: 10px;
-  padding: 10px 14px;
-  font-size: 13px;
+  border-radius: 14px;
+  padding: 16px 22px;
+  font-size: 17px;
   font-weight: 600;
   font-family: inherit;
   cursor: pointer;
@@ -2913,17 +2913,17 @@ pre {
 .psyq-response {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 .psyq-response-icon {
-  font-size: 28px;
+  font-size: 44px;
   line-height: 1;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
 
 .psyq-response-title {
-  font-size: 15px;
+  font-size: 22px;
   font-weight: 700;
   color: var(--text);
   margin: 0;
@@ -2931,7 +2931,7 @@ pre {
 }
 
 .psyq-response-body {
-  font-size: 13px;
+  font-size: 17px;
   color: var(--muted);
   margin: 0;
   line-height: 1.6;
@@ -2939,16 +2939,16 @@ pre {
 
 .psyq-btn-cta {
   align-self: flex-start;
-  margin-top: 10px;
+  margin-top: 14px;
   background: var(--btn);
   color: #fff;
   border-color: transparent;
   box-shadow: 0 4px 14px rgba(133, 97, 249, 0.28);
-  padding: 10px 22px;
+  padding: 16px 32px;
 }
 
 @media (max-width: 400px) {
-  .psyq-card { padding: 20px 16px 18px; }
+  .psyq-card { padding: 28px 20px 24px; }
   .psyq-actions { grid-template-columns: 1fr; }
 }
 /* ── End Personalized Quiz ─────────────────────────────────────────────── */
@@ -8171,4 +8171,53 @@ a.login-btn-wide {
 /* Touch devices: trigger overlays sit above scrollable content; ensure they never block legit input on the test card. */
 @media (pointer: coarse) {
   .trigger-fog-overlay { pointer-events: none; }
+}
+
+
+/* ── Results Screen ─────────────────────────────────────────────────── */
+#stageResults {
+  padding: 0 !important;
+  max-width: none !important;
+  margin: 0 !important;
+}
+#stageResults.active {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 9999;
+  display: flex !important;
+  background: #08090c;
+}
+.results-screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Hide header when results are showing */
+.app-shell:has(#stageResults.active) .top-bar {
+  display: none !important;
+}
+.app-shell:has(#stageResults.active) .viewport {
+  overflow: visible;
+  background: transparent;
+}
+
+
+/* ── Confetti ─────────────────────────────────────────────────── */
+@keyframes confettiFall {
+  0% { transform: translateY(-100vh) rotate(0deg); opacity: 1; }
+  100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
+}
+.confetti {
+  position: fixed;
+  width: 10px;
+  height: 10px;
+  z-index: 10002;
+  pointer-events: none;
 }

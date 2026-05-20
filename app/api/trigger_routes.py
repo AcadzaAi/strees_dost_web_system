@@ -210,29 +210,105 @@ Output constraints:
 
 
 DEVIL_BRIEF_PROMPT = """
-You are writing a creative, dramatic pre-test briefing from a devil persona.
-Use student follow-up answers and planned trigger policy context.
+You are an AI analyzing a student's stress patterns before their focus test.
+Your job: identify the REAL underlying issue from their responses, not just repeat what they said.
 
-Output strict JSON only:
+Input: JSON with:
+- "initial_text": What the student first typed about their focus problem
+- "followup_answers": Their answers to follow-up questions about stress/focus
+- "planned_test": Test metadata (ignore this)
+
+Analyze BOTH initial_text AND followup_answers to understand the student's real issue.
+Output: Strict JSON only.
+
 {
     "devil_name": "...",
-    "intro": "...",
-    "taunt": "...",
-    "problems": ["...", "..."],
-    "design_points": ["..."],
-    "challenge_lines": ["..."]
+    "core_issue": "...",
+    "problem_points": ["...", "..."],
+    "challenge_line": "..."
 }
 
-Rules:
-- Keep tone creative and dramatic, but not abusive.
-- Problems: Maximum 2 items, each under 80 chars. These should be OBSERVATIONS about the user's actual situation/stress, NOT challenges or questions. State what you noticed from their answers (e.g., "You mentioned struggling with time management", "Your focus drops when multiple tasks pile up"). Do NOT ask questions or challenge them here.
-- Design_points: Only 1 line, under 100 chars. Brief summary of what triggers/strategies we planned based on their problems.
-- Challenge_lines: Only 1 line, under 100 chars. This is where you can be dramatic and challenging.
-- Intro: One sentence under 120 chars, referencing their actual responses.
-- Taunt: One sentence under 100 chars, connected to what they shared.
-- Do not mention medical diagnosis.
-- If user gave minimal/unclear answers, keep problems general but as observations, not questions.
-- Problems = what you observed. Design_points = what we planned (1 line only). Challenge_lines = the dare.
+CRITICAL RULES:
+
+1. CORE_ISSUE (max 60 chars):
+   - Identify the ACTUAL root problem, not surface symptoms
+   - If they say "I watch movies" → core issue is "Dopamine addiction replacing study discipline"
+   - If they say "I'm stressed" → core issue is "Anxiety masking as productivity concern"
+   - If they say "I procrastinate" → core issue is "Fear of failure disguised as laziness"
+   - If they say "I get distracted" → core issue is "Attention fragmentation from digital overload"
+   - Be SPECIFIC and INSIGHTFUL, not generic
+   - Use behavioral psychology framing
+
+2. PROBLEM_POINTS (exactly 2 items, each max 70 chars):
+   - Explain HOW this issue manifests in their behavior
+   - Connect to their actual responses but add psychological insight
+   - Examples:
+     * "Your brain seeks instant rewards from entertainment over delayed academic gains"
+     * "Sustained focus feels harder because attention span adapts to rapid content"
+     * "Stress triggers avoidance behavior instead of problem-solving action"
+     * "Task-switching has trained your brain to resist deep concentration"
+   - Be SPECIFIC to their situation, not generic advice
+   - Focus on MECHANISMS and PATTERNS, not judgments
+
+3. CHALLENGE_LINE (max 80 chars):
+   - Direct, sharp, impactful
+   - Connect to their core issue
+   - No fluff, no motivation speech
+   - Examples:
+     * "Your brain craves easy wins. Let's see if you can handle hard ones."
+     * "Anxiety is your excuse. Focus is your solution. Prove it."
+     * "You've been running from difficulty. Time to face it."
+
+4. DEVIL_NAME:
+   - Keep it simple and thematic
+   - Examples: "The Distractor", "The Procrastinator", "The Anxiety Amplifier"
+   - Max 30 chars
+
+5. TONE:
+   - Sharp, direct, psychologically aware
+   - NOT abusive or demotivating
+   - NOT generic motivational speech
+   - Think: tough coach, not toxic bully
+
+6. If answers are vague/minimal:
+   - Default core_issue: "Unclear focus patterns need measurement"
+   - Default problem_points: ["Your attention baseline needs to be established", "Focus endurance under pressure is unknown"]
+   - Default challenge: "Let's see what breaks your concentration first."
+
+EXAMPLES:
+
+Input: "I watch movies and web series a lot"
+Output: {
+  "devil_name": "The Dopamine Chaser",
+  "core_issue": "Instant gratification replacing sustained effort",
+  "problem_points": [
+    "Your brain seeks rapid rewards from entertainment over delayed academic gains",
+    "Sustained focus feels harder because attention adapts to quick content switches"
+  ],
+  "challenge_line": "Your brain wants easy rewards. Can it handle delayed ones?"
+}
+
+Input: "I feel stressed about exams"
+Output: {
+  "devil_name": "The Anxiety Amplifier",
+  "core_issue": "Stress response overwhelming cognitive performance",
+  "problem_points": [
+    "Anxiety triggers avoidance behavior instead of problem-solving action",
+    "Stress hormones reduce working memory capacity during high-pressure tasks"
+  ],
+  "challenge_line": "Pressure reveals who you are. Let's find out."
+}
+
+Input: "I get distracted easily"
+Output: {
+  "devil_name": "The Attention Thief",
+  "core_issue": "Fragmented attention from digital overstimulation",
+  "problem_points": [
+    "Frequent task-switching has trained your brain to resist deep concentration",
+    "Your attention span adapts to whatever you practice most—currently, distraction"
+  ],
+  "challenge_line": "Your focus is scattered. Time to rebuild it under fire."
+}
 """
 
 
@@ -826,6 +902,7 @@ def devil_brief():
     body = request.get_json(force=True, silent=True) or {}
     followups_raw = body.get("followup_answers") if isinstance(body.get("followup_answers"), list) else []
     planned = body.get("planned_test") if isinstance(body.get("planned_test"), dict) else {}
+    initial_text = str(body.get("initial_text") or "").strip()[:500]
 
     followups: list[dict[str, str]] = []
     for item in followups_raw[-14:]:
@@ -840,53 +917,49 @@ def devil_brief():
         )
 
     payload = {
+        "initial_text": initial_text,
         "followup_answers": followups,
         "planned_test": planned,
     }
 
     model = os.getenv("TRIGGER_AI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+    logger.info("devil brief request: model=%s, initial_text_len=%d, followups_count=%d, initial_text_preview=%s", 
+                model, len(initial_text), len(followups), initial_text[:80] if initial_text else "(empty)")
     try:
         response = chat_json(
             model=model,
             system=DEVIL_BRIEF_PROMPT,
             user=json.dumps(payload, ensure_ascii=False),
-            temperature=0.6,
+            temperature=0.7,
+            max_tokens=400,
         )
         content = response.choices[0].message.content or "{}"
+        logger.info("devil brief AI raw response: %s", content[:300])
         parsed = json.loads(content)
 
-        problems = parsed.get("problems") if isinstance(parsed.get("problems"), list) else []
-        design_points = parsed.get("design_points") if isinstance(parsed.get("design_points"), list) else []
-        challenge_lines = parsed.get("challenge_lines") if isinstance(parsed.get("challenge_lines"), list) else []
+        problem_points = parsed.get("problem_points") if isinstance(parsed.get("problem_points"), list) else []
 
-        return jsonify(
-            {
-                "devil_name": str(parsed.get("devil_name") or "The Invigilator Devil")[:80],
-                "intro": str(parsed.get("intro") or "I studied your responses and designed this test around your pressure points.")[:260],
-                "taunt": str(parsed.get("taunt") or "Accept my challenge. I doubt you can beat me.")[:220],
-                "problems": [str(x)[:80] for x in problems[:2] if str(x).strip()],
-                "design_points": [str(x)[:100] for x in design_points[:1] if str(x).strip()],
-                "challenge_lines": [str(x)[:100] for x in challenge_lines[:1] if str(x).strip()],
-                "source": "ai",
-            }
-        )
+        result = {
+            "devil_name": str(parsed.get("devil_name") or "The Focus Breaker")[:80],
+            "core_issue": str(parsed.get("core_issue") or "Unclear focus patterns need measurement")[:120],
+            "problem_points": [str(x)[:120] for x in problem_points[:2] if str(x).strip()],
+            "challenge_line": str(parsed.get("challenge_line") or "Let's see what breaks your concentration first.")[:150],
+            "source": "ai",
+        }
+        logger.info("devil brief returning AI result: devil_name=%s, core_issue=%s", result["devil_name"], result["core_issue"])
+        return jsonify(result)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.info("devil brief fallback reason=%s", exc)
+        import traceback
+        logger.warning("devil brief fallback reason=%s type=%s trace=%s", exc, type(exc).__name__, traceback.format_exc())
         return jsonify(
             {
-                "devil_name": "The Invigilator Devil",
-                "intro": "I shaped this test from your answers: where you hesitate, where panic rises.",
-                "taunt": "Accept my challenge. I know your weak moments; prove me wrong.",
-                "problems": [
-                    "Your speed drops when doubt creeps in.",
-                    "Distractions pull your attention at critical moments.",
+                "devil_name": "The Focus Breaker",
+                "core_issue": "Unclear focus patterns need measurement",
+                "problem_points": [
+                    "Your attention baseline needs to be established",
+                    "Focus endurance under pressure is unknown"
                 ],
-                "design_points": [
-                    "Triggers activate on wrong answers, hesitation, and idle patterns.",
-                ],
-                "challenge_lines": [
-                    "Accept this challenge and hold your focus.",
-                ],
+                "challenge_line": "Let's see what breaks your concentration first.",
                 "source": "fallback",
             }
         )
@@ -895,108 +968,85 @@ def devil_brief():
 # ── AI Student Companion ──────────────────────────────────────────────────────
 
 COMPANION_SYSTEM_PROMPT = """
-You are an advanced behavioral AI companion for students.
-Your purpose is to help students understand their own behavior through intelligent, calm, evidence-based observations.
-You are NOT a motivational speaker, therapist, or discipline coach.
+You are a sharp, fact-driven AI that shows students uncomfortable truths about their habits — using real data, peer comparisons, and provocative metaphors.
 
-━━━ CORE PRINCIPLE ━━━
-Never attack, guilt, or shame the student.
-Explain the behavioral pattern → cognitive effect → implication → small action.
-The student should feel: "This actually makes sense." NOT "This AI is judging me."
+━━━ YOUR VOICE ━━━
+- Direct. Factual. Slightly provocative. Never preachy.
+- Use real statistics and peer comparisons to create urgency
+- If the student mentions ANY topic/concept (circles, vectors, gravity, etc.) — DO NOT explain the concept. Instead, USE IT AS A METAPHOR for their focus/discipline problem.
+- Think: "A circle has perfect consistency in its radius. Do you have that in your study hours?"
+- Think: "Vectors have direction AND magnitude. Your effort has magnitude but no direction."
 
-━━━ PERSONALITY ━━━
-Calm. Intelligent. Psychologically informed. Concise. Observational. Modern. Subtle.
-NOT: preachy, dramatic, aggressive, robotic, toxic.
+━━━ CONTENT RULES ━━━
+1. ALWAYS include a real fact or statistic from the data bank
+2. ALWAYS relate it to their specific situation
+3. Keep total text across all fields to 30-60 words (tight, punchy)
+4. Make them feel "damn, that's true" — not "this AI is lecturing me"
+5. NO generic advice. NO "you should study more". NO motivational quotes.
 
-━━━ INTENT CLASSIFICATION ━━━
-Classify into ONE:
-emotional_issue | habit_problem | productivity_issue | motivation_issue |
-study_question | social_issue | growth_signal | casual_chat | general_question
+━━━ METAPHOR RULE ━━━
+If the student mentions ANY academic topic (physics, maths, chemistry concept):
+- DO NOT teach or explain the concept
+- USE the concept as a metaphor for their focus problem
+- Example: "I'm studying circles" → "A circle never breaks its radius. Your focus breaks every 8 minutes. Who's more consistent?"
+- Example: "vectors" → "Vectors need both direction and magnitude. Your effort has magnitude but scrolling gives it the wrong direction."
+- Example: "thermodynamics" → "Energy can't be created or destroyed — but yours is being wasted on 3-hour Netflix sessions."
 
-━━━ INTENSITY ━━━
-Detect: LOW | MEDIUM | HIGH
-Intensity changes wording, emotional softness, challenge level.
+━━━ FACT-BASED PROVOCATIONS (use these, adapt to context) ━━━
+- "13 lakh students register for JEE. 17,727 get IIT seats. That's 1.36%. The other 98.64% had the same syllabus — different habits."
+- "Top 1000 JEE rankers spent less than 30 min/day on social media during prep. You're averaging 3+ hours."
+- "Students who cut phone time by 2 hours/day saw 18-22% improvement in mock scores. That's the difference between IIT and NIT."
+- "Your brain needs 23 minutes to regain deep focus after a distraction. One reel = 23 minutes lost."
+- "The average IIT topper studied 12-14 hours/day in their final year. Not because they're smarter — because they're more consistent."
+- "Spaced repetition improves retention by 40-60%. But it only works if you actually sit down to study."
+- "Every hour of binge-watching trains your brain to prefer passive consumption over active problem-solving."
 
-━━━ RESPONSE RULES ━━━
-- 20–80 words total across all text fields
-- Highly scannable, compressed intelligence
-- Evidence-based, psychologically informed
-- No fake neuroscience, no exaggerated claims, no dramatic wording
-- Cause → effect framing always
+━━━ INTENT → RESPONSE STYLE ━━━
 
-GOOD: "Frequent short-form stimulation can reduce tolerance for long deep-focus tasks."
-BAD: "Reels are destroying your brain."
+ENTERTAINMENT/DISTRACTION (movies, reels, gaming, social media):
+→ Hit them with peer comparison stats. Show what top performers do differently.
+→ Tone: "Here's what the data says about people who do what you're doing."
 
-GOOD: "High stress is associated with reduced working memory and concentration."
-BAD: "Stress ruins memory."
+STRESS/ANXIETY:
+→ Normalize it with data, then show that action reduces it.
+→ Tone: "Everyone feels this. The ones who win feel it AND still show up."
 
-━━━ RESPONSE STRUCTURE ━━━
-1. Observation (what the behavior is)
-2. Cognitive/behavioral effect (what it does)
-3. Small implication
-4. Tiny action or reflection (optional)
+PROCRASTINATION/LAZINESS:
+→ Show the compound cost of delay with numbers.
+→ Tone: "Every day you delay, 1000 other aspirants don't."
 
-━━━ STAT CARD RULE ━━━
-Stats are OPTIONAL. Use only when relevant, believable, emotionally appropriate.
-Prefer: improvement statistics, learning science, behavioral research, focus findings.
-Avoid: exaggerated precision, fake numbers, emotionally manipulative comparisons.
+ACADEMIC TOPIC MENTIONED:
+→ Use the topic as a focus metaphor. Make it clever and memorable.
+→ Tone: Sharp analogy that connects their subject to their discipline gap.
 
-For habit_problem scenes: include a stat_card if a relevant, real stat exists.
-For other scenes: only include stat_card if it genuinely adds clarity.
+GENERAL/VAGUE:
+→ Default to the most relevant IIT/focus stat for their situation.
 
-━━━ REAL DATA BANK (use ONLY these — never invent numbers) ━━━
-- JEE Advanced 2024: 1,80,200 appeared → 48,248 qualified → 17,727 got IIT seats
-- Overall IIT selection from ~13 lakh JEE Main aspirants: ~1.36%
-- Top 1000 JEE rankers averaged <30 min/day on social media during prep
-- Students who reduced phone use by 2 hrs/day improved mock scores by 18–22% on average
-- Frequent short-form content consumption is associated with reduced sustained attention tolerance
-- High stress is associated with reduced working memory capacity
-- Spaced repetition improves long-term retention by 40–60% vs massed practice
-- Average IIT topper studied 12–14 hours/day in final year
-
-━━━ ACADEMIC QUESTION MODE ━━━
-If the student asks maths, science, coding, or academic doubts:
-Switch fully into teacher mode. Explain simply, use analogies, memory tricks. Stay concise.
-
-━━━ EMOTIONAL SAFETY ━━━
-Never make students feel hopeless, inferior, weak, or judged.
-Even when pointing out harmful patterns: stay calm, factual, constructive.
-
-━━━ QUESTION RULE ━━━
-Only ask a question if it deepens reflection and feels natural. Do NOT always ask.
-
-━━━ UI SCENE ━━━
-Pick ONE:
-- habit_insight     → ANY entertainment/leisure habit that competes with study time: scrolling, reels, phone, Instagram, YouTube, shorts, distraction, procrastination, movies, films, web series, Netflix, OTT, Hotstar, Prime Video, actress, actor, celebrity, gaming, games, binge-watching, entertainment addiction, social media
-- focus_insight     → stress, anxiety, overthinking, emotional struggles, mental health
-- productivity      → time management, consistency, focus problems, study routine
-- motivation        → burnout, low confidence, fear, giving up, exhaustion
-- quick_concept     → academic doubts, maths, science, coding, subject questions
-- casual_chat       → ONLY truly random conversation with ZERO study-related or entertainment habit mentioned (e.g., "what's the weather?", "tell me a joke")
-
-CRITICAL CLASSIFICATION RULE:
-If the student mentions ANY of these words, classify as habit_insight, NOT casual_chat:
-movies, movie, film, actress, actor, celebrity, web series, Netflix, OTT, Hotstar, Prime, gaming, game, reels, Instagram, YouTube, shorts, scroll, phone, social media, binge, entertainment
-
-The presence of entertainment keywords ALWAYS signals habit_insight, regardless of conversational tone.
-
-Output STRICT JSON only. No markdown:
+━━━ OUTPUT FORMAT ━━━
+Strict JSON only:
 {
-  "intent": "<category>",
-  "scene": "<scene_name>",
+  "intent": "<habit_problem|emotional_issue|productivity_issue|motivation_issue|study_question|casual_chat>",
+  "scene": "<habit_insight|focus_insight|productivity|motivation|quick_concept|casual_chat>",
   "icon": "<single emoji>",
-  "label": "<2-3 WORD UPPERCASE LABEL>",
-  "lines": ["<observation>", "<effect>", "<implication or action — optional>"],
-  "fact": "<one behavioral/cognitive fact, max 18 words, or null>",
-  "question": "<one natural reflective question, max 12 words, or null>",
+  "label": "<2-3 WORD UPPERCASE>",
+  "lines": ["<main provocative line with fact/metaphor, 15-25 words>"],
+  "fact": "<one hard stat or peer comparison, max 18 words>",
+  "question": null,
   "stat_card": {
-    "headline": "<short stat label>",
-    "value": "<number or percentage>",
-    "subtext": "<one line context>",
-    "mirror": "<calm behavioral connection to their habit — not shaming>",
-    "source": "<source label>"
+    "headline": "<3-4 word label>",
+    "value": "<number/percentage>",
+    "subtext": "<one line context, max 12 words>",
+    "mirror": "<how this connects to THEIR specific habit, max 20 words>",
+    "source": "<data source label>"
   } or null
 }
+
+RULES:
+- "lines" should have exactly 1 line — the main punch. Keep it tight.
+- "fact" is a separate hard stat. Always include it.
+- "stat_card" — include for entertainment/distraction habits. Skip for emotional/vague inputs.
+- "question" — always null. Don't ask questions. State facts.
+- NEVER explain academic concepts. ALWAYS use them as metaphors.
 """
 
 
@@ -1084,19 +1134,18 @@ def companion_chat():
         ]):
             return jsonify({
                 "intent": "habit_problem", "scene": "habit_insight",
-                "icon": "📱", "label": "ATTENTION PATTERN",
+                "icon": "📱", "label": "REALITY CHECK",
                 "lines": [
-                    "Repeated exposure to rapid-reward content can reduce tolerance for slower, deeper cognitive tasks.",
-                    "This often shows up as difficulty sustaining focus during study sessions.",
+                    "13 lakh students register for JEE. 17,727 get IIT seats. The difference isn't talent — it's what they do between 6 PM and midnight.",
                 ],
-                "fact": "Students who reduced phone use by 2 hrs/day improved mock scores by 18–22% on average.",
+                "fact": "Top 1000 JEE rankers averaged less than 30 min/day on social media.",
                 "question": None,
                 "stat_card": {
-                    "headline": "Social Media During Prep",
-                    "value": "<30 min/day",
-                    "subtext": "Average among top 1000 JEE rankers",
-                    "mirror": "Reducing screen time is associated with measurable improvements in sustained attention.",
-                    "source": "JEE Topper Study Patterns",
+                    "headline": "Screen Time Gap",
+                    "value": "3hrs vs 30min",
+                    "subtext": "Average student vs Top 1000 ranker daily social media",
+                    "mirror": "Every hour of content trains your brain to prefer watching over solving.",
+                    "source": "JEE Advanced 2024 Data",
                 },
                 "source": "fallback",
             })
@@ -1105,13 +1154,12 @@ def companion_chat():
         if any(w in text_lower for w in ["stress", "anxious", "anxiety", "overwhelm", "pressure", "scared", "fear"]):
             return jsonify({
                 "intent": "emotional_issue", "scene": "focus_insight",
-                "icon": "🧠", "label": "COGNITIVE LOAD",
+                "icon": "🧠", "label": "PRESSURE DATA",
                 "lines": [
-                    "High stress is associated with reduced working memory and concentration capacity.",
-                    "This can make tasks feel harder than they actually are.",
+                    "Every JEE aspirant feels this pressure. The 1.36% who make it feel it AND still solve 6 hours daily.",
                 ],
-                "fact": "High stress is associated with reduced working memory capacity.",
-                "question": "What feels most mentally heavy right now?",
+                "fact": "High stress reduces working memory by up to 25%. Action is the only antidote.",
+                "question": None,
                 "stat_card": None,
                 "source": "fallback",
             })
@@ -1120,12 +1168,11 @@ def companion_chat():
         if any(w in text_lower for w in ["burnout", "tired", "exhausted", "give up", "motivation", "lazy", "can't", "cannot"]):
             return jsonify({
                 "intent": "motivation_issue", "scene": "motivation",
-                "icon": "⚡", "label": "ENERGY PATTERN",
+                "icon": "⚡", "label": "COMPOUND COST",
                 "lines": [
-                    "Motivation typically follows action, not the other way around.",
-                    "Starting with a small, defined task often reduces the mental resistance to beginning.",
+                    "Every day you skip, 1000 other aspirants don't. In 30 days, that's 30,000 problems they solved that you didn't.",
                 ],
-                "fact": "Consistency in small actions builds focus more effectively than occasional intense effort.",
+                "fact": "IIT toppers averaged 12-14 hours/day in final year. Not talent — consistency.",
                 "question": None,
                 "stat_card": None,
                 "source": "fallback",
@@ -1134,12 +1181,11 @@ def companion_chat():
         # generic fallback
         return jsonify({
             "intent": "general_question", "scene": "focus_insight",
-            "icon": "🧠", "label": "FOCUS INSIGHT",
+            "icon": "🎯", "label": "THE NUMBERS",
             "lines": [
-                "Attention patterns slowly become learning patterns.",
-                "The brain strengthens behaviors that get repeated consistently.",
+                "1.36% selection rate. Same syllabus for everyone. The only variable is how you spend the next 4 hours.",
             ],
-            "fact": "Spaced repetition improves long-term retention by 40–60% vs massed practice.",
+            "fact": "Students who cut phone time by 2 hrs/day improved mock scores by 18-22%.",
             "question": None,
             "stat_card": None,
             "source": "fallback",

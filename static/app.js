@@ -10,6 +10,7 @@ const stageEls = {
   devil: $("stageDevil"),
   fullscreen: $("stageFullscreen"),
   popups: $("stagePopups"),
+  results: $("stageResults"),
 };
 
 const logBox = $("logBox");
@@ -797,115 +798,100 @@ function summarizeFollowupThemes(followups) {
   return out.slice(0, 4);
 }
 
-async function buildDevilBriefPage() {
+async function buildDevilBriefPage(passedInitialText, passedHistory) {
   const followups = StressTriggers.getFollowupAnswers ? StressTriggers.getFollowupAnswers() : [];
-  const themes = summarizeFollowupThemes(followups);
   const user = window.StressDostAuth?.getUser?.();
   const userName = user?.display_name || "challenger";
+
+  // Use passed initialText first, then fallback to lastAnswerEcho or textarea
+  const initialText = passedInitialText || lastAnswerEcho || $("initialText")?.value || "";
+  
+  // Build followup context from conversation history if StressTriggers followups are empty
+  let effectiveFollowups = followups;
+  if (!effectiveFollowups.length && Array.isArray(passedHistory) && passedHistory.length) {
+    effectiveFollowups = passedHistory
+      .filter(h => h.role === "user" || h.answer)
+      .map(h => ({
+        answer: h.answer || h.content || "",
+        domain: h.domain || "",
+        slot: h.slot || "",
+      }))
+      .filter(f => f.answer.trim());
+  }
+  
+  console.log("[buildDevilBriefPage] initialText:", initialText?.substring(0, 60), "followups:", effectiveFollowups.length);
 
   const planned = {
     trigger_count: 19,
     one_trigger_at_a_time: true,
     ai_driven: true,
-    event_rules: [
-      "wrong_answer -> pressure trigger",
-      "answer_changed -> hesitation trigger",
-      "idle_resumed -> distraction trigger",
-      "time_pressure -> urgency trigger",
-    ],
     expected_question_count: testQuestions.length || 20,
   };
 
   let brief = null;
   try {
     brief = await postJSON("/api/triggers/devil-brief", {
-      followup_answers: followups,
+      followup_answers: effectiveFollowups,
+      initial_text: initialText,
       planned_test: planned,
-    }, { timeoutMs: 6000 });
+    }, { timeoutMs: 15000 });
+    console.log("[buildDevilBriefPage] Response source:", brief?.source, "core_issue:", brief?.core_issue);
+    
+    // If backend returned fallback, retry once
+    if (brief?.source === "fallback") {
+      console.warn("[buildDevilBriefPage] Got fallback response, retrying...");
+      const retry = await postJSON("/api/triggers/devil-brief", {
+        followup_answers: effectiveFollowups,
+        initial_text: initialText,
+        planned_test: planned,
+      }, { timeoutMs: 15000 });
+      if (retry?.source === "ai") {
+        brief = retry;
+        console.log("[buildDevilBriefPage] Retry succeeded with AI response");
+      }
+    }
   } catch (err) {
+    console.warn("[buildDevilBriefPage] AI call failed:", err);
     brief = null;
   }
 
-  // Helper function to capitalize first letter of a sentence
-  function capitalizeFirstLetter(str) {
-    if (!str) return str;
-    return str.charAt(0).toUpperCase() + str.slice(1);
-  }
+  const devilName = brief?.devil_name || "The Focus Breaker";
+  const coreIssue = brief?.core_issue || "Unclear focus patterns need measurement";
+  const problemPoints = Array.isArray(brief?.problem_points) && brief.problem_points.length
+    ? brief.problem_points
+    : ["Your attention baseline needs to be established", "Focus endurance under pressure is unknown"];
+  const challengeLine = brief?.challenge_line || "Let's see what breaks your concentration first.";
 
-  const devilName = brief?.devil_name || "Lucifer the Tempter";
-  const intro = brief?.intro || `I designed your focus test, ${userName}.`;
-  const taunt = (Array.isArray(brief?.challenge_lines) && brief.challenge_lines[0])
-    ? capitalizeFirstLetter(brief.challenge_lines[0])
-    : "Dare you think you can outsmart the flames of the underworld? Let's see if you burn or rise!";
-  const problems = Array.isArray(brief?.problems) && brief.problems.length
-    ? brief.problems.map(p => capitalizeFirstLetter(p))
-    : themes.map((t) => capitalizeFirstLetter(t));
-  const warningLine = capitalizeFirstLetter(brief?.taunt)
-    || "Face the flames and prove your mettle, or be consumed by your own hesitation!";
-
-  // Build a summary from followup text
-  const firstAnswer = followups[0]?.answer || "";
-  const insightSummary = firstAnswer
-    ? `Stress related to ${firstAnswer.toLowerCase().substring(0, 80)}`
-    : "Stress related to your academics";
-
-  // Fill new HTML
-  if (devilTitle) devilTitle.textContent = `Meet ${devilName}`;
-  if (devilIntro) devilIntro.textContent = intro;
-  if (devilChallengeLine) devilChallengeLine.textContent = taunt;
+  // Fill HTML
+  if (devilTitle) devilTitle.textContent = devilName;
+  if (devilIntro) devilIntro.textContent = `I've analyzed your patterns, ${userName}.`;
+  if (devilChallengeLine) devilChallengeLine.textContent = challengeLine;
 
   const insightEl = document.getElementById("devilInsightSummary");
-  if (insightEl) insightEl.textContent = insightSummary;
+  if (insightEl) insightEl.textContent = coreIssue;
 
-  const warningEl = document.getElementById("devilWarning");
-  if (warningEl) {
-    warningEl.innerHTML = `<span class="devil-warning-icon">⚠️</span> ${escapeHTML(warningLine)}`;
-  }
-
+  // Show the "Specifically" section and fill problem points
+  const insightSubEl = document.querySelector(".devil-insight-sub");
+  if (insightSubEl) insightSubEl.style.display = "block";
+  
   if (devilProblems) {
+    devilProblems.style.display = "block";
     devilProblems.innerHTML = "";
-    problems.slice(0, 2).forEach((line) => {
+    problemPoints.slice(0, 2).forEach((line) => {
       const li = document.createElement("li");
       li.innerHTML = `<span class="insight-icon">🔥</span> ${escapeHTML(line)}`;
       devilProblems.appendChild(li);
     });
   }
 
-  // Still fill hidden panels for data purposes
-  const designPoints = Array.isArray(brief?.design_points) && brief.design_points.length
-    ? brief.design_points
-    : ["Triggers activate on wrong answers, hesitation, and idle patterns."];
+  // Remove warning line - keep it minimal
+  const warningEl = document.getElementById("devilWarning");
+  if (warningEl) warningEl.style.display = "none";
 
-  if (devilDesign) {
-    devilDesign.innerHTML = "";
-    designPoints.slice(0, 5).forEach((line) => {
-      const li = document.createElement("li");
-      li.textContent = line;
-      devilDesign.appendChild(li);
-    });
-  }
-
-  if (devilBlueprint) {
-    const expected = testQuestions.length || 20;
-    devilBlueprint.innerHTML = "";
-    const metrics = [
-      ["Question Set", `${expected} adaptive questions`],
-      ["Trigger Mode", "AI controlled + event based"],
-      ["Concurrency", "Single active trigger only"],
-      ["Timeout Policy", "2s to 12s per trigger"],
-      ["Primary Pressure Inputs", "Wrong answers, hesitation, idle, time pressure"],
-    ];
-    metrics.forEach(([label, value]) => {
-      const row = document.createElement("div");
-      row.className = "devil-metric";
-      row.innerHTML = `<span>${escapeHTML(label)}</span><strong>${escapeHTML(value)}</strong>`;
-      devilBlueprint.appendChild(row);
-    });
-  }
-
-  if (devilHint) {
-    devilHint.textContent = "";
-  }
+  // Clean up hidden panels
+  if (devilDesign) devilDesign.innerHTML = "";
+  if (devilBlueprint) devilBlueprint.innerHTML = "";
+  if (devilHint) devilHint.textContent = "";
 }
 
 async function startRecording() {
@@ -1607,6 +1593,10 @@ const StressTriggers = (() => {
     if (!isTriggerEnabled(name)) return { ok: false, reason: "disabled" };
     const force = Boolean(context?.force);
     if (disableStressMode) return { ok: false, reason: "disabled" };
+    
+    // HARD BLOCK: Never activate triggers when test is over
+    if (state.stage === "results") return { ok: false, reason: "test-ended" };
+    if (typeof isTestActive !== 'undefined' && !isTestActive) return { ok: false, reason: "test-inactive" };
     
     // When force is true (question-level triggers), bypass most checks
     if (force) {
@@ -3151,10 +3141,16 @@ const StressTriggers = (() => {
   // Uses the same hard-question-fullscreen pattern — one single screen,
   // insight + stat (when relevant) combined, minimal layout.
 
-  async function showCompanionCard(onComplete) {
+  async function showCompanionCard(onComplete, prefetchedData) {
     // Prevent double-trigger with global activation guard
     if (showCompanionCard._active) {
       console.warn("[showCompanionCard] Already active, skipping duplicate call");
+      return;
+    }
+    // Block if test has ended
+    if (state.stage === "results" || !isTestActive) {
+      console.log("[showCompanionCard] Blocked — test ended");
+      if (onComplete) onComplete();
       return;
     }
     showCompanionCard._active = true;
@@ -3185,128 +3181,155 @@ const StressTriggers = (() => {
       casual_chat:   "rgba(167,139,250,0.95)",
     };
 
-    // Show fullscreen overlay immediately (loading state)
+    // Show fullscreen overlay with loading dots (always shows for 1s minimum)
     const overlay = document.createElement("div");
     overlay.className = "hard-question-fullscreen is-intro";
-    overlay.style.background = SCENE_BG.focus_insight;
+    overlay.style.cssText = "position:fixed;inset:0;z-index:9998;display:flex;align-items:center;justify-content:center;background:#000;";
     overlay.setAttribute("role", "dialog");
     overlay.setAttribute("aria-modal", "true");
     overlay.innerHTML = `
-      <div class="hard-question-center" style="animation:none;">
-        <div class="hard-question-icon" style="animation:none;font-size:32px;">
-          <span class="cmp-loading-dot"></span>
-          <span class="cmp-loading-dot"></span>
-          <span class="cmp-loading-dot"></span>
-        </div>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <span style="width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.4);animation:cmpDot 1.2s ease infinite;"></span>
+        <span style="width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.4);animation:cmpDot 1.2s ease 0.2s infinite;"></span>
+        <span style="width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.4);animation:cmpDot 1.2s ease 0.4s infinite;"></span>
       </div>
+      <style>@keyframes cmpDot{0%,80%,100%{opacity:0.25;transform:scale(0.8);}40%{opacity:1;transform:scale(1.3);}}</style>
     `;
     document.body.appendChild(overlay);
 
-    // Fetch AI response
-    let data = null;
-    try {
-      const resp = await fetch("/api/triggers/companion", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: initialText,
-          student_name: studentName,
-          initial_text: initialText,
-          followup_answers: followupAnswers,
-        }),
-        signal: AbortSignal.timeout(7000),
-      });
-      if (resp.ok) {
-        data = await resp.json();
-        console.log("[showCompanionCard] AI response — scene:", data.scene, "source:", data.source);
-      } else {
-        console.warn("[showCompanionCard] API error:", resp.status);
+    // Use prefetched data or fetch fresh
+    let data = (prefetchedData && prefetchedData.scene) ? prefetchedData : null;
+    if (!data) {
+      try {
+        const resp = await fetch("/api/triggers/companion", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: initialText,
+            student_name: studentName,
+            initial_text: initialText,
+            followup_answers: followupAnswers,
+          }),
+          signal: AbortSignal.timeout(4000),
+        });
+        if (resp.ok) {
+          data = await resp.json();
+          console.log("[showCompanionCard] AI response — scene:", data.scene, "source:", data.source);
+        } else {
+          console.warn("[showCompanionCard] API error:", resp.status);
+        }
+      } catch (err) {
+        console.warn("[showCompanionCard] Fetch failed:", err.message);
       }
-    } catch (err) {
-      console.warn("[showCompanionCard] Fetch failed:", err.message);
+    } else {
+      console.log("[showCompanionCard] Using prefetched data — scene:", data.scene);
     }
+
+    // Always show loading dots for at least 1 second (feels intentional, not laggy)
+    await new Promise(resolve => setTimeout(resolve, 1000));
 
     // Fallback
     if (!data || !data.scene) {
       console.log("[showCompanionCard] Using fallback response");
       data = {
-        scene: "focus_insight", icon: "🧠", label: "FOCUS PATTERN",
-        lines: ["Your brain is already processing more than you realise."],
-        fact: "The brain consolidates learning during rest, not just during study.",
-        question: "What would make this session feel like a win?",
+        scene: "focus_insight", icon: "🎯", label: "THE NUMBERS",
+        lines: ["1.36% selection rate. Same syllabus for everyone. The only variable is how you spend the next 4 hours."],
+        fact: "Students who cut phone time by 2 hrs/day improved mock scores by 18-22%.",
+        question: null,
         stat_card: null,
       };
     }
 
     const bg    = SCENE_BG[data.scene]    || SCENE_BG.focus_insight;
     const color = SCENE_COLOR[data.scene] || SCENE_COLOR.focus_insight;
-    overlay.style.background = bg;
+    overlay.style.background = "#000";
 
-    // Build stat box HTML (only when stat_card present)
-    const sc = data.stat_card;
-    const statHTML = sc ? `
-      <div class="cmp-stat-box">
-        <div class="cmp-stat-headline">${escapeHTML(String(sc.headline))}</div>
-        <div class="cmp-stat-value">${escapeHTML(String(sc.value))}</div>
-        <div class="hard-question-box-sub">${escapeHTML(String(sc.subtext || ""))}</div>
-        <div class="hard-question-box-foot">${escapeHTML(String(sc.mirror || ""))}</div>
-        ${sc.source ? `<div class="cmp-stat-source">${escapeHTML(String(sc.source))}</div>` : ""}
-      </div>` : "";
+    // Premium emoji per scene (not generic AI emojis)
+    const SCENE_EMOJI = {
+      habit_insight: "◉",
+      focus_insight: "◈",
+      motivation: "↯",
+      productivity: "⬡",
+      quick_concept: "△",
+      casual_chat: "○",
+    };
+    const sceneEmoji = SCENE_EMOJI[data.scene] || "◉";
 
-    // Build lines as a single accent line (keep it minimal — max 1 line shown)
+    // Main line and fact
     const mainLine = (data.lines && data.lines[0]) ? escapeHTML(String(data.lines[0])) : "";
     const factLine = data.fact ? escapeHTML(String(data.fact)) : "";
+    const sc = data.stat_card;
 
-    // Render the full screen with staggered fade-in
+    // Build stat section
+    const statHTML = sc ? `
+      <div class="cmp-f2" style="opacity:0;transform:translateY(6px);margin-top:28px;width:100%;max-width:400px;text-align:left;">
+        <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:10px;">
+          <span style="font-size:44px;font-weight:800;color:#fff;letter-spacing:-1.5px;line-height:1;">${escapeHTML(String(sc.value))}</span>
+          <span style="font-size:14px;color:rgba(255,255,255,0.45);text-transform:uppercase;letter-spacing:0.1em;font-weight:600;">${escapeHTML(String(sc.headline))}</span>
+        </div>
+        <div style="font-size:16px;color:rgba(255,255,255,0.55);line-height:1.5;margin-bottom:10px;font-weight:500;">${escapeHTML(String(sc.subtext || ""))}</div>
+        <div style="font-size:16px;color:${color};line-height:1.5;font-weight:600;">${escapeHTML(String(sc.mirror || ""))}</div>
+        ${sc.source ? `<div style="font-size:11px;color:rgba(255,255,255,0.25);margin-top:12px;letter-spacing:0.12em;text-transform:uppercase;font-weight:500;">— ${escapeHTML(String(sc.source))}</div>` : ""}
+      </div>` : "";
+
+    // Render
     overlay.innerHTML = `
-      <div class="hard-question-center" style="opacity:0;transition:opacity 400ms ease;">
-        <div class="hard-question-icon cmp-icon-glow" style="animation:none;">${escapeHTML(String(data.icon || "🧠"))}</div>
-        <div class="hard-question-eyebrow cmp-eyebrow-shimmer" style="color:${color};">${escapeHTML(String(data.label || "INSIGHT"))}</div>
-        ${mainLine ? `<div class="hard-question-title cmp-fade-in-1" style="font-size:clamp(20px,3vw,28px);margin-bottom:4px;opacity:0;">${mainLine}</div>` : ""}
-        ${factLine && !sc ? `<div class="hard-question-accent cmp-fade-in-2" style="font-size:clamp(14px,2vw,18px);margin-bottom:16px;opacity:0;">${factLine}</div>` : ""}
+      <div style="
+        display:flex;flex-direction:column;align-items:center;justify-content:center;
+        text-align:center;padding:44px 24px;max-width:480px;width:100%;
+        opacity:0;transition:opacity 0.3s ease;
+      " id="cmpContent">
+        
+        <div style="font-size:42px;color:${color};margin-bottom:28px;opacity:0.7;line-height:1;">${sceneEmoji}</div>
+        
+        <div style="font-size:14px;letter-spacing:0.22em;text-transform:uppercase;color:${color};font-weight:700;margin-bottom:28px;">${escapeHTML(String(data.label || "INSIGHT"))}</div>
+        
+        ${mainLine ? `<div class="cmp-f1" style="
+          font-size:26px;font-weight:600;color:rgba(255,255,255,0.92);
+          line-height:1.6;margin-bottom:22px;
+          opacity:0;transform:translateY(6px);
+        ">${mainLine}</div>` : ""}
+        
+        ${factLine && !sc ? `<div class="cmp-f2" style="
+          font-size:18px;color:${color};font-weight:600;
+          line-height:1.6;
+          opacity:0;transform:translateY(6px);
+        ">${factLine}</div>` : ""}
+        
         ${statHTML}
-        ${data.question ? `<div class="hard-question-footnote cmp-fade-in-3" style="font-style:italic;color:rgba(203,213,225,0.85);opacity:0;">💭 ${escapeHTML(String(data.question))}</div>` : ""}
-        <button class="cmp-fs-btn cmp-btn-glow cmp-fade-in-4" id="cmpFsBtn" type="button" style="opacity:0;">I'm ready →</button>
+        
+        <button id="cmpFsBtn" type="button" class="cmp-f3" style="
+          margin-top:40px;padding:16px 36px;
+          background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);
+          border-radius:8px;color:rgba(255,255,255,0.7);
+          font-size:16px;font-weight:600;cursor:pointer;
+          transition:all 0.2s;letter-spacing:0.02em;
+          opacity:0;transform:translateY(6px);
+        " onmouseover="this.style.background='rgba(255,255,255,0.09)';this.style.color='rgba(255,255,255,0.95)'"
+           onmouseout="this.style.background='rgba(255,255,255,0.05)';this.style.color='rgba(255,255,255,0.7)'"
+        >Continue</button>
       </div>
     `;
 
-    // Trigger staggered fade-in
+    // Smooth reveal
     requestAnimationFrame(() => {
-      const center = overlay.querySelector(".hard-question-center");
-      if (center) center.style.opacity = "1";
-      
-      // Staggered fade-in for elements
-      setTimeout(() => {
-        const el1 = overlay.querySelector(".cmp-fade-in-1");
-        if (el1) {
-          el1.style.transition = "opacity 500ms ease, transform 500ms ease";
-          el1.style.opacity = "1";
-        }
-      }, 200);
+      const content = overlay.querySelector("#cmpContent");
+      if (content) content.style.opacity = "1";
       
       setTimeout(() => {
-        const el2 = overlay.querySelector(".cmp-fade-in-2");
-        if (el2) {
-          el2.style.transition = "opacity 500ms ease, transform 500ms ease";
-          el2.style.opacity = "1";
-        }
+        const el = overlay.querySelector(".cmp-f1");
+        if (el) { el.style.transition = "opacity 0.35s ease, transform 0.35s ease"; el.style.opacity = "1"; el.style.transform = "translateY(0)"; }
+      }, 100);
+      
+      setTimeout(() => {
+        const el = overlay.querySelector(".cmp-f2");
+        if (el) { el.style.transition = "opacity 0.35s ease, transform 0.35s ease"; el.style.opacity = "1"; el.style.transform = "translateY(0)"; }
+      }, 250);
+      
+      setTimeout(() => {
+        const el = overlay.querySelector(".cmp-f3");
+        if (el) { el.style.transition = "opacity 0.35s ease, transform 0.35s ease"; el.style.opacity = "1"; el.style.transform = "translateY(0)"; }
       }, 400);
-      
-      setTimeout(() => {
-        const el3 = overlay.querySelector(".cmp-fade-in-3");
-        if (el3) {
-          el3.style.transition = "opacity 500ms ease";
-          el3.style.opacity = "1";
-        }
-      }, 600);
-      
-      setTimeout(() => {
-        const el4 = overlay.querySelector(".cmp-fade-in-4");
-        if (el4) {
-          el4.style.transition = "opacity 500ms ease";
-          el4.style.opacity = "1";
-        }
-      }, 800);
     });
 
     // Dismiss handler with double-trigger protection
@@ -3458,11 +3481,11 @@ const StressTriggers = (() => {
       noBtn.disabled  = true;
 
       const icon  = isYes ? "🎯" : "🔍";
-      const title = isYes ? "That aligns with your earlier responses." : "Interesting.";
+      const title = isYes ? "Doesn't matter." : "Doesn't matter either.";
       const body  = isYes
-        ? "Even users who answer 'No' show similar focus patterns during testing."
-        : "Self-perception and actual attention patterns don't always match.";
-      const cta   = isYes ? "Continue →" : "Start Test →";
+        ? "Even if you said No, we'd still test your accuracy. Let's see how you actually perform."
+        : "Your answer doesn't change the test. What matters is how your focus holds under pressure.";
+      const cta   = isYes ? "Prove it →" : "Let's see →";
 
       card.innerHTML = `
         <div class="psyq-response">
@@ -5768,6 +5791,7 @@ const StressTriggers = (() => {
     
     // Show roast message
     const showRoast = (message, callback) => {
+      if (isCleanedUp || state.stage === "results") return;
       console.log('[triggerAccuracyTest] Showing roast:', message);
       const roastOverlay = document.createElement('div');
       roastOverlay.className = 'stress-difficulty-check-overlay';
@@ -5787,8 +5811,8 @@ const StressTriggers = (() => {
     
     // Show post-shake check
     const showPostShakeCheck = () => {
-      // Don't show if we've moved to a different question or cleanup was called
-      if (isCleanedUp || state.currentQuestionId !== triggerQuestionId) {
+      // Don't show if we've moved to a different question or cleanup was called or test ended
+      if (isCleanedUp || state.currentQuestionId !== triggerQuestionId || state.stage === "results") {
         console.log('[triggerAccuracyTest] Skipping post-shake check - question changed or cleaned up');
         return;
       }
@@ -6790,6 +6814,25 @@ const StressTriggers = (() => {
         // Torchlight fires immediately after the student dismisses the card.
         if (triggerInfo.name === 'torchlightSpotlight') {
           delayMs = 7000;
+          
+          // Prefetch companion data during the 7s wait
+          let prefetchedData = null;
+          const studentName = window.StressDostAuth?.getUser?.()?.display_name || "";
+          const initialText = lastAnswerEcho || $("initialText")?.value || "";
+          const followupAnswers = (state.followupAnswers || []).slice(-4);
+          
+          fetch("/api/triggers/companion", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              message: initialText,
+              student_name: studentName,
+              initial_text: initialText,
+              followup_answers: followupAnswers,
+            }),
+            signal: AbortSignal.timeout(6000),
+          }).then(r => r.ok ? r.json() : null).then(d => { prefetchedData = d; }).catch(() => {});
+          
           const timeoutId = setTimeout(() => {
             console.log(`[onQuestionRendered] Showing companion card before Q1 torchlightSpotlight`);
             showCompanionCard(() => {
@@ -6801,7 +6844,7 @@ const StressTriggers = (() => {
                 intensity: 'mild',
                 questionNumber: questionNumber,
               });
-            });
+            }, prefetchedData);
           }, delayMs);
           pendingTriggerTimeouts.push(timeoutId);
         }
@@ -8739,30 +8782,110 @@ async function submitAnswer() {
   }
 }
 
+// Called by btnSkip (followup QA screen) — skips remaining followup questions, no popup
 async function skipRemainingQuestions() {
-  // CRITICAL: Deactivate all triggers when skipping
-  StressTriggers.deactivateAllTriggers();
-  
   if (!sessionId || !btnSkip || btnSkip.hidden || btnSkip.disabled) return;
   try {
     btnSkip.disabled = true;
     btnAnswer.disabled = true;
-    showStage("loading", "Skipping remaining questions…");
+    showStage("loading", "Finishing session…");
     await postJSON(`/session/${sessionId}/complete`, {});
-    
-    // Increment test count for trigger plan
-    const testCount = parseInt(localStorage.getItem('testCount')) || 0;
-    localStorage.setItem('testCount', testCount + 1);
-    console.log('[skipRemainingQuestions] Test count incremented to:', testCount + 1);
-    
     await handleCompletion();
   } catch (err) {
     log("skip_error", err.message);
-    setHint(err.message || "Could not skip right now.");
+    setHint(err.message || "Could not finish right now.");
     btnSkip.disabled = false;
     btnAnswer.disabled = false;
     showStage("qa");
   }
+}
+
+// Called by btnFinishTest (test topbar) — shows confirmation popup before ending the test
+function finishTestWithConfirm() {
+  const confirmOverlay = document.createElement('div');
+  confirmOverlay.style.cssText = `
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.85);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    backdrop-filter: blur(4px);
+  `;
+
+  confirmOverlay.innerHTML = `
+    <div style="
+      background: linear-gradient(135deg, rgba(30, 30, 40, 0.95), rgba(20, 20, 30, 0.95));
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 16px;
+      padding: 32px;
+      max-width: 420px;
+      width: 100%;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    ">
+      <div style="font-size: 48px; text-align: center; margin-bottom: 16px;">⚠️</div>
+      <div style="font-size: 22px; font-weight: 700; color: #FFFFFF; text-align: center; margin-bottom: 12px;">
+        Finish Test Early?
+      </div>
+      <div style="font-size: 15px; color: rgba(255, 255, 255, 0.7); text-align: center; margin-bottom: 24px; line-height: 1.5;">
+        The test is still in progress. Your results will be calculated based on questions answered so far.
+      </div>
+      <div style="display: flex; gap: 12px;">
+        <button id="confirmNo" style="
+          flex: 1;
+          padding: 14px;
+          background: rgba(255, 255, 255, 0.05);
+          border: 1px solid rgba(255, 255, 255, 0.15);
+          border-radius: 10px;
+          color: #FFFFFF;
+          font-size: 15px;
+          font-weight: 600;
+          cursor: pointer;
+        ">Continue Test</button>
+        <button id="confirmYes" style="
+          flex: 1;
+          padding: 14px;
+          background: rgba(248, 113, 113, 0.15);
+          border: 1px solid rgba(248, 113, 113, 0.3);
+          border-radius: 10px;
+          color: #F87171;
+          font-size: 15px;
+          font-weight: 600;
+          cursor: pointer;
+        ">Finish Now</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(confirmOverlay);
+
+  confirmOverlay.querySelector('#confirmNo').addEventListener('click', () => {
+    confirmOverlay.remove();
+  });
+
+  confirmOverlay.querySelector('#confirmYes').addEventListener('click', async () => {
+    confirmOverlay.remove();
+
+    // Deactivate all stress triggers
+    if (StressTriggers && StressTriggers.deactivateAllTriggers) {
+      StressTriggers.deactivateAllTriggers();
+    }
+
+    // Stop exam timer and get elapsed time
+    let timeUsedMs = 0;
+    if (StressTriggers && StressTriggers.stopExamTimer) {
+      timeUsedMs = StressTriggers.stopExamTimer() || 0;
+    }
+
+    // Increment test count
+    const testCount = parseInt(localStorage.getItem('testCount')) || 0;
+    localStorage.setItem('testCount', testCount + 1);
+    console.log('[finishTestWithConfirm] Test count incremented to:', testCount + 1);
+
+    await showTestEndScreen(timeUsedMs);
+  });
 }
 
 async function handleCompletion() {
@@ -8783,7 +8906,7 @@ async function handleCompletion() {
 
     // Build devil brief page and show it
     const extractionPromise = window.academicTopics?.decideAndStore?.(sessionId, initialText, conversationHistory);
-    try { await buildDevilBriefPage(); } catch (e) { console.warn("[handleCompletion] devil brief build failed:", e); }
+    try { await buildDevilBriefPage(initialText, conversationHistory); } catch (e) { console.warn("[handleCompletion] devil brief build failed:", e); }
 
     const decision = await extractionPromise;
     console.log("[handleCompletion] extraction decision:", JSON.stringify(decision));
@@ -9196,295 +9319,290 @@ function showLifelineLostBanner() {
 async function showTestEndScreen(timeUsedMs) {
   console.log('[showTestEndScreen] Called with timeUsedMs:', timeUsedMs);
   
-  // Mark test as inactive - stop monitoring fullscreen
+  // Mark test as inactive IMMEDIATELY — this blocks all trigger activation
   isTestActive = false;
   hideFullscreenWarning();
   
-  // Stop the exam timer immediately
-  if (StressTriggers && StressTriggers.stopExamTimer) {
-    StressTriggers.stopExamTimer();
-    console.log('[showTestEndScreen] Stopped exam timer');
+  // Kill all triggers completely
+  if (StressTriggers) {
+    if (StressTriggers.deactivateAllTriggers) StressTriggers.deactivateAllTriggers();
+    if (StressTriggers.stopExamTimer) StressTriggers.stopExamTimer();
   }
   
-  // Hide the timer element
-  const timerEl = document.getElementById('questionTimer');
-  if (timerEl) {
-    timerEl.style.display = 'none';
+  // Cancel all pending trigger timeouts
+  cancelPendingTriggers();
+  
+  // Remove any lingering trigger overlays/popups from the DOM
+  document.querySelectorAll('.hard-question-fullscreen, .stress-timer-overlay, .phantom-competitor-bar, .stress-news-diversion, .stress-blackout, .stress-difficulty-check-overlay').forEach(el => el.remove());
+  
+  // Clean up body/shell classes from triggers
+  document.body.classList.remove('stress-blur-attack', 'stress-color-inversion', 'stress-chaos-bg');
+  const shell = document.querySelector('.app-shell');
+  if (shell) {
+    shell.classList.remove('stress-screen-flip', 'stress-wave-distortion', 'stress-heartbeat', 'stress-news-diversion-open');
+    shell.style.transform = '';
+    shell.style.filter = '';
   }
+  
+  // Keep fullscreen — don't exit when showing results
   
   // Calculate stats
   const totalQuestions = testQuestions.length;
+  const answeredCount = Object.keys(answeredMap).length;
   const correctCount = Object.values(answeredMap).filter(a => a.correct).length;
-  const accuracy = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0;
-  const lifelinesLeft = Math.max(0, _lifelines);
-  const lifelinesTotal = 3;
+  const percentage = answeredCount > 0 ? Math.round((correctCount / answeredCount) * 100) : 0;
   
-  // Validate the provided time - should be between 0 and 15 minutes
-  if (!timeUsedMs || timeUsedMs < 0 || timeUsedMs > 900000) {
-    console.warn('[showTestEndScreen] Invalid timeUsedMs:', timeUsedMs, '- using 0');
-    timeUsedMs = 0;
-  }
-  
+  if (!timeUsedMs || timeUsedMs < 0 || timeUsedMs > 900000) timeUsedMs = 0;
   const minutes = Math.floor(timeUsedMs / 60000);
   const seconds = Math.floor((timeUsedMs % 60000) / 1000);
   const timeUsedStr = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
   
-  console.log('[showTestEndScreen] Final stats:', { totalQuestions, correctCount, accuracy, lifelinesLeft, timeUsedStr, timeUsedMs });
+  // Theme
+  let level, ringColor, headline, verdict, ctaText;
+  if (percentage <= 20) {
+    level = "CRITICAL"; ringColor = "#ef4444"; headline = "Needs Attention"; verdict = "Focus broke down early. Identify the pattern and rebuild."; ctaText = "Try Again";
+  } else if (percentage <= 50) {
+    level = "BELOW PAR"; ringColor = "#f97316"; headline = "Room to Grow"; verdict = "Inconsistent under pressure. The gaps are fixable."; ctaText = "Go Again";
+  } else if (percentage <= 75) {
+    level = "AVERAGE"; ringColor = "#eab308"; headline = "Solid Base"; verdict = "Decent hold. One focused session away from the next tier."; ctaText = "Push Further";
+  } else if (percentage <= 89) {
+    level = "STRONG"; ringColor = "#22c55e"; headline = "Well Played"; verdict = "Held focus when it mattered. Keep compounding."; ctaText = "Continue";
+  } else {
+    level = "ELITE"; ringColor = "#06b6d4"; headline = "Exceptional"; verdict = "Peak execution under pressure. Rare territory."; ctaText = "Done";
+  }
+
+  // Switch to results stage — hides test UI completely
+  showStage("results");
   
-  // Calculate focus score (out of 100)
-  const focusScore = Math.min(100, Math.max(0, Math.round(accuracy * 0.7 + (lifelinesLeft / lifelinesTotal) * 30)));
+  const container = document.getElementById("resultsScreen");
+  if (!container) return;
   
-  // Determine verdict
-  let verdict = "Lifelines gone. Lessons earned.";
-  if (lifelinesLeft > 0 && accuracy >= 80) {
-    verdict = "Strong focus. Keep it sharp.";
-  } else if (lifelinesLeft > 0 && accuracy >= 60) {
-    verdict = "Decent effort. Room to grow.";
-  } else if (lifelinesLeft > 0) {
-    verdict = "Focus wavered. Try again.";
+  // Background effects per level (intense glows reaching into the page)
+  let bgEffectHTML = '';
+  if (percentage <= 20) {
+    bgEffectHTML = `
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 0% 50%,rgba(239,68,68,0.18) 0%,transparent 55%);"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 100% 50%,rgba(239,68,68,0.18) 0%,transparent 55%);"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 0%,rgba(239,68,68,0.1) 0%,transparent 40%);animation:resPulse 3s ease-in-out infinite;"></div>`;
+  } else if (percentage <= 50) {
+    bgEffectHTML = `
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 0% 70%,rgba(249,115,22,0.15) 0%,transparent 50%);"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 100% 30%,rgba(249,115,22,0.12) 0%,transparent 50%);"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 100%,rgba(249,115,22,0.1) 0%,transparent 45%);"></div>`;
+  } else if (percentage <= 75) {
+    bgEffectHTML = `
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 0% 30%,rgba(234,179,8,0.12) 0%,transparent 50%);"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 100% 70%,rgba(234,179,8,0.1) 0%,transparent 50%);"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 0%,rgba(234,179,8,0.08) 0%,transparent 40%);"></div>`;
+  } else if (percentage <= 89) {
+    bgEffectHTML = `
+      <div style="position:absolute;inset:0;pointer-events:none;overflow:hidden;" id="resParticles"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 0% 50%,rgba(34,197,94,0.14) 0%,transparent 50%);"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 100% 50%,rgba(34,197,94,0.14) 0%,transparent 50%);"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 100%,rgba(34,197,94,0.08) 0%,transparent 40%);"></div>`;
+  } else {
+    bgEffectHTML = `
+      <div style="position:absolute;inset:0;pointer-events:none;overflow:hidden;" id="resParticles"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 0% 40%,rgba(6,182,212,0.18) 0%,transparent 50%);"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 100% 60%,rgba(6,182,212,0.18) 0%,transparent 50%);"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 0%,rgba(6,182,212,0.12) 0%,transparent 45%);"></div>`;
   }
   
-  const overlay = document.createElement('div');
-  overlay.style.cssText = `
-    position: fixed;
-    inset: 0;
-    background: #0A0A0A;
-    z-index: 10001;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-    animation: fadeIn 0.4s ease;
-  `;
-  
-  overlay.innerHTML = `
+  container.style.background = "#000";
+  container.innerHTML = `
     <style>
-      @keyframes fadeIn {
-        from { opacity: 0; }
-        to { opacity: 1; }
-      }
-      @keyframes slideDown {
-        from { transform: translateX(-50%) translateY(-20px); opacity: 0; }
-        to { transform: translateX(-50%) translateY(0); opacity: 1; }
-      }
-      .focus-score-ring {
-        width: 240px;
-        height: 240px;
-        position: relative;
-      }
-      .focus-score-ring svg {
-        transform: rotate(-90deg);
-      }
-      .focus-score-ring circle {
-        fill: none;
-        stroke-width: 12;
-      }
-      .focus-score-bg {
-        stroke: rgba(255, 255, 255, 0.1);
-      }
-      .focus-score-fill {
-        stroke: #F59E0B;
-        stroke-linecap: round;
-        stroke-dasharray: 628;
-        stroke-dashoffset: ${628 - (628 * focusScore / 100)};
-        transition: stroke-dashoffset 1.5s ease;
-      }
-      .breakdown-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 20px 24px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-      }
-      .breakdown-row:last-child {
-        border-bottom: none;
-      }
-      .breakdown-label {
-        font-size: 16px;
-        color: rgba(255, 255, 255, 0.5);
-        font-weight: 400;
-      }
-      .breakdown-value {
-        font-size: 18px;
-        color: #FFFFFF;
-        font-weight: 600;
-      }
-      .breakdown-value.success {
-        color: #4ADE80;
-      }
-      .breakdown-value.danger {
-        color: #F87171;
-      }
+      @keyframes resPulse { 0%,100%{opacity:0.5;} 50%{opacity:1;} }
+      @keyframes resFloat { 0%{transform:translateY(0) scale(1);opacity:0.6;} 50%{transform:translateY(-20px) scale(1.1);opacity:1;} 100%{transform:translateY(-40px) scale(0.8);opacity:0;} }
     </style>
-    
-    <div style="position: absolute; top: 20px; left: 20px; font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; color: rgba(255, 255, 255, 0.4); font-weight: 600;">FOCUSDOST</div>
-    
-    <button onclick="this.parentElement.remove()" style="
-      position: absolute;
-      top: 20px;
-      right: 20px;
-      background: none;
-      border: none;
-      color: rgba(255, 255, 255, 0.5);
-      font-size: 24px;
-      cursor: pointer;
-      padding: 8px;
-      line-height: 1;
-    ">×</button>
-    
-    <div style="text-align: center; margin-bottom: 40px;">
-      <div style="
-        font-size: 11px;
-        letter-spacing: 0.2em;
-        text-transform: uppercase;
-        color: #D4A574;
-        font-weight: 700;
-        margin-bottom: 32px;
-      ">FOCUS SCORE</div>
+    ${bgEffectHTML}
+    <div style="
+      position:relative;z-index:1;
+      width:100%;max-width:440px;display:flex;flex-direction:column;align-items:center;
+      padding:48px 20px 60px;opacity:0;transform:translateY(14px);
+      transition:opacity 0.8s ease,transform 0.8s ease;
+    " id="resInner">
       
-      <div class="focus-score-ring">
-        <svg width="240" height="240">
-          <circle class="focus-score-bg" cx="120" cy="120" r="100"></circle>
-          <circle class="focus-score-fill" cx="120" cy="120" r="100"></circle>
+      <div style="font-size:12px;letter-spacing:0.3em;text-transform:uppercase;color:rgba(255,255,255,0.3);font-weight:600;margin-bottom:44px;">SESSION COMPLETE</div>
+      
+      <!-- Ring -->
+      <div style="position:relative;width:220px;height:220px;margin-bottom:40px;">
+        <svg width="220" height="220" style="transform:rotate(-90deg);">
+          <circle cx="110" cy="110" r="96" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="7"/>
+          <circle cx="110" cy="110" r="96" fill="none" stroke="${ringColor}" stroke-width="7" stroke-linecap="round"
+            stroke-dasharray="603" stroke-dashoffset="603"
+            style="transition:stroke-dashoffset 2s cubic-bezier(0.4,0,0.15,1) 0.5s;"
+            id="resRingFill"/>
         </svg>
-        <div style="
-          position: absolute;
-          inset: 0;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-        ">
-          <div style="font-size: 72px; font-weight: 700; color: #FFFFFF; line-height: 1;">${focusScore}</div>
-          <div style="font-size: 13px; color: rgba(255, 255, 255, 0.5); margin-top: 8px; letter-spacing: 0.1em; text-transform: uppercase;">OUT OF 100</div>
+        <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;">
+          <span style="font-size:62px;font-weight:800;color:rgba(255,255,255,0.95);letter-spacing:-3px;line-height:1;" id="resPercentNum">0</span>
+          <span style="font-size:15px;color:${ringColor};font-weight:600;margin-top:4px;opacity:0.85;">%</span>
         </div>
       </div>
-    </div>
-    
-    <div style="margin-bottom: 40px; text-align: center;">
+      
+      <!-- Level badge -->
       <div style="
-        font-size: 11px;
-        letter-spacing: 0.2em;
-        text-transform: uppercase;
-        color: #D4A574;
-        font-weight: 700;
-        margin-bottom: 12px;
-      ">VERDICT</div>
-      <div style="
-        font-size: 20px;
-        font-weight: 400;
-        color: #FFFFFF;
-        line-height: 1.4;
-      ">${verdict}</div>
+        font-size:13px;letter-spacing:0.18em;text-transform:uppercase;
+        color:${ringColor};font-weight:700;margin-bottom:14px;opacity:0.9;
+      ">${level}</div>
+      <div style="font-size:28px;font-weight:700;color:rgba(255,255,255,0.92);margin-bottom:10px;letter-spacing:-0.3px;">${headline}</div>
+      <div style="font-size:16px;color:rgba(255,255,255,0.5);text-align:center;line-height:1.6;margin-bottom:44px;max-width:320px;">${verdict}</div>
+      
+      <!-- Stats -->
+      <div style="width:100%;display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:rgba(255,255,255,0.06);border-radius:12px;overflow:hidden;margin-bottom:44px;">
+        <div style="background:#0a0a0a;padding:24px 12px;text-align:center;">
+          <div style="font-size:28px;font-weight:800;color:rgba(255,255,255,0.92);">${correctCount}<span style="font-size:15px;font-weight:500;color:rgba(255,255,255,0.35);">/${answeredCount}</span></div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.12em;margin-top:8px;">Correct</div>
+        </div>
+        <div style="background:#0a0a0a;padding:24px 12px;text-align:center;">
+          <div style="font-size:28px;font-weight:800;color:rgba(255,255,255,0.92);">${answeredCount}<span style="font-size:15px;font-weight:500;color:rgba(255,255,255,0.35);">/${totalQuestions}</span></div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.12em;margin-top:8px;">Attempted</div>
+        </div>
+        <div style="background:#0a0a0a;padding:24px 12px;text-align:center;">
+          <div style="font-size:28px;font-weight:800;color:rgba(255,255,255,0.92);">${timeUsedStr}</div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.12em;margin-top:8px;">Duration</div>
+        </div>
+      </div>
+      
+      <!-- CTA -->
+      <button onclick="window.location.href='/'" style="
+        width:100%;padding:18px;border:1px solid rgba(255,255,255,0.12);border-radius:10px;
+        background:transparent;color:rgba(255,255,255,0.75);font-size:16px;font-weight:600;
+        cursor:pointer;letter-spacing:0.03em;transition:all 0.2s;
+      " onmouseover="this.style.background='rgba(255,255,255,0.06)';this.style.color='rgba(255,255,255,0.95)'" onmouseout="this.style.background='transparent';this.style.color='rgba(255,255,255,0.75)'">${ctaText}</button>
     </div>
-    
-    <div id="breakdown-toggle" style="
-      font-size: 13px;
-      color: rgba(255, 255, 255, 0.5);
-      font-style: italic;
-      cursor: pointer;
-      margin-bottom: 20px;
-      user-select: none;
-    ">tap for breakdown ↓</div>
-    
-    <div id="breakdown-panel" style="
-      width: 100%;
-      max-width: 440px;
-      background: rgba(255, 255, 255, 0.02);
-      border: 1px solid rgba(255, 255, 255, 0.05);
-      border-radius: 16px;
-      overflow: hidden;
-      margin-bottom: 32px;
-      display: none;
-    ">
-      <div class="breakdown-row">
-        <div class="breakdown-label">Accuracy</div>
-        <div class="breakdown-value success">${accuracy}%</div>
-      </div>
-      <div class="breakdown-row">
-        <div class="breakdown-label">Correct</div>
-        <div class="breakdown-value">${correctCount} of ${totalQuestions}</div>
-      </div>
-      <div class="breakdown-row">
-        <div class="breakdown-label">Lifelines left</div>
-        <div class="breakdown-value ${lifelinesLeft === 0 ? 'danger' : ''}">${lifelinesLeft} of ${lifelinesTotal}</div>
-      </div>
-      <div class="breakdown-row">
-        <div class="breakdown-label">Time used</div>
-        <div class="breakdown-value">${timeUsedStr}</div>
-      </div>
-      <div class="breakdown-row">
-        <div class="breakdown-label">Distractions survived</div>
-        <div class="breakdown-value">0 of 0</div>
-      </div>
-    </div>
-    
-    <button onclick="window.location.href='/'" style="
-      width: 100%;
-      max-width: 440px;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      border-radius: 12px;
-      color: #FFFFFF;
-      font-size: 16px;
-      font-weight: 600;
-      padding: 16px 24px;
-      cursor: pointer;
-      transition: all 0.2s;
-    " onmouseover="this.style.background='rgba(255, 255, 255, 0.08)'" onmouseout="this.style.background='rgba(255, 255, 255, 0.05)'">Home</button>
   `;
   
-  document.body.appendChild(overlay);
+  // Animate in
+  requestAnimationFrame(() => {
+    const inner = document.getElementById("resInner");
+    if (inner) { inner.style.opacity = "1"; inner.style.transform = "translateY(0)"; }
+    
+    // Animate ring fill
+    setTimeout(() => {
+      const ring = document.getElementById("resRingFill");
+      if (ring) ring.style.strokeDashoffset = String(603 - (603 * percentage / 100));
+    }, 100);
+    
+    // Animate percentage counter
+    let current = 0;
+    const target = percentage;
+    const numEl = document.getElementById("resPercentNum");
+    if (numEl && target > 0) {
+      const step = Math.max(1, Math.floor(target / 40));
+      const interval = setInterval(() => {
+        current += step;
+        if (current >= target) { current = target; clearInterval(interval); }
+        numEl.textContent = String(current);
+      }, 30);
+    }
+    
+    // Floating particles for good/excellent
+    if (percentage > 75) {
+      const particleContainer = document.getElementById("resParticles");
+      if (particleContainer) {
+        for (let i = 0; i < 12; i++) {
+          const p = document.createElement("div");
+          const size = Math.random() * 3 + 2;
+          p.style.cssText = `
+            position:absolute;bottom:0;
+            left:${Math.random() * 100}%;
+            width:${size}px;height:${size}px;
+            background:${ringColor};border-radius:50%;opacity:0;
+            animation:resFloat ${3 + Math.random() * 4}s ease-in-out ${Math.random() * 3}s infinite;
+          `;
+          particleContainer.appendChild(p);
+        }
+      }
+    }
+  });
   
-  // Increment completed_sessions when test ends (await to ensure it completes)
+  // Effects per level
+  if (percentage <= 20) {
+    // No celebration — just the pulsing vignette
+  } else if (percentage <= 50) {
+    // Subtle — no confetti
+  } else if (percentage <= 75) {
+    // Mild confetti
+    setTimeout(() => createConfetti(30, ringColor), 1200);
+  } else if (percentage <= 89) {
+    // Good — confetti burst
+    setTimeout(() => createConfetti(80, ringColor), 900);
+  } else {
+    // Elite — heavy confetti + delayed second wave
+    setTimeout(() => createConfetti(100, ringColor), 700);
+    setTimeout(() => createConfetti(60, '#FFD700'), 1800);
+  }
+  
+  // Increment completed_sessions
   const user = window.StressDostAuth?.getUser();
   if (user && user.user_id) {
-    console.log('[showTestEndScreen] Incrementing completed session count for user:', user.user_id);
     try {
       const response = await fetch(`/api/user/${user.user_id}/session-complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       });
       const data = await response.json();
-      console.log('[showTestEndScreen] Session completed:', data);
-      
-      // Update local storage with new completed session count
       if (user && data.completed_sessions !== undefined) {
         user.completed_sessions = data.completed_sessions;
         window.StressDostAuth.setUser(user);
-        console.log('[showTestEndScreen] Updated user completed_sessions to:', data.completed_sessions);
-        // Update UI to show new session count
         syncUserUI();
       }
     } catch (err) {
       console.error('[showTestEndScreen] Failed to increment completed session:', err);
     }
   }
+}
+
+function createConfetti(count, baseColor) {
+  const colors = [
+    baseColor,
+    '#FFD700', // Gold
+    '#FF69B4', // Pink
+    '#00CED1', // Cyan
+    '#FF6347', // Tomato
+    '#32CD32', // Lime
+    '#FF1493', // Deep pink
+    '#00FF7F'  // Spring green
+  ];
   
-  // Toggle breakdown
-  const toggle = overlay.querySelector('#breakdown-toggle');
-  const panel = overlay.querySelector('#breakdown-panel');
-  let isExpanded = false;
+  const shapes = ['circle', 'square', 'triangle'];
   
-  toggle.addEventListener('click', () => {
-    isExpanded = !isExpanded;
-    if (isExpanded) {
-      panel.style.display = 'block';
-      toggle.textContent = 'hide breakdown ↑';
-    } else {
-      panel.style.display = 'none';
-      toggle.textContent = 'tap for breakdown ↓';
+  for (let i = 0; i < count; i++) {
+    const confetti = document.createElement('div');
+    confetti.className = 'confetti';
+    
+    const shape = shapes[Math.floor(Math.random() * shapes.length)];
+    const color = colors[Math.floor(Math.random() * colors.length)];
+    const size = Math.random() * 8 + 6; // 6-14px
+    const left = Math.random() * 100; // 0-100%
+    const animationDuration = Math.random() * 2 + 3; // 3-5s
+    const animationDelay = Math.random() * 0.5; // 0-0.5s stagger
+    
+    confetti.style.left = `${left}%`;
+    confetti.style.width = `${size}px`;
+    confetti.style.height = `${size}px`;
+    confetti.style.backgroundColor = color;
+    confetti.style.animation = `confettiFall ${animationDuration}s linear ${animationDelay}s forwards`;
+    
+    // Apply shape-specific styles
+    if (shape === 'circle') {
+      confetti.style.borderRadius = '50%';
+    } else if (shape === 'triangle') {
+      confetti.style.width = '0';
+      confetti.style.height = '0';
+      confetti.style.backgroundColor = 'transparent';
+      confetti.style.borderLeft = `${size/2}px solid transparent`;
+      confetti.style.borderRight = `${size/2}px solid transparent`;
+      confetti.style.borderBottom = `${size}px solid ${color}`;
     }
-  });
-  
-  // Home button handler
-  const homeBtn = overlay.querySelector('button');
-  if (homeBtn) {
-    homeBtn.addEventListener('click', () => {
-      overlay.remove();
-      window.location.href = '/';
-    });
+    // square is default (no border-radius)
+    
+    document.body.appendChild(confetti);
+    
+    // Remove confetti after animation completes
+    setTimeout(() => {
+      confetti.remove();
+    }, (animationDuration + animationDelay) * 1000);
   }
 }
 
@@ -9565,7 +9683,7 @@ solutionModal?.addEventListener("click", (evt) => {
 });
 
 btnSubmitQuestion?.addEventListener("click", submitCurrentQuestion);
-btnFinishTest?.addEventListener("click", () => skipRemainingQuestions());
+btnFinishTest?.addEventListener("click", () => finishTestWithConfirm());
 btnReportError?.addEventListener("click", () => {
   setTestHint("Thanks - the report was captured.");
 });
@@ -9748,19 +9866,17 @@ function mergeSuggestionText(current, suggestion) {
   const base = String(current || "").trimEnd();
   const next = String(suggestion || "").trim();
   if (!base) return next;
+  if (!next) return base;
 
   const baseLower = base.toLowerCase();
   const nextLower = next.toLowerCase();
 
-  // Suggestion is a direct continuation of what was typed — show only the new part
+  // If suggestion starts with what user typed, it's a full replacement (legacy)
   if (nextLower.startsWith(baseLower)) return next;
 
-  // Suggestion overlaps at the end — avoid double text
-  if (baseLower.endsWith(nextLower)) return base;
-
-  // Otherwise always append — never replace what the user typed
-  const sep = /\s$/.test(base) ? "" : " ";
-  return base + sep + next;
+  // Otherwise it's a continuation — append with proper spacing
+  const needsSpace = !base.endsWith(" ") && !next.startsWith(",") && !next.startsWith(".");
+  return base + (needsSpace ? " " : "") + next;
 }
 
 function requestSuggestionsDebounced(rawText) {
