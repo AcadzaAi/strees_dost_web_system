@@ -125,8 +125,8 @@ let loadingTicker = null;
 let loadingFrameIndex = 0;
 let lastAnswerEcho = "";
 let sessionInitialQuery = "";
-let q1WarningCopyCache = null;
-let q1WarningCopyPromise = null;
+let questionWarningCopyCache = new Map();
+let questionWarningCopyPromises = new Map();
 let solutionModalOpen = false;
 let pendingAdvanceAfterSubmit = false;
 let questionTriggerPlan = null; // Stores trigger plan from backend
@@ -743,8 +743,8 @@ function resetFlow() {
   currentDomain = null;
   currentSlot = null;
   sessionInitialQuery = "";
-  q1WarningCopyCache = null;
-  q1WarningCopyPromise = null;
+  questionWarningCopyCache = new Map();
+  questionWarningCopyPromises = new Map();
   clearGhost();
   btnAnswer.disabled = true;
   btnAnswer.hidden = true;
@@ -3553,6 +3553,95 @@ const StressTriggers = (() => {
     };
   }
 
+  function getQuestionWarningInputs(questionNumber) {
+    const initialText = getSessionInitialQuery();
+    const followupAnswers = Array.isArray(state.followupAnswers)
+      ? state.followupAnswers
+          .slice(0, 2)
+          .map((item) => String(item?.answer || "").trim())
+          .filter(Boolean)
+      : [];
+    const contextParts = questionNumber <= 2
+      ? [initialText]
+      : [initialText, ...followupAnswers];
+    return {
+      initialText,
+      followupAnswers,
+      contextParts: contextParts.filter(Boolean),
+      combinedContext: contextParts.filter(Boolean).join(" | "),
+    };
+  }
+
+  function getQuestionWarningPresentation(questionNumber) {
+    const map = {
+      1: { label: "Reality check", icon: "🚨" },
+      2: { label: "Damage report", icon: "💀" },
+      3: { label: "Pattern exposed", icon: "😈" },
+      4: { label: "Focus decay", icon: "🩸" },
+      5: { label: "No hiding", icon: "🔥" },
+      6: { label: "Weakness spotted", icon: "☠️" },
+      7: { label: "Final blow", icon: "👁️" },
+    };
+    return map[questionNumber] || map[1];
+  }
+
+  function getQuestionWarningCacheKey(questionNumber) {
+    const normalizedQuestionNumber = Number(questionNumber || 1);
+    const { initialText, followupAnswers } = getQuestionWarningInputs(normalizedQuestionNumber);
+    return JSON.stringify({
+      questionNumber: normalizedQuestionNumber,
+      initialText,
+      followupAnswers,
+    });
+  }
+
+  function buildQuestionWarningFallbackCopy(questionNumber) {
+    const { initialText, followupAnswers, contextParts } = getQuestionWarningInputs(questionNumber);
+    const baseSource = contextParts.join(" | ") || initialText || "your distraction";
+    const fallbackTopic = summarizeDistractionTopic(baseSource, initialText || "your distraction");
+    const literalTopic = extractLiteralPopupTopic(
+      questionNumber <= 2 ? initialText : contextParts.join(", "),
+      questionNumber <= 2 ? "" : followupAnswers.join(", "),
+      fallbackTopic
+    );
+    const topicLead = literalTopic ? `"${literalTopic}"` : fallbackTopic;
+    const second = followupAnswers[0] ? `"${followupAnswers[0]}"` : "the same weakness";
+    const third = followupAnswers[1] ? `"${followupAnswers[1]}"` : "the excuse you keep feeding";
+
+    const copyMap = {
+      1: {
+        headline: `${topicLead} is still on your mind, and the question has barely had a chance.`,
+        sub: "",
+      },
+      2: {
+        headline: `${topicLead} looks harmless until you notice how easily it pulls you away from your own work.`,
+        sub: "",
+      },
+      3: {
+        headline: `${topicLead}, ${second}, and now it is starting to look less like distraction and more like your usual pattern.`,
+        sub: "",
+      },
+      4: {
+        headline: `${topicLead} got your attention, ${second} kept it there, and ${third} made the habit obvious.`,
+        sub: "",
+      },
+      5: {
+        headline: `${topicLead} is the distraction, ${second} is the excuse, and ${third} is what happens when you stop guarding your time.`,
+        sub: "",
+      },
+      6: {
+        headline: `${topicLead}, ${second}, and ${third} together make your weak spot look very easy to predict.`,
+        sub: "",
+      },
+      7: {
+        headline: `${topicLead} took your attention, ${second} lowered your guard, and ${third} finished what was left.`,
+        sub: "",
+      },
+    };
+
+    return copyMap[questionNumber] || copyMap[1];
+  }
+
   function normalizeQ1WarningResponse(raw, fallbackCopy) {
     const fallback = fallbackCopy || buildQ1WarningCopy();
     const headline = String(raw?.headline || "").replace(/\s+/g, " ").trim();
@@ -3561,35 +3650,55 @@ const StressTriggers = (() => {
     return { headline, sub };
   }
 
+  function normalizeQuestionWarningResponse(raw, fallbackCopy) {
+    const fallback = fallbackCopy || buildQuestionWarningFallbackCopy(1);
+    const headline = String(raw?.headline || "").replace(/\s+/g, " ").trim();
+    const sub = String(raw?.sub || "").replace(/\s+/g, " ").trim();
+    if (!headline) return fallback;
+    return { headline, sub };
+  }
+
   async function fetchQ1WarningCopy() {
-    const initialText = getSessionInitialQuery();
-    const fallbackCopy = buildQ1WarningCopy();
+    return fetchQuestionWarningCopy(1);
+  }
+
+  async function fetchQuestionWarningCopy(questionNumber) {
+    const normalizedQuestionNumber = Number(questionNumber || 1);
+    const fallbackCopy = buildQuestionWarningFallbackCopy(normalizedQuestionNumber);
+    const { initialText, followupAnswers } = getQuestionWarningInputs(normalizedQuestionNumber);
     if (!initialText) return fallbackCopy;
 
-    if (q1WarningCopyCache?.initialText === initialText && q1WarningCopyCache?.copy) {
-      return q1WarningCopyCache.copy;
+    const cacheKey = getQuestionWarningCacheKey(normalizedQuestionNumber);
+
+    if (questionWarningCopyCache.has(cacheKey)) {
+      return questionWarningCopyCache.get(cacheKey);
     }
 
-    if (q1WarningCopyPromise) {
-      return q1WarningCopyPromise;
+    if (questionWarningCopyPromises.has(cacheKey)) {
+      return questionWarningCopyPromises.get(cacheKey);
     }
 
-    q1WarningCopyPromise = postJSON(
-      "/api/triggers/q1-warning-copy",
-      { initial_text: initialText },
-      { timeoutMs: 5000 }
+    const promise = postJSON(
+      "/api/triggers/question-warning-copy",
+      {
+        question_number: normalizedQuestionNumber,
+        initial_text: initialText,
+        followup_answers: followupAnswers,
+      },
+      { timeoutMs: 6000 }
     )
       .then((data) => {
-        const copy = normalizeQ1WarningResponse(data, fallbackCopy);
-        q1WarningCopyCache = { initialText, copy };
+        const copy = normalizeQuestionWarningResponse(data, fallbackCopy);
+        questionWarningCopyCache.set(cacheKey, copy);
         return copy;
       })
       .catch(() => fallbackCopy)
       .finally(() => {
-        q1WarningCopyPromise = null;
+        questionWarningCopyPromises.delete(cacheKey);
       });
 
-    return q1WarningCopyPromise;
+    questionWarningCopyPromises.set(cacheKey, promise);
+    return promise;
   }
 
   function buildQ2PopupCopy() {
@@ -3629,6 +3738,39 @@ const StressTriggers = (() => {
       overlay.remove();
       onComplete?.();
     }, dismissMs);
+  }
+
+  function showQuestionWarningPopup(questionNumber, onComplete) {
+    const qNum = Number(questionNumber || 1);
+    const fallbackCopy = buildQuestionWarningFallbackCopy(qNum);
+    const cacheKey = getQuestionWarningCacheKey(qNum);
+    const resolvedCopy = questionWarningCopyCache.get(cacheKey) || fallbackCopy;
+
+    document.querySelectorAll(".psyq-overlay[data-question-warning='1']").forEach((el) => el.remove());
+
+    const overlay = document.createElement("div");
+    overlay.className = "psyq-overlay psyq-overlay--warning-slow";
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("data-question-warning", "1");
+    overlay.setAttribute("data-question-number", String(qNum));
+
+    overlay.innerHTML = `
+      <div class="psyq-card psyq-card--warning psyq-card--warning-slow psyq-card--minimal" id="psyqCard">
+        <button class="psyq-close psyq-close--minimal" id="psyqClose" type="button" aria-label="Close popup">×</button>
+        <p class="psyq-reflection" id="psyqReflection"></p>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add("psyq-overlay--visible"));
+
+    const reflEl = overlay.querySelector("#psyqReflection");
+    const closeBtn = overlay.querySelector("#psyqClose");
+
+    if (reflEl) reflEl.textContent = resolvedCopy.headline || fallbackCopy.headline;
+
+    closeBtn?.addEventListener("click", () => dismissPsyqOverlay(overlay, onComplete));
   }
 
   function showPersonalizedQuiz(onComplete, opts = {}) {
@@ -7130,8 +7272,8 @@ const StressTriggers = (() => {
   }
 
   function onQuestionRendered(question) {
-    const clearQ1WarningOverlay = () => {
-      document.querySelectorAll(".psyq-overlay[data-warning-only='1']").forEach((el) => el.remove());
+    const clearQuestionWarningOverlay = () => {
+      document.querySelectorAll(".psyq-overlay[data-question-warning='1'], .psyq-overlay[data-warning-only='1']").forEach((el) => el.remove());
     };
     if (state.optionFeedbackActive && state.optionFeedbackQuestionId &&
         String(state.optionFeedbackQuestionId) !== String(question?.question_id || "")) {
@@ -7149,30 +7291,33 @@ const StressTriggers = (() => {
     state.hoverOptionEl = null;
     state.interactionHesitationMs = 0;
     state.interactionHesitationStartedAt = 0;
+    state.optionFeedbackInterceptionEnabled = false;
+    state.optionFeedbackInterceptionCount = 0;
+    state.optionFeedbackMaxInterceptions = 0;
     
     // Check if this is a hard question
     const isHard = isHardDifficulty(question?.difficulty);
     const questionNumber = testQuestionIndex + 1;
-    if (questionNumber !== 1) clearQ1WarningOverlay();
-    const scheduleQ1SessionPopup = () => {
-      if (questionNumber !== 1) return false;
-      if (state.q1PopupShownThisSession) return true;
-      state.q1PopupShownThisSession = true;
-      const timeoutId = setTimeout(() => {
-        if (testQuestionIndex + 1 !== 1) return;
-        console.log("[onQuestionRendered] Q1 session popup fired");
-        showPersonalizedQuiz(() => {
-          console.log("[onQuestionRendered] Q1 warning card dismissed by user");
-        }, { mode: "q1" });
-      }, 5000);
-      pendingTriggerTimeouts.push(timeoutId);
-      return true;
-    };
+    clearQuestionWarningOverlay();
     
     console.log('[onQuestionRendered] Current testQuestionIndex:', testQuestionIndex);
     console.log('[onQuestionRendered] Calculated questionNumber:', questionNumber);
     console.log('[onQuestionRendered] Question ID:', question?.question_id);
     console.log('[onQuestionRendered] Question difficulty:', question?.difficulty);
+
+    if (questionNumber >= 1 && questionNumber <= 7) {
+      const renderedQuestionId = String(question?.question_id || "");
+      void fetchQuestionWarningCopy(questionNumber);
+      const timeoutId = setTimeout(() => {
+        if (String(state.currentQuestionId || "") !== renderedQuestionId) return;
+        console.log(`[onQuestionRendered] Showing popup-card sequence for Q${questionNumber}`);
+        showQuestionWarningPopup(questionNumber, () => {
+          console.log(`[onQuestionRendered] Warning popup dismissed for Q${questionNumber}`);
+        });
+      }, 5000);
+      pendingTriggerTimeouts.push(timeoutId);
+      return;
+    }
     
     // Fixed per-question flows (new-user sequence every session)
     ensureQuestionTriggerPlan();
@@ -8847,42 +8992,6 @@ async function submitCurrentQuestion() {
     return;
   }
   
-  // Q6 HARD_PEER_DOUBT: Intercept submission with option feedback popup (up to 2 times)
-  // Only intercept if we're actually on Q6 (question number 6)
-  const currentQuestionNumber = testQuestionIndex + 1;
-  
-  if (currentQuestionNumber === 6 &&
-      StressTriggers.isOptionFeedbackInterceptionEnabled() && 
-      StressTriggers.getOptionFeedbackInterceptionCount() < StressTriggers.getOptionFeedbackMaxInterceptions()) {
-    
-    const q = testQuestions[testQuestionIndex];
-    const picked = selectedOptions[q.question_id];
-    
-    if (picked) {
-      StressTriggers.incrementOptionFeedbackInterceptionCount();
-      const count = StressTriggers.getOptionFeedbackInterceptionCount();
-      const max = StressTriggers.getOptionFeedbackMaxInterceptions();
-      console.log(`[submitCurrentQuestion] Q6 Interception ${count}/${max}`);
-      
-      // Activate the trigger to set the flags
-      StressTriggers.activateTrigger('optionFeedbackPopups', {
-        userState: StressTriggers.currentUserState(),
-        force: true,
-        reason: `question_trigger:Q6:peer_doubt_interception`,
-        selectedOption: picked,
-        questionId: q.question_id,
-        interceptionNumber: count
-      });
-      
-      // Show the actual popup (maybeShowOptionFeedbackPopup is inside StressTriggers)
-      // We need to trigger it through option click
-      StressTriggers.onOptionClick(q.question_id, picked);
-      
-      // Don't proceed with submission
-      return;
-    }
-  }
-  
   await StressTriggers.beforeSubmitDelay();
   try {
     const q = testQuestions[testQuestionIndex];
@@ -9027,8 +9136,8 @@ async function startSessionFlow() {
 
     lastAnswerEcho = text;
     sessionInitialQuery = text;
-    q1WarningCopyCache = null;
-    q1WarningCopyPromise = null;
+    questionWarningCopyCache = new Map();
+    questionWarningCopyPromises = new Map();
 
     setIntroHint("");
     showStage("loading", "Absorbing your story…");

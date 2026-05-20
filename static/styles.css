@@ -2815,6 +2815,11 @@ pre {
   padding: 22px 22px 20px;
 }
 
+.psyq-card--minimal {
+  position: relative;
+  padding: 28px 28px 26px;
+}
+
 .psyq-card--warning-slow {
   opacity: 0;
   transform: translateY(24px) scale(0.97);
@@ -2832,6 +2837,12 @@ pre {
   margin-bottom: 12px;
 }
 
+.psyq-card--minimal .psyq-header,
+.psyq-card--minimal .psyq-divider,
+.psyq-card--minimal .psyq-question {
+  display: none;
+}
+
 .psyq-card--warning .psyq-icon {
   font-size: 28px;
 }
@@ -2842,6 +2853,14 @@ pre {
   line-height: 1.35;
   min-height: 0;
   margin-bottom: 6px;
+}
+
+.psyq-card--minimal .psyq-reflection {
+  margin: 0;
+  padding-right: 44px;
+  font-size: 16px;
+  line-height: 1.5;
+  font-weight: 600;
 }
 
 .psyq-card--warning .psyq-question {
@@ -2957,6 +2976,13 @@ pre {
   align-items: center;
   justify-content: center;
   transition: background 180ms ease, color 180ms ease, border-color 180ms ease, transform 180ms ease;
+}
+
+.psyq-close--minimal {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  margin-left: 0;
 }
 
 .psyq-close:hover {

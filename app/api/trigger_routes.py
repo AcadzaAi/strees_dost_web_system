@@ -367,6 +367,74 @@ Hard rules:
 """
 
 
+QUESTION_WARNING_PROMPT = """
+You write short brutal popup-card copy for a 7-question stress-test UI.
+
+Input JSON:
+{
+  "question_number": 1,
+  "initial_text": "<the student's first query only>",
+  "followup_answers": ["<optional answer 2>", "<optional answer 3>"]
+}
+
+Return strict JSON only:
+{
+  "headline": "...",
+  "sub": "..."
+}
+
+Write like a sharp human who actually understands the student's pattern.
+It should feel believable, specific, and uncomfortably real.
+Avoid sounding like a dramatic AI monologue.
+The best tone is blunt, realistic, and personal.
+
+Primary behavior by question:
+- Q1: Use ONLY initial_text. Sharp, personal, but controlled.
+- Q2: Use ONLY initial_text. More brutal than Q1. Make the consequence feel closer.
+- Q3-Q7: Combine initial_text + followup_answers into one attack. These should escalate in brutality as question_number rises.
+
+Escalation guide:
+- Q3: combine the first 3 inputs into one focused attack
+- Q4: harsher than Q3, more humiliating
+- Q5: attack the pattern as a repeated life choice
+- Q6: make it feel like their weakness is now obvious and public
+- Q7: final blow, as if the paper has fully understood them
+
+Content rules:
+- Use the real person/topic they mentioned when useful.
+- If a celebrity/person is named, contrast their movement/status/career with the student's stagnation.
+- If reels/movies/fantasy/scrolling are mentioned, frame them as borrowed dopamine, passive consumption, or attention rot.
+- If followups mention attraction, beauty, obsession, distraction, laziness, or loss of control, fuse that with the first query.
+- The output must feel dynamic and inferential, not like copied input.
+
+Allowed style:
+- Sharp, mocking, psychologically pointed.
+- One clean sentence is better than a fancy sentence.
+- Use plain spoken English, not grand speeches.
+- If a celebrity is named, make it feel like a real comparison a blunt person would make.
+- Prefer the feeling of an older sibling or strict friend calling out an obvious pattern.
+- Keep the attack grounded in ordinary reality: wasted hours, weak discipline, bad habits, embarrassing priorities.
+
+Hard rules:
+- Do NOT say "you typed", "you entered", "you said", or "this popup is about".
+- Do NOT ask a question.
+- Do NOT sound motivational, therapeutic, or generic.
+- Do NOT lazily restate the raw input.
+- Do NOT use markdown or bullet points.
+- Do NOT sound poetic, philosophical, or overly cinematic.
+- Do NOT use emojis.
+- `sub` should be empty unless absolutely needed. Prefer putting the real sting in `headline`.
+- Do NOT use fantasy-villain language like "the paper knows your soul" or "the test has fully exposed you".
+- Do NOT sound like a movie trailer or dramatic roast comic.
+- Do NOT overuse metaphors. Direct observation is better.
+- Do make it feel like the line could come from a real person sitting next to them.
+- Prefer implication, comparison, status contrast, wasted-time framing, exposure, or parasitic attention framing.
+- headline: 8-22 words
+- sub: 0-18 words
+- aggressive is good; profanity and explicit slurs are not allowed.
+"""
+
+
 def _clamp_timeout(value: Any, default_value: int = 5200) -> int:
     try:
         num = int(value)
@@ -1044,6 +1112,57 @@ def q1_warning_copy():
 
         headline = " ".join(str(parsed.get("headline") or "").split())[:220]
         sub = " ".join(str(parsed.get("sub") or "").split())[:240]
+        if not headline:
+            raise ValueError("missing headline")
+
+        return jsonify({
+            "headline": headline,
+            "sub": sub,
+            "source": "ai",
+        })
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("q1 warning fallback reason=%s", exc)
+        return jsonify({
+            "headline": "",
+            "sub": "",
+            "source": "fallback",
+        })
+
+
+@bp.post("/question-warning-copy")
+def question_warning_copy():
+    body = request.get_json(force=True, silent=True) or {}
+    question_number = int(body.get("question_number") or 0)
+    initial_text = str(body.get("initial_text") or "").strip()[:240]
+    raw_followups = body.get("followup_answers") if isinstance(body.get("followup_answers"), list) else []
+    followup_answers = [str(item or "").strip()[:180] for item in raw_followups[:2] if str(item or "").strip()]
+
+    if not 1 <= question_number <= 7:
+        return jsonify({"error": "question_number must be 1..7"}), 400
+    if not initial_text:
+        return jsonify({"error": "initial_text is required"}), 400
+
+    payload = {
+        "question_number": question_number,
+        "initial_text": initial_text,
+        "followup_answers": followup_answers,
+    }
+    model = os.getenv("TRIGGER_AI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+
+    try:
+        response = chat_json_no_retry(
+            model=model,
+            system=QUESTION_WARNING_PROMPT,
+            user=json.dumps(payload, ensure_ascii=False),
+            temperature=0.55,
+            max_tokens=220,
+            timeout=6.0,
+        )
+        content = response.choices[0].message.content or "{}"
+        parsed = json.loads(content)
+
+        headline = " ".join(str(parsed.get("headline") or "").split())[:220]
+        sub = " ".join(str(parsed.get("sub") or "").split())[:240]
         if not headline or not sub:
             raise ValueError("missing headline/sub")
 
@@ -1053,7 +1172,7 @@ def q1_warning_copy():
             "source": "ai",
         })
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("q1 warning fallback reason=%s", exc)
+        logger.warning("question warning fallback q=%s reason=%s", question_number, exc)
         return jsonify({
             "headline": "",
             "sub": "",
