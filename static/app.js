@@ -3620,7 +3620,7 @@ const StressTriggers = (() => {
   }
 
  // ── Katrina Kaif override helpers ─────────────────────────────────────
-  const KATRINA_IMAGE_BASE = "/static/katrina";
+const KATRINA_IMAGE_BASE = "/katrina";
   const KATRINA_PER_QUESTION = {
     1: { image: "k1.jpg",  text: "How's she looking?" },
     2: { image: "k2.jpg",  text: "What do u think about her new look?" },
