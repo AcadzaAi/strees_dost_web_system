@@ -3624,7 +3624,7 @@ const StressTriggers = (() => {
 
   function dismissPsyqOverlay(overlay, onComplete) {
     overlay.classList.remove("psyq-overlay--visible");
-    const dismissMs = overlay?.classList?.contains("psyq-overlay--warning-slow") ? 1200 : 280;
+    const dismissMs = overlay?.classList?.contains("psyq-overlay--warning-slow") ? 2200 : 280;
     setTimeout(() => {
       overlay.remove();
       onComplete?.();
