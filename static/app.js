@@ -3485,6 +3485,27 @@ const StressTriggers = (() => {
     return String(fallbackTopic || "distractions");
   }
 
+  function extractLiteralPopupTopic(rawInitial, rawFollowup, fallbackTopic) {
+    const clean = (value) =>
+      String(value || "")
+        .replace(/\s+/g, " ")
+        .replace(/^[,.;:\-\s]+|[,.;:\-\s]+$/g, "")
+        .trim();
+
+    const candidates = [rawInitial, rawFollowup]
+      .map(clean)
+      .filter(Boolean);
+
+    for (const candidate of candidates) {
+      const words = candidate.split(/\s+/).filter(Boolean);
+      if (words.length >= 1 && words.length <= 8 && candidate.length <= 80) {
+        return candidate;
+      }
+    }
+
+    return clean(fallbackTopic) || "distractions";
+  }
+
   /**
    * Show the full personalized quiz overlay.
    * Calls onComplete() after the user dismisses the response popup.
@@ -3502,22 +3523,24 @@ const StressTriggers = (() => {
       Array.isArray(state.followupAnswers) ? state.followupAnswers.length : 0
     );
     const subjectLine = summarizeDistractionTopic(firstFollowupAnswer, topic);
-    const reelRoast = /reel|instagram|shorts|scroll|phone/i.test(`${subjectLine} ${sourceText}`);
+    const literalTopic = extractLiteralPopupTopic(initialSnippet, firstFollowupAnswer, subjectLine);
+    const topicLead = literalTopic ? `"${literalTopic}"` : subjectLine;
+    const reelRoast = /reel|instagram|shorts|scroll|phone/i.test(`${literalTopic} ${subjectLine} ${sourceText}`);
     const lines = {
       medium: reelRoast
-        ? `Sit comfortably, watch ${subjectLine}, pretend you're "resting" — you'll never clear this exam that way.`
-        : `Sit comfortably, dodge prep, feed ${subjectLine} — you'll never clear this exam on that schedule.`,
+        ? `You typed ${topicLead}. Good. That filth is already sitting beside you on question one.`
+        : `${topicLead} came into this test with you. It is already eating the focus you should have brought instead.`,
       hard: reelRoast
-        ? `You said ${subjectLine} owns you${initialSnippet ? ` ("${initialSnippet}…")` : ""}. Cool. Keep the comfort — keep the failure too.`
-        : `You admitted ${subjectLine} wrecks focus${initialSnippet ? ` ("${initialSnippet}…")` : ""}. Still soft. Still replaceable.`,
+        ? `You said ${topicLead}. Fine. Keep feeding that habit and watch this paper punish you for it.`
+        : `You walked in carrying ${topicLead}. Don't pretend it won't drag your score through the dirt.`,
       brutal: reelRoast
-        ? `Reels on, spine off, rank gone. You're not a serious aspirant — you're dead weight in a seat someone else deserves.`
-        : `${subjectLine} runs you. You're not preparing — you're cosplaying discipline until results expose you.`,
+        ? `${topicLead} is not a side issue. It is the rot in your discipline, and this paper will expose it fast.`
+        : `${topicLead} already owns part of your mind. Leave it there and your rank deserves the beating.`,
     };
     const subs = {
-      medium: "No use sugarcoating: you're bleeding marks while acting busy. Top students don't negotiate with your phone.",
-      hard: "You're of no use to your own goal until habits change. This test will treat you like the distraction you already described.",
-      brutal: "IIT kids grind. You lounge and scroll. Keep it up — your mock score will read like the joke you turned yourself into.",
+      medium: `You entered ${topicLead}. So when your focus collapses, spare the excuses. You already named the parasite yourself.`,
+      hard: `You named ${topicLead}. Now this test gets to find out whether that is your excuse or the exact weakness ruining you.`,
+      brutal: `You entered ${topicLead}, not me. If that stays louder than the question stem, the scorecard will humiliate you honestly.`,
     };
     return {
       headline: lines[severity] || lines.medium,
@@ -3559,10 +3582,11 @@ const StressTriggers = (() => {
 
   function dismissPsyqOverlay(overlay, onComplete) {
     overlay.classList.remove("psyq-overlay--visible");
+    const dismissMs = overlay?.classList?.contains("psyq-overlay--warning-slow") ? 1200 : 280;
     setTimeout(() => {
       overlay.remove();
       onComplete?.();
-    }, 280);
+    }, dismissMs);
   }
 
   function showPersonalizedQuiz(onComplete, opts = {}) {
@@ -3581,23 +3605,24 @@ const StressTriggers = (() => {
     const cardIcon = mode === "q1" ? "🚨" : mode === "q2" ? "💀" : "🧠";
 
     const overlay = document.createElement("div");
-    overlay.className = "psyq-overlay";
+    overlay.className = `psyq-overlay${isCompactCard ? " psyq-overlay--warning-slow" : ""}`;
     overlay.setAttribute("aria-modal", "true");
     overlay.setAttribute("role", "dialog");
 
     overlay.innerHTML = `
-      <div class="psyq-card${isCompactCard ? " psyq-card--warning" : ""}" id="psyqCard">
+      <div class="psyq-card${isCompactCard ? " psyq-card--warning psyq-card--warning-slow" : ""}" id="psyqCard">
         <div class="psyq-header">
           <span class="psyq-icon">${cardIcon}</span>
           <span class="psyq-label">${escapeHTML(heading)}</span>
+          ${isCompactCard
+            ? `<button class="psyq-close" id="psyqClose" type="button" aria-label="Close popup">×</button>`
+            : ``}
         </div>
         <p class="psyq-reflection" id="psyqReflection"></p>
         <div class="psyq-divider"></div>
         <p class="psyq-question" id="psyqQuestion" style="opacity:0;transition:opacity 400ms ease;"></p>
         ${isCompactCard
-          ? `<div class="psyq-actions psyq-actions--single psyq-actions--delayed" id="psyqActions">
-              <button class="psyq-btn psyq-btn-ack" id="psyqAck" type="button" disabled>${escapeHTML(compactCopy?.cta || "Continue")}</button>
-            </div>`
+          ? ``
           : `<div class="psyq-actions" id="psyqActions" style="opacity:0;pointer-events:none;transition:opacity 350ms ease;">
           <button class="psyq-btn psyq-btn-yes" id="psyqYes" type="button">Yes</button>
           <button class="psyq-btn psyq-btn-no"  id="psyqNo"  type="button">No</button>
@@ -3614,7 +3639,7 @@ const StressTriggers = (() => {
     const actionsEl  = overlay.querySelector("#psyqActions");
     const yesBtn     = overlay.querySelector("#psyqYes");
     const noBtn      = overlay.querySelector("#psyqNo");
-    const ackBtn = overlay.querySelector("#psyqAck");
+    const closeBtn = overlay.querySelector("#psyqClose");
 
     const introLine = isCompactCard
       ? compactCopy.headline
@@ -3629,17 +3654,7 @@ const StressTriggers = (() => {
       reflEl.textContent = introLine;
       questionEl.style.opacity = "1";
       questionEl.textContent = compactCopy.sub;
-      const revealMs = Number(compactCopy.ctaDelayMs) || 2000;
-      const revealTimer = setTimeout(() => {
-        if (!document.body.contains(overlay)) return;
-        if (actionsEl) actionsEl.classList.add("psyq-actions--ready");
-        if (ackBtn) {
-          ackBtn.disabled = false;
-          ackBtn.textContent = compactCopy.cta;
-        }
-      }, revealMs);
-      pendingTriggerTimeouts.push(revealTimer);
-      ackBtn?.addEventListener("click", () => dismissPsyqOverlay(overlay, onComplete));
+      closeBtn?.addEventListener("click", () => dismissPsyqOverlay(overlay, onComplete));
       return;
     }
 
@@ -7100,7 +7115,7 @@ const StressTriggers = (() => {
         showPersonalizedQuiz(() => {
           console.log("[onQuestionRendered] Q1 warning card dismissed by user");
         }, { mode: "q1" });
-      }, 8000);
+      }, 5000);
       pendingTriggerTimeouts.push(timeoutId);
       return true;
     };

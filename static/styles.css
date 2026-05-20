@@ -2786,19 +2786,46 @@ pre {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
   opacity: 0;
-  transition: opacity 280ms ease;
+  transition: opacity 280ms ease, background-color 280ms ease, -webkit-backdrop-filter 280ms ease, backdrop-filter 280ms ease;
   padding: 16px;
   pointer-events: none;
 }
 
 .psyq-overlay--visible {
   opacity: 1;
+  pointer-events: auto;
+}
+
+.psyq-overlay--warning-slow {
+  background: rgba(7, 11, 22, 0);
+  -webkit-backdrop-filter: blur(0px);
+  backdrop-filter: blur(0px);
+  transition: opacity 3000ms ease, background-color 3000ms ease, -webkit-backdrop-filter 3000ms ease, backdrop-filter 3000ms ease;
+}
+
+.psyq-overlay--warning-slow.psyq-overlay--visible {
+  background: rgba(7, 11, 22, 0.3);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
 }
 
 /* Card — matches the app's test-card / confirm-card language */
 .psyq-card--warning {
   width: min(400px, 100%);
   padding: 22px 22px 20px;
+}
+
+.psyq-card--warning-slow {
+  opacity: 0;
+  transform: translateY(24px) scale(0.97);
+  box-shadow: 0 32px 80px rgba(2, 6, 23, 0.08), 0 2px 8px rgba(15, 23, 42, 0.04);
+  transition: opacity 3000ms ease, transform 3000ms ease, box-shadow 3000ms ease;
+}
+
+.psyq-overlay--warning-slow.psyq-overlay--visible .psyq-card--warning-slow {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  box-shadow: 0 34px 90px rgba(2, 6, 23, 0.22), 0 6px 20px rgba(15, 23, 42, 0.1);
 }
 
 .psyq-card--warning .psyq-header {
@@ -2874,6 +2901,10 @@ pre {
   pointer-events: auto;
 }
 
+.psyq-card--warning-slow {
+  animation: none;
+}
+
 @keyframes psyqSlideUp {
   from { opacity: 0; transform: translateY(14px); }
   to   { opacity: 1; transform: translateY(0);    }
@@ -2909,6 +2940,30 @@ pre {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--accent);
+}
+
+.psyq-close {
+  margin-left: auto;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.05);
+  color: rgba(15, 23, 42, 0.72);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 180ms ease, color 180ms ease, border-color 180ms ease, transform 180ms ease;
+}
+
+.psyq-close:hover {
+  background: rgba(15, 23, 42, 0.1);
+  color: rgba(15, 23, 42, 0.92);
+  border-color: rgba(15, 23, 42, 0.18);
+  transform: scale(1.04);
 }
 
 /* The "you said…" reflection sentence */
