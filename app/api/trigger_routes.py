@@ -312,6 +312,61 @@ Output: {
 """
 
 
+Q1_WARNING_PROMPT = """
+You write the opening warning copy for question 1 of a stress-test UI.
+
+Input JSON:
+{
+  "initial_text": "<the student's very first query only>"
+}
+
+Return strict JSON only:
+{
+  "headline": "...",
+  "sub": "..."
+}
+
+Goal:
+- Turn the student's first query into a sharp, psychologically triggering warning.
+- Make it feel personal and cutting, not generic.
+- Use the exact person/topic they mentioned when useful, but do NOT just quote or restate the input.
+- Infer the implication behind the input and attack that.
+- If a real person/celebrity/actor is mentioned, use their name naturally and make the contrast sting:
+  they are building fame/money/career/status while the student is passively consuming them.
+- If both a celebrity and a distraction format are present (reels, edits, movies, fantasies),
+  combine them into one pointed warning instead of choosing only one.
+
+Examples of the style:
+- If the input is about a celebrity obsession, imply that the celebrity is building a life while the student is wasting theirs.
+- If the input is about reels, movies, scrolling, or fantasies, frame it as borrowed dopamine rotting discipline.
+- If the input is vague, still make it sting by turning it into a weakness under test pressure.
+
+Specific examples:
+- Input: "Tamanna Bhatia reels"
+  Bad: "Reels are distracting you from study."
+  Good direction: "Tamanna Bhatia is growing a career. You're donating hours to watching it."
+- Input: "movies and Katrina Kaif"
+  Good direction: "Katrina Kaif keeps moving forward. You keep sitting still and calling it entertainment."
+- Input: "anime edits"
+  Good direction: "Other people make the edits, build the channels, earn the money. You just keep feeding them your focus."
+- Input: "cricket highlights"
+  Good direction: "They train. They perform. You watch highlights and let your own life stay on pause."
+
+Hard rules:
+- Do NOT say "you typed", "you entered", "you said", or "this popup is about".
+- Do NOT ask a question.
+- Do NOT sound motivational or therapeutic.
+- Do NOT lazily repeat the raw input back as a sentence.
+- Do NOT open with generic phrases like "distractions are harming your focus".
+- Prefer implication, comparison, status contrast, wasted-time framing, or parasitic attention framing.
+- If a celebrity is named, prefer using the actual name over generic terms like "distraction" or "content".
+- Keep `headline` to 10-24 words.
+- Keep `sub` to 12-28 words.
+- No markdown, no emojis, no bullet points.
+- Keep it aggressive, but avoid profanity and explicit slurs.
+"""
+
+
 def _clamp_timeout(value: Any, default_value: int = 5200) -> int:
     try:
         num = int(value)
@@ -963,6 +1018,47 @@ def devil_brief():
                 "source": "fallback",
             }
         )
+
+
+@bp.post("/q1-warning-copy")
+def q1_warning_copy():
+    body = request.get_json(force=True, silent=True) or {}
+    initial_text = str(body.get("initial_text") or "").strip()[:240]
+    if not initial_text:
+        return jsonify({"error": "initial_text is required"}), 400
+
+    payload = {"initial_text": initial_text}
+    model = os.getenv("TRIGGER_AI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+
+    try:
+        response = chat_json_no_retry(
+            model=model,
+            system=Q1_WARNING_PROMPT,
+            user=json.dumps(payload, ensure_ascii=False),
+            temperature=0.75,
+            max_tokens=180,
+            timeout=5.0,
+        )
+        content = response.choices[0].message.content or "{}"
+        parsed = json.loads(content)
+
+        headline = " ".join(str(parsed.get("headline") or "").split())[:220]
+        sub = " ".join(str(parsed.get("sub") or "").split())[:240]
+        if not headline or not sub:
+            raise ValueError("missing headline/sub")
+
+        return jsonify({
+            "headline": headline,
+            "sub": sub,
+            "source": "ai",
+        })
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("q1 warning fallback reason=%s", exc)
+        return jsonify({
+            "headline": "",
+            "sub": "",
+            "source": "fallback",
+        })
 
 
 # ── AI Student Companion ──────────────────────────────────────────────────────

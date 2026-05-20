@@ -125,6 +125,8 @@ let loadingTicker = null;
 let loadingFrameIndex = 0;
 let lastAnswerEcho = "";
 let sessionInitialQuery = "";
+let q1WarningCopyCache = null;
+let q1WarningCopyPromise = null;
 let solutionModalOpen = false;
 let pendingAdvanceAfterSubmit = false;
 let questionTriggerPlan = null; // Stores trigger plan from backend
@@ -741,6 +743,8 @@ function resetFlow() {
   currentDomain = null;
   currentSlot = null;
   sessionInitialQuery = "";
+  q1WarningCopyCache = null;
+  q1WarningCopyPromise = null;
   clearGhost();
   btnAnswer.disabled = true;
   btnAnswer.hidden = true;
@@ -3529,26 +3533,63 @@ const StressTriggers = (() => {
     const reelRoast = /reel|instagram|shorts|scroll|phone/i.test(`${rawInitial} ${literalTopic} ${subjectLine}`);
     const lines = {
       medium: reelRoast
-        ? `You typed ${topicLead}. Good. That filth is already sitting beside you on question one.`
-        : `${topicLead} came into this test with you. It is already eating the focus you should have brought instead.`,
+        ? `${topicLead} already has more grip on your attention than this paper does.`
+        : `${topicLead} is already crowding the space where your focus should have been.`,
       hard: reelRoast
-        ? `You said ${topicLead}. Fine. Keep feeding that habit and watch this paper punish you for it.`
-        : `You walked in carrying ${topicLead}. Don't pretend it won't drag your score through the dirt.`,
+        ? `${topicLead} keeps getting fed, and your discipline keeps showing up hungry.`
+        : `${topicLead} walked into the test before your discipline did, and it shows.`,
       brutal: reelRoast
-        ? `${topicLead} is not a side issue. It is the rot in your discipline, and this paper will expose it fast.`
-        : `${topicLead} already owns part of your mind. Leave it there and your rank deserves the beating.`,
+        ? `${topicLead} is not harmless entertainment. It is the leak in your discipline, and this paper will expose it fast.`
+        : `${topicLead} already owns part of your mind. Leave it there and your rank will get punished honestly.`,
     };
     const subs = {
-      medium: `You entered ${topicLead}. So when your focus collapses, spare the excuses. You already named the parasite yourself.`,
-      hard: `You named ${topicLead}. Now this test gets to find out whether that is your excuse or the exact weakness ruining you.`,
-      brutal: `You entered ${topicLead}, not me. If that stays louder than the question stem, the scorecard will humiliate you honestly.`,
+      medium: `The stem is on screen, but ${topicLead} is still getting the better seat in your head.`,
+      hard: `A stronger student would have left ${topicLead} outside the hall. You brought it in and called it harmless.`,
+      brutal: `If ${topicLead} still feels bigger than the question stem, the score will read exactly like your priorities.`,
     };
     return {
       headline: lines[severity] || lines.medium,
       sub: subs[severity] || subs.medium,
-      cta: "Whatever — continue",
-      ctaDelayMs: 2000,
     };
+  }
+
+  function normalizeQ1WarningResponse(raw, fallbackCopy) {
+    const fallback = fallbackCopy || buildQ1WarningCopy();
+    const headline = String(raw?.headline || "").replace(/\s+/g, " ").trim();
+    const sub = String(raw?.sub || "").replace(/\s+/g, " ").trim();
+    if (!headline || !sub) return fallback;
+    return { headline, sub };
+  }
+
+  async function fetchQ1WarningCopy() {
+    const initialText = getSessionInitialQuery();
+    const fallbackCopy = buildQ1WarningCopy();
+    if (!initialText) return fallbackCopy;
+
+    if (q1WarningCopyCache?.initialText === initialText && q1WarningCopyCache?.copy) {
+      return q1WarningCopyCache.copy;
+    }
+
+    if (q1WarningCopyPromise) {
+      return q1WarningCopyPromise;
+    }
+
+    q1WarningCopyPromise = postJSON(
+      "/api/triggers/q1-warning-copy",
+      { initial_text: initialText },
+      { timeoutMs: 5000 }
+    )
+      .then((data) => {
+        const copy = normalizeQ1WarningResponse(data, fallbackCopy);
+        q1WarningCopyCache = { initialText, copy };
+        return copy;
+      })
+      .catch(() => fallbackCopy)
+      .finally(() => {
+        q1WarningCopyPromise = null;
+      });
+
+    return q1WarningCopyPromise;
   }
 
   function buildQ2PopupCopy() {
@@ -3655,6 +3696,13 @@ const StressTriggers = (() => {
       reflEl.textContent = introLine;
       questionEl.style.opacity = "1";
       questionEl.textContent = compactCopy.sub;
+      if (mode === "q1") {
+        void fetchQ1WarningCopy().then((aiCopy) => {
+          if (!document.body.contains(overlay) || !aiCopy) return;
+          reflEl.textContent = aiCopy.headline || compactCopy.headline;
+          questionEl.textContent = aiCopy.sub || compactCopy.sub;
+        });
+      }
       closeBtn?.addEventListener("click", () => dismissPsyqOverlay(overlay, onComplete));
       return;
     }
@@ -8979,6 +9027,8 @@ async function startSessionFlow() {
 
     lastAnswerEcho = text;
     sessionInitialQuery = text;
+    q1WarningCopyCache = null;
+    q1WarningCopyPromise = null;
 
     setIntroHint("");
     showStage("loading", "Absorbing your story…");
