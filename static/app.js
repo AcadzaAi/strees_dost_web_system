@@ -127,6 +127,15 @@ let lastAnswerEcho = "";
 let solutionModalOpen = false;
 let pendingAdvanceAfterSubmit = false;
 let questionTriggerPlan = null; // Stores trigger plan from backend
+const LOCAL_NEW_USER_TRIGGER_NAMES = [
+  "TORCHLIGHT_SPOTLIGHT",
+  "HARD_FOG",
+  "SCREEN_FLIP",
+  "ACCURACY_TEST",
+  "READING_TEST",
+  "HARD_PEER_DOUBT",
+  "BILLIARD_BALL",
+];
 const SOLUTION_GRACE_MS = 1400;
 
 // Cancel all pending trigger timeouts when switching questions
@@ -761,7 +770,7 @@ function resetFlow() {
   testQuestionIndex = 0;
   selectedOptions = {};
   answeredMap = {};
-  if (questionStem) questionStem.textContent = "Questions will appear here with options.";
+  clearQuestionStem("Questions will appear here with options.");
   if (questionOptions) questionOptions.innerHTML = "";
   if (questionCounter) questionCounter.textContent = "Q. 1 of 1";
   if (questionSubject) questionSubject.textContent = "ID: —";
@@ -1102,6 +1111,7 @@ const StressTriggers = (() => {
     optionFeedbackInterceptionEnabled: false,
     optionFeedbackInterceptionCount: 0,
     optionFeedbackMaxInterceptions: 2,
+    q1PopupShownThisSession: false,
   };
 
   const FEEDBACK_PROMPT_LIBRARY = {
@@ -2824,7 +2834,7 @@ const StressTriggers = (() => {
     };
   }
 
-  function triggerTorchlightSpotlight() {
+  function triggerTorchlightSpotlight(ctx) {
     if (!questionBody || !state.currentQuestionId) return null;
     const qid = String(state.currentQuestionId || "");
     let rect = questionBody.getBoundingClientRect();
@@ -2834,19 +2844,30 @@ const StressTriggers = (() => {
     host.className = "stress-torchlight-mask";
     document.body.appendChild(host);
 
-    const taunts = [
+    const defaultTaunts = [
       "Read in fragments. Decide under pressure.",
-      "Only a sliver of truth at a time.",
-      "Find the answer before the light runs away.",
-      "You do not get full visibility this round.",
+      "Only a sliver at a time — stop whining.",
+      "Chase the beam before it moves again.",
+      "Full view? You didn't earn that.",
     ];
-    const taunt = taunts[stableRange("torchlightSpotlight_taunt", 0, taunts.length - 1)];
+    const taunts = Array.isArray(ctx?.taunts) && ctx.taunts.length ? ctx.taunts : defaultTaunts;
+    const taunt = String(ctx?.spotlightTaunt || "").trim()
+      || taunts[stableRange("torchlightSpotlight_taunt", 0, taunts.length - 1)];
     const topBanner = mountDevilTopBanner({
-      title: "Torchlight Mode",
-      lead: "A larger focus area is visible now.",
-      challenge: "Track the light and lock your answer.",
+      title: String(ctx?.spotlightTitle || "Narrow beam"),
+      lead: String(ctx?.spotlightLead || "Most of the question stays dark."),
+      challenge: String(ctx?.spotlightChallenge || "Follow the light. Answer anyway."),
       taunt,
     });
+
+    let captionEl = null;
+    const captionText = String(ctx?.caption || ctx?.hintLine || "").trim();
+    if (captionText) {
+      captionEl = document.createElement("div");
+      captionEl.className = "stress-torchlight-caption";
+      captionEl.textContent = captionText;
+      document.body.appendChild(captionEl);
+    }
 
     let rafId = null;
     let monitorTimer = null;
@@ -3094,6 +3115,7 @@ const StressTriggers = (() => {
         if (resizeObserver) resizeObserver.disconnect();
         host.remove();
         topBanner.remove();
+        if (captionEl) captionEl.remove();
       },
     };
   }
@@ -3369,64 +3391,194 @@ const StressTriggers = (() => {
     const followups  = (state.followupAnswers || []).map(f => f.answer || "").join(" ");
     const combined   = (initialRaw + " " + followups).toLowerCase();
 
-    // Keyword → { reflection, question }
+    // Keyword → personalized topic + prompt copy
     const patterns = [
       {
         words: ["stress", "stressed", "pressure", "overwhelm"],
-        reflection: "You mentioned that stress sometimes affects your concentration.",
-        question:   "Do you think that still happens even when you try to stay alert?",
+        topic: "stress and pressure",
+        reflection: "You mentioned pressure can disrupt your focus in key moments.",
+        question:   "Do you want to check how that pressure is affecting your current accuracy?",
       },
       {
-        words: ["distract", "distraction", "phone", "scroll", "reel", "notification"],
-        reflection: "You said distractions can break your focus during important tasks.",
-        question:   "Do you believe your brain fully adapts to distractions — or just ignores them?",
+        words: ["instagram", "reel", "reels", "distract", "distraction", "phone", "scroll", "notification"],
+        topic: "Instagram reels and phone distractions",
+        reflection: "I know you get distracted by Instagram reels.",
+        question:   "Top IITs like IIT Bombay and IIT Kharagpur are not for people who keep feeding distractions 📉. They are for deep focus, discipline, and consistency every day 🔥. Still want to test your real accuracy now?",
       },
       {
         words: ["focus", "concentrate", "concentration", "attention"],
-        reflection: "You mentioned difficulty maintaining focus when it matters most.",
-        question:   "Would you say that affects your accuracy more than you realise?",
+        topic: "focus consistency",
+        reflection: "You mentioned maintaining focus is difficult when the stakes rise.",
+        question:   "Should we test how this affects your question accuracy right now?",
       },
       {
         words: ["overthink", "overthinking", "mind", "thought", "mental"],
-        reflection: "You mentioned that overthinking sometimes slows you down.",
-        question:   "Do you think your mind notices every small detail — even under pressure?",
+        topic: "overthinking",
+        reflection: "You mentioned overthinking slows your decision speed under pressure.",
+        question:   "Do you want to test whether this is reducing your accuracy today?",
       },
       {
         words: ["tired", "fatigue", "sleep", "exhausted", "drain"],
-        reflection: "You said mental fatigue can affect how clearly you process things.",
-        question:   "Do you believe you notice every small visual change around you?",
+        topic: "mental fatigue",
+        reflection: "You said mental fatigue can reduce clarity while solving questions.",
+        question:   "Do you want to check how this is affecting your current performance?",
       },
       {
         words: ["miss", "detail", "mistake", "error", "overlook"],
-        reflection: "You mentioned that you occasionally miss small details while multitasking.",
-        question:   "Do you think your brain adapts to distractions… or just ignores them?",
+        topic: "missing details",
+        reflection: "You mentioned you sometimes miss small details while solving.",
+        question:   "Should we test if this is currently affecting your score accuracy?",
       },
       {
         words: ["exam", "test", "paper", "deadline", "marks", "score"],
-        reflection: "You mentioned that exam pressure sometimes clouds your thinking.",
-        question:   "Do you think that still affects your accuracy more than you realise?",
+        topic: "exam pressure",
+        reflection: "You mentioned exam pressure sometimes clouds your judgement.",
+        question:   "Do you want to test how much this pressure impacts your accuracy now?",
       },
     ];
 
     for (const p of patterns) {
       if (p.words.some(w => combined.includes(w))) {
-        return { reflection: p.reflection, question: p.question };
+        return { topic: p.topic, reflection: p.reflection, question: p.question, sourceText: combined };
       }
     }
 
     // Generic fallback
     return {
-      reflection: "You mentioned that stress sometimes affects your concentration.",
-      question:   "Do you think that still happens even when you try to stay alert?",
+      topic: "focus and distractions",
+      reflection: "You mentioned focus challenges can affect your consistency.",
+      question:   "Do you want to test how this is affecting your accuracy right now?",
+      sourceText: combined,
     };
+  }
+
+  function inferDistractionSeverity(text, followupCount) {
+    const src = String(text || "").toLowerCase();
+    const heavySignals = [
+      "all day", "whole day", "every time", "cannot stop", "can't stop", "addicted",
+      "reels", "instagram", "shorts", "binge", "hours", "late night", "procrastinate",
+    ];
+    const mediumSignals = [
+      "distract", "distraction", "phone", "scroll", "notification", "waste time",
+      "delay", "postpone", "break focus", "lose focus",
+    ];
+
+    let score = 0;
+    heavySignals.forEach((k) => { if (src.includes(k)) score += 2; });
+    mediumSignals.forEach((k) => { if (src.includes(k)) score += 1; });
+    score += Math.min(3, Number(followupCount || 0));
+
+    if (score >= 10) return "brutal";
+    if (score >= 6) return "hard";
+    return "medium";
+  }
+
+  function summarizeDistractionTopic(rawAnswer, fallbackTopic) {
+    const src = String(rawAnswer || "").toLowerCase();
+    if (!src) return String(fallbackTopic || "distractions");
+    if (src.includes("instagram") || src.includes("reel")) return "Instagram reels";
+    if (src.includes("youtube") || src.includes("shorts")) return "YouTube shorts";
+    if (src.includes("whatsapp") || src.includes("chat")) return "chat notifications";
+    if (src.includes("game")) return "mobile gaming";
+    if (src.includes("sleep") || src.includes("late night")) return "late-night screen time";
+    if (src.includes("phone") || src.includes("scroll")) return "phone scrolling";
+    return String(fallbackTopic || "distractions");
   }
 
   /**
    * Show the full personalized quiz overlay.
    * Calls onComplete() after the user dismisses the response popup.
    */
-  function showPersonalizedQuiz(onComplete) {
-    const { reflection, question } = buildPersonalizedQuizPrompt();
+  function buildQ1WarningCopy() {
+    const { topic, sourceText } = buildPersonalizedQuizPrompt();
+    const initialSnippet = String(lastAnswerEcho || $("initialText")?.value || "")
+      .trim()
+      .split(/\s+/)
+      .slice(0, 12)
+      .join(" ");
+    const firstFollowupAnswer = String(state.followupAnswers?.[0]?.answer || "").trim();
+    const severity = inferDistractionSeverity(
+      `${sourceText || ""} ${firstFollowupAnswer}`,
+      Array.isArray(state.followupAnswers) ? state.followupAnswers.length : 0
+    );
+    const subjectLine = summarizeDistractionTopic(firstFollowupAnswer, topic);
+    const reelRoast = /reel|instagram|shorts|scroll|phone/i.test(`${subjectLine} ${sourceText}`);
+    const lines = {
+      medium: reelRoast
+        ? `Sit comfortably, watch ${subjectLine}, pretend you're "resting" — you'll never clear this exam that way.`
+        : `Sit comfortably, dodge prep, feed ${subjectLine} — you'll never clear this exam on that schedule.`,
+      hard: reelRoast
+        ? `You said ${subjectLine} owns you${initialSnippet ? ` ("${initialSnippet}…")` : ""}. Cool. Keep the comfort — keep the failure too.`
+        : `You admitted ${subjectLine} wrecks focus${initialSnippet ? ` ("${initialSnippet}…")` : ""}. Still soft. Still replaceable.`,
+      brutal: reelRoast
+        ? `Reels on, spine off, rank gone. You're not a serious aspirant — you're dead weight in a seat someone else deserves.`
+        : `${subjectLine} runs you. You're not preparing — you're cosplaying discipline until results expose you.`,
+    };
+    const subs = {
+      medium: "No use sugarcoating: you're bleeding marks while acting busy. Top students don't negotiate with your phone.",
+      hard: "You're of no use to your own goal until habits change. This test will treat you like the distraction you already described.",
+      brutal: "IIT kids grind. You lounge and scroll. Keep it up — your mock score will read like the joke you turned yourself into.",
+    };
+    return {
+      headline: lines[severity] || lines.medium,
+      sub: subs[severity] || subs.medium,
+      cta: "Whatever — continue",
+      ctaDelayMs: 2000,
+    };
+  }
+
+  function buildQ2PopupCopy() {
+    const { topic, sourceText } = buildPersonalizedQuizPrompt();
+    const firstFollowupAnswer = String(state.followupAnswers?.[0]?.answer || "").trim();
+    const subjectLine = summarizeDistractionTopic(firstFollowupAnswer, topic);
+    const severity = inferDistractionSeverity(
+      sourceText || "",
+      Array.isArray(state.followupAnswers) ? state.followupAnswers.length : 0
+    );
+    const lines = {
+      medium: `Keep this lifestyle — IIT Bombay and IIT Kharagpur aren't reserving seats for ${subjectLine} addicts.`,
+      hard: `You won't waltz into IIT KGP or IIT Bombay with this focus. Those campuses chew up disciplined kids — you're still owned by ${subjectLine}.`,
+      brutal: `Dream IIT Kharagpur / IIT Bombay all you want. With ${subjectLine} steering your day, you're dead weight in that race — not competition.`,
+    };
+    const subs = {
+      medium: `You're of no use to that dream until habits change. Answer honestly — then a crawling torch owns the question.`,
+      hard: `Rank doesn't care about your campus fantasy while ${subjectLine} runs your day. Say yes or no — then the narrow beam hits.`,
+      brutal: `Not "almost IIT." Nowhere near that grind. Pick below — partial sight next, same as your half-attention habits.`,
+    };
+    const { question: personalizedQuestion } = buildPersonalizedQuizPrompt();
+    const focusQuestion = /focus|accuracy|test/i.test(String(personalizedQuestion || ""))
+      ? personalizedQuestion
+      : "Do you want to test your focus and accuracy right now?";
+    return {
+      headline: lines[severity] || lines.medium,
+      sub: subs[severity] || subs.medium,
+      focusQuestion,
+      subjectLine,
+    };
+  }
+
+  function dismissPsyqOverlay(overlay, onComplete) {
+    overlay.classList.remove("psyq-overlay--visible");
+    setTimeout(() => {
+      overlay.remove();
+      onComplete?.();
+    }, 280);
+  }
+
+  function showPersonalizedQuiz(onComplete, opts = {}) {
+    const { topic, reflection, question, sourceText } = buildPersonalizedQuizPrompt();
+    const mode = opts.mode === "q1" ? "q1" : opts.mode === "q2" ? "q2" : "q3";
+    const isCompactCard = mode === "q1";
+    const q2Copy = mode === "q2" ? buildQ2PopupCopy() : null;
+    const heading = mode === "q1" ? "Reality check" : mode === "q2" ? "Campus fantasy" : "Focus check";
+    const firstFollowupAnswer = String(state.followupAnswers?.[0]?.answer || "").trim();
+    const severity = inferDistractionSeverity(
+      `${sourceText || ""} ${firstFollowupAnswer}`,
+      Array.isArray(state.followupAnswers) ? state.followupAnswers.length : 0
+    );
+    const subjectLine = summarizeDistractionTopic(firstFollowupAnswer, topic);
+    const compactCopy = mode === "q1" ? buildQ1WarningCopy() : null;
+    const cardIcon = mode === "q1" ? "🚨" : mode === "q2" ? "💀" : "🧠";
 
     const overlay = document.createElement("div");
     overlay.className = "psyq-overlay";
@@ -3434,18 +3586,22 @@ const StressTriggers = (() => {
     overlay.setAttribute("role", "dialog");
 
     overlay.innerHTML = `
-      <div class="psyq-card" id="psyqCard">
+      <div class="psyq-card${isCompactCard ? " psyq-card--warning" : ""}" id="psyqCard">
         <div class="psyq-header">
-          <span class="psyq-icon">🧠</span>
-          <span class="psyq-label">Focus Pattern Detected</span>
+          <span class="psyq-icon">${cardIcon}</span>
+          <span class="psyq-label">${escapeHTML(heading)}</span>
         </div>
         <p class="psyq-reflection" id="psyqReflection"></p>
         <div class="psyq-divider"></div>
         <p class="psyq-question" id="psyqQuestion" style="opacity:0;transition:opacity 400ms ease;"></p>
-        <div class="psyq-actions" id="psyqActions" style="opacity:0;pointer-events:none;transition:opacity 350ms ease;">
-          <button class="psyq-btn psyq-btn-yes" id="psyqYes" type="button">Yes, it does</button>
-          <button class="psyq-btn psyq-btn-no"  id="psyqNo"  type="button">Not really</button>
-        </div>
+        ${isCompactCard
+          ? `<div class="psyq-actions psyq-actions--single psyq-actions--delayed" id="psyqActions">
+              <button class="psyq-btn psyq-btn-ack" id="psyqAck" type="button" disabled>${escapeHTML(compactCopy?.cta || "Continue")}</button>
+            </div>`
+          : `<div class="psyq-actions" id="psyqActions" style="opacity:0;pointer-events:none;transition:opacity 350ms ease;">
+          <button class="psyq-btn psyq-btn-yes" id="psyqYes" type="button">Yes</button>
+          <button class="psyq-btn psyq-btn-no"  id="psyqNo"  type="button">No</button>
+        </div>`}
       </div>
     `;
 
@@ -3458,34 +3614,47 @@ const StressTriggers = (() => {
     const actionsEl  = overlay.querySelector("#psyqActions");
     const yesBtn     = overlay.querySelector("#psyqYes");
     const noBtn      = overlay.querySelector("#psyqNo");
+    const ackBtn = overlay.querySelector("#psyqAck");
 
-    // Typewriter for reflection text
-    let charIdx = 0;
-    const typeInterval = setInterval(() => {
-      reflEl.textContent = reflection.slice(0, ++charIdx);
-      if (charIdx >= reflection.length) {
-        clearInterval(typeInterval);
-        setTimeout(() => {
-          questionEl.style.opacity = "1";
-          questionEl.textContent   = question;
-          setTimeout(() => {
-            actionsEl.style.opacity      = "1";
-            actionsEl.style.pointerEvents = "auto";
-          }, 280);
-        }, 500);
+    const introLine = isCompactCard
+      ? compactCopy.headline
+      : `${reflection} ${subjectLine} killing focus — prove it or tap through.`;
+
+    if (isCompactCard) {
+      if (mode === "q1") {
+        const existing = document.querySelector(".psyq-overlay[data-warning-only='1']");
+        if (existing) existing.remove();
+        overlay.setAttribute("data-warning-only", "1");
       }
-    }, 26);
+      reflEl.textContent = introLine;
+      questionEl.style.opacity = "1";
+      questionEl.textContent = compactCopy.sub;
+      const revealMs = Number(compactCopy.ctaDelayMs) || 2000;
+      const revealTimer = setTimeout(() => {
+        if (!document.body.contains(overlay)) return;
+        if (actionsEl) actionsEl.classList.add("psyq-actions--ready");
+        if (ackBtn) {
+          ackBtn.disabled = false;
+          ackBtn.textContent = compactCopy.cta;
+        }
+      }, revealMs);
+      pendingTriggerTimeouts.push(revealTimer);
+      ackBtn?.addEventListener("click", () => dismissPsyqOverlay(overlay, onComplete));
+      return;
+    }
 
     function showResponse(isYes) {
-      yesBtn.disabled = true;
-      noBtn.disabled  = true;
+      const yes = overlay.querySelector("#psyqYes");
+      const no = overlay.querySelector("#psyqNo");
+      if (yes) yes.disabled = true;
+      if (no) no.disabled = true;
 
-      const icon  = isYes ? "🎯" : "🔍";
-      const title = isYes ? "Doesn't matter." : "Doesn't matter either.";
+      const icon  = isYes ? "😒" : "🙄";
+      const title = isYes ? "Sure you are." : "Denial won't save your rank.";
       const body  = isYes
-        ? "Even if you said No, we'd still test your accuracy. Let's see how you actually perform."
-        : "Your answer doesn't change the test. What matters is how your focus holds under pressure.";
-      const cta   = isYes ? "Prove it →" : "Let's see →";
+        ? "Talk is cheap. The torch test starts next — let's see if you mean it."
+        : "No doesn't pause this. The beam still hits — enjoy half-blind reading.";
+      const cta   = isYes ? "Whatever — continue" : "Fine — continue";
 
       card.innerHTML = `
         <div class="psyq-response">
@@ -3497,14 +3666,140 @@ const StressTriggers = (() => {
       `;
       card.classList.add("psyq-card--response");
 
-      overlay.querySelector("#psyqCta").addEventListener("click", () => {
-        overlay.classList.remove("psyq-overlay--visible");
-        setTimeout(() => { overlay.remove(); onComplete?.(); }, 300);
-      });
+      overlay.querySelector("#psyqCta").addEventListener("click", () => dismissPsyqOverlay(overlay, onComplete));
     }
 
-    yesBtn.addEventListener("click", () => showResponse(true));
-    noBtn.addEventListener("click",  () => showResponse(false));
+    // Q2: roast in card → then highlighted question + Yes/No (same card, no Continue)
+    if (q2Copy) {
+      const divider = overlay.querySelector(".psyq-divider");
+      reflEl.textContent = q2Copy.headline;
+      reflEl.style.minHeight = "0";
+
+      const subEl = document.createElement("p");
+      subEl.className = "psyq-subline";
+      subEl.textContent = q2Copy.sub;
+      if (divider) divider.insertAdjacentElement("afterend", subEl);
+
+      questionEl.style.display = "none";
+      questionEl.style.opacity = "0";
+      if (actionsEl) {
+        actionsEl.style.opacity = "0";
+        actionsEl.style.pointerEvents = "none";
+      }
+
+      const revealFocusId = setTimeout(() => {
+        if (!document.body.contains(overlay)) return;
+        questionEl.style.display = "";
+        questionEl.style.opacity = "1";
+        questionEl.className = "psyq-question psyq-question--highlight";
+        questionEl.textContent = q2Copy.focusQuestion;
+        if (actionsEl) {
+          actionsEl.style.opacity = "1";
+          actionsEl.style.pointerEvents = "auto";
+        }
+        overlay.querySelector("#psyqYes")?.addEventListener("click", () => showResponse(true));
+        overlay.querySelector("#psyqNo")?.addEventListener("click", () => showResponse(false));
+      }, 2600);
+      pendingTriggerTimeouts.push(revealFocusId);
+      return;
+    }
+
+    // Typewriter for interactive mode (fallback)
+    let charIdx = 0;
+    const typeInterval = setInterval(() => {
+      reflEl.textContent = introLine.slice(0, ++charIdx);
+      if (charIdx >= introLine.length) {
+        clearInterval(typeInterval);
+        setTimeout(() => {
+          questionEl.style.opacity = "1";
+          questionEl.textContent   = question;
+          setTimeout(() => {
+            if (actionsEl) {
+              actionsEl.style.opacity = "1";
+              actionsEl.style.pointerEvents = "auto";
+            }
+          }, 280);
+        }, 500);
+      }
+    }, 26);
+
+    yesBtn?.addEventListener("click", () => showResponse(true));
+    noBtn?.addEventListener("click",  () => showResponse(false));
+  }
+
+  /** Q2: short irritating popup, then hard-fog (difficulty check → hard question). */
+  function runQ2HardFogSequence(questionNumber) {
+    if (questionStem) questionStem.style.visibility = "hidden";
+    if (questionOptions) questionOptions.style.visibility = "hidden";
+    if (state.feedbackPromptOpen) {
+      state.feedbackPromptOpen = false;
+      releaseInterruptionLock("feedback");
+    }
+    const difficultyCheckResult = activateTrigger("difficultyCheckPrompt", {
+      userState: currentUserState(),
+      force: true,
+      reason: `question_trigger:Q${questionNumber}:pre_sequence`,
+      questionNumber,
+    });
+    if (!difficultyCheckResult) {
+      const fallbackId = setTimeout(() => {
+        const q = testQuestions[testQuestionIndex];
+        if (!q || testQuestionIndex + 1 !== questionNumber) return;
+        activateHardQuestionChallenge({ ...q, difficulty: "hard" });
+      }, 2500);
+      pendingTriggerTimeouts.push(fallbackId);
+      return;
+    }
+    const waitForDifficultyCheck = setInterval(() => {
+      if (!isTriggerActive("difficultyCheckPrompt")) {
+        clearInterval(waitForDifficultyCheck);
+        const afterId = setTimeout(() => {
+          const q = testQuestions[testQuestionIndex];
+          if (!q || testQuestionIndex + 1 !== questionNumber) return;
+          activateHardQuestionChallenge({ ...q, difficulty: "hard" });
+        }, 2500);
+        pendingTriggerTimeouts.push(afterId);
+      }
+    }, 100);
+  }
+
+  function runQ2PopupFlow(questionNumber) {
+    let flowStarted = false;
+    const startFlow = () => {
+      if (flowStarted) return;
+      if (testQuestionIndex + 1 !== questionNumber) return;
+      flowStarted = true;
+      window.removeEventListener("scroll", onScroll);
+      showPersonalizedQuiz(() => {
+        if (testQuestionIndex + 1 !== questionNumber) return;
+        const q2 = buildQ2PopupCopy();
+        const subj = q2.subjectLine || "distractions";
+        activateTrigger("torchlightSpotlight", {
+          userState: currentUserState(),
+          force: true,
+          reason: `question_trigger:Q${questionNumber}:torchlight_after_popup`,
+          intensity: "medium",
+          questionNumber,
+          caption: `Can't see the full question? Good. Chase the beam.`,
+          spotlightTitle: "Narrow beam",
+          spotlightLead: `${subj} won't solve itself in the dark.`,
+          spotlightChallenge: "Track the light. Pick an answer anyway.",
+          spotlightTaunt: "One patch lit. Rest hidden. Stop sulking.",
+          taunts: [
+            "Light moves. Your focus should too.",
+            "Half-blind read — that's the point.",
+            "Still scrolling in your head? Pathetic.",
+            "Beam's on the stem. Eyes up.",
+          ],
+        });
+      }, { mode: "q2" });
+    };
+    const onScroll = () => startFlow();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    const timeoutId = setTimeout(startFlow, 8000);
+    const cleanupId = setTimeout(() => window.removeEventListener("scroll", onScroll), 12000);
+    pendingTriggerTimeouts.push(timeoutId);
+    pendingTriggerTimeouts.push(cleanupId);
   }
 
   // ── End Personalized Quiz ─────────────────────────────────────────────────
@@ -6771,6 +7066,9 @@ const StressTriggers = (() => {
   }
 
   function onQuestionRendered(question) {
+    const clearQ1WarningOverlay = () => {
+      document.querySelectorAll(".psyq-overlay[data-warning-only='1']").forEach((el) => el.remove());
+    };
     if (state.optionFeedbackActive && state.optionFeedbackQuestionId &&
         String(state.optionFeedbackQuestionId) !== String(question?.question_id || "")) {
       closeOptionFeedbackPopup();
@@ -6791,193 +7089,65 @@ const StressTriggers = (() => {
     // Check if this is a hard question
     const isHard = isHardDifficulty(question?.difficulty);
     const questionNumber = testQuestionIndex + 1;
+    if (questionNumber !== 1) clearQ1WarningOverlay();
+    const scheduleQ1SessionPopup = () => {
+      if (questionNumber !== 1) return false;
+      if (state.q1PopupShownThisSession) return true;
+      state.q1PopupShownThisSession = true;
+      const timeoutId = setTimeout(() => {
+        if (testQuestionIndex + 1 !== 1) return;
+        console.log("[onQuestionRendered] Q1 session popup fired");
+        showPersonalizedQuiz(() => {
+          console.log("[onQuestionRendered] Q1 warning card dismissed by user");
+        }, { mode: "q1" });
+      }, 8000);
+      pendingTriggerTimeouts.push(timeoutId);
+      return true;
+    };
     
     console.log('[onQuestionRendered] Current testQuestionIndex:', testQuestionIndex);
     console.log('[onQuestionRendered] Calculated questionNumber:', questionNumber);
     console.log('[onQuestionRendered] Question ID:', question?.question_id);
     console.log('[onQuestionRendered] Question difficulty:', question?.difficulty);
     
-    // Check if this question has a custom trigger sequence
+    // Fixed per-question flows (new-user sequence every session)
+    ensureQuestionTriggerPlan();
     const triggerInfo = getQuestionTrigger(questionNumber);
     const hasCustomTriggerSequence = triggerInfo && triggerInfo.name;
     
-    // ONLY use custom trigger sequences for Q1-Q7, disable all automatic trigger activation
-    if (hasCustomTriggerSequence) {
+    if (testQuestions.length >= 1 && questionNumber >= 1 && questionNumber <= 7) {
       console.log('[onQuestionRendered] Activating custom trigger sequence for question:', questionNumber);
       
-      if (triggerInfo && triggerInfo.name) {
-        // Different delays and sequences for different triggers per specifications
-        let delayMs = 5000; // Default 5 seconds
+      if (questionNumber >= 1 && questionNumber <= 7) {
+        let delayMs = 5000;
         
-        // Q1 → COMPANION CARD → TORCHLIGHT_SPOTLIGHT
-        // Shows AI companion insight card 7s after Q1 loads.
-        // Torchlight fires immediately after the student dismisses the card.
-        if (triggerInfo.name === 'torchlightSpotlight') {
-          delayMs = 7000;
-          
-          // Prefetch companion data during the 7s wait
-          let prefetchedData = null;
-          const studentName = window.StressDostAuth?.getUser?.()?.display_name || "";
-          const initialText = lastAnswerEcho || $("initialText")?.value || "";
-          const followupAnswers = (state.followupAnswers || []).slice(-4);
-          
-          fetch("/api/triggers/companion", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              message: initialText,
-              student_name: studentName,
-              initial_text: initialText,
-              followup_answers: followupAnswers,
-            }),
-            signal: AbortSignal.timeout(6000),
-          }).then(r => r.ok ? r.json() : null).then(d => { prefetchedData = d; }).catch(() => {});
-          
-          const timeoutId = setTimeout(() => {
-            console.log(`[onQuestionRendered] Showing companion card before Q1 torchlightSpotlight`);
-            showCompanionCard(() => {
-              console.log(`[onQuestionRendered] Companion dismissed — activating torchlightSpotlight`);
-              activateTrigger('torchlightSpotlight', {
-                userState: currentUserState(),
-                force: true,
-                reason: `question_trigger:Q${questionNumber}:torchlightSpotlight`,
-                intensity: 'mild',
-                questionNumber: questionNumber,
-              });
-            }, prefetchedData);
-          }, delayMs);
-          pendingTriggerTimeouts.push(timeoutId);
+        // Q1 → short aggressive warning card; user must dismiss
+        if (questionNumber === 1) {
+          scheduleQ1SessionPopup();
         }
         
-        // Q2 → HARD_FOG (with pre-sequence)
-        // Pre-sequence: difficultyCheckPrompt → 2.5s pause → hardQuestion (activateHardQuestionChallenge) → includes 30s timer + fog
-        else if (triggerInfo.name === 'hardFog') {
-          // Hide question immediately for Q2
-          if (questionStem) questionStem.style.visibility = 'hidden';
-          if (questionOptions) questionOptions.style.visibility = 'hidden';
-          
-          delayMs = 0; // Show difficulty check instantly
-          const timeoutId1 = setTimeout(() => {
-            console.log(`[onQuestionRendered] Starting Q2 pre-sequence: difficultyCheckPrompt`);
-            console.log(`[onQuestionRendered] state.feedbackPromptOpen:`, state.feedbackPromptOpen);
-            
-            // Force close any existing feedback prompt to ensure difficultyCheckPrompt can activate
-            if (state.feedbackPromptOpen) {
-              console.log(`[onQuestionRendered] Forcing feedbackPromptOpen to false`);
-              state.feedbackPromptOpen = false;
-              releaseInterruptionLock("feedback");
-            }
-            
-            console.log(`[onQuestionRendered] About to call activateTrigger for difficultyCheckPrompt`);
-            
-            // Step 1: Difficulty rating popup (difficultyCheckPrompt trigger)
-            const difficultyCheckResult = activateTrigger('difficultyCheckPrompt', {
+        // Q2 → short popup, then torch beam (not hard-fog)
+        else if (questionNumber === 2) {
+          runQ2PopupFlow(2);
+        }
+        
+        // Q3 → screen flip only
+        else if (questionNumber === 3) {
+          delayMs = 5000;
+          const timeoutId = setTimeout(() => {
+            if (testQuestionIndex + 1 !== 3) return;
+            activateTrigger("screenFlip", {
               userState: currentUserState(),
               force: true,
-              reason: `question_trigger:Q${questionNumber}:pre_sequence`,
-              questionNumber: questionNumber
-            });
-            
-            console.log(`[onQuestionRendered] difficultyCheckPrompt activation result:`, difficultyCheckResult);
-            
-            if (!difficultyCheckResult) {
-              console.error(`[onQuestionRendered] Failed to activate difficultyCheckPrompt! Skipping to hardQuestion.`);
-              // If difficultyCheckPrompt fails, skip directly to hardQuestion
-              const timeoutId2 = setTimeout(() => {
-                console.log(`[onQuestionRendered] Activating hardQuestion challenge (fallback)`);
-                const q = testQuestions[testQuestionIndex];
-                if (q) {
-                  const hardQuestion = { ...q, difficulty: "hard" };
-                  activateHardQuestionChallenge(hardQuestion);
-                }
-              }, 2500);
-              pendingTriggerTimeouts.push(timeoutId2);
-              return;
-            }
-            
-            // Wait for difficulty check to complete, then continue sequence
-            const waitForDifficultyCheck = setInterval(() => {
-              const isActive = isTriggerActive('difficultyCheckPrompt');
-              console.log(`[onQuestionRendered] Checking if difficultyCheckPrompt is active:`, isActive);
-              
-              if (!isActive) {
-                clearInterval(waitForDifficultyCheck);
-                
-                console.log(`[onQuestionRendered] Difficulty check complete, waiting 2.5s`);
-                
-                // Step 2: 2.5s pause, then activate hardQuestion
-                const timeoutId3 = setTimeout(() => {
-                  console.log(`[onQuestionRendered] Activating hardQuestion challenge`);
-                  
-                  // Step 3: Activate hardQuestion challenge
-                  // This shows "Hard Question Ahead" warning for ~2.1s, then starts 30s countdown with scratch-to-reveal fog
-                  const q = testQuestions[testQuestionIndex];
-                  if (q) {
-                    // Force the question to be treated as hard difficulty
-                    const hardQuestion = { ...q, difficulty: "hard" };
-                    activateHardQuestionChallenge(hardQuestion);
-                  }
-                  
-                }, 2500); // 2.5 second pause
-                pendingTriggerTimeouts.push(timeoutId3);
-              }
-            }, 100); // Check every 100ms
-            
-          }, delayMs);
-          pendingTriggerTimeouts.push(timeoutId1);
-        }
-        
-        // Q3 → PERSONALIZED QUIZ → SCREEN_FLIP (cycles every 5s until answer submitted)
-        // Shows "You Said This" reflection quiz 3s after Q3 loads.
-        // After quiz is dismissed: screen flips 180°, stays 5s, flips back, waits 5s, repeats
-        // indefinitely until the student submits their answer.
-        else if (triggerInfo.name === 'screenFlip') {
-          delayMs = 3000;
-          const timeoutId = setTimeout(() => {
-            console.log(`[onQuestionRendered] Showing personalized quiz before Q3 screenFlip`);
-            showPersonalizedQuiz(() => {
-              console.log(`[onQuestionRendered] Quiz dismissed — starting persistent flip cycle`);
-              const shell = document.querySelector(".app-shell");
-              if (!shell) return;
-
-              // Mark active so cleanup hooks know to stop it
-              shell.dataset.psyqFlipActive = "1";
-
-              let isFlipped = false;
-              let flipCycleTimer = null;
-
-              function doFlipCycle() {
-                if (shell.dataset.psyqFlipActive !== "1") return;
-                if (!isFlipped) {
-                  // Flip the screen
-                  shell.classList.add("stress-screen-flip");
-                  isFlipped = true;
-                  flipCycleTimer = setTimeout(doFlipCycle, 5000); // stay flipped 5s
-                } else {
-                  // Flip back
-                  shell.classList.remove("stress-screen-flip");
-                  isFlipped = false;
-                  flipCycleTimer = setTimeout(doFlipCycle, 5000); // wait 5s then flip again
-                }
-              }
-
-              // Store cleanup on the element so submitAnswer / cancelPendingTriggers can stop it
-              shell._psyqFlipCleanup = () => {
-                clearTimeout(flipCycleTimer);
-                shell.classList.remove("stress-screen-flip");
-                delete shell.dataset.psyqFlipActive;
-                delete shell._psyqFlipCleanup;
-              };
-
-              doFlipCycle(); // start immediately
+              reason: "question_trigger:Q3:screenFlip",
+              questionNumber: 3,
             });
           }, delayMs);
           pendingTriggerTimeouts.push(timeoutId);
         }
         
         // Q4 → ACCURACY_TEST
-        // Fires 1 second after Q4 loads
-        else if (triggerInfo.name === 'accuracyTest') {
+        else if (questionNumber === 4) {
           delayMs = 1000;
           const timeoutId = setTimeout(() => {
             console.log(`[onQuestionRendered] Activating Q4 trigger: accuracyTest`);
@@ -6992,9 +7162,7 @@ const StressTriggers = (() => {
         }
         
         // Q5 → READING_TEST
-        // Fires 3 seconds after Q5 loads
-        // Sequence: focusHandSignal (4s) → 8s clear reading → focusReadGate (blur + unlock)
-        else if (triggerInfo.name === 'readingTest') {
+        else if (questionNumber === 5) {
           delayMs = 3000;
           const timeoutId1 = setTimeout(() => {
             console.log(`[onQuestionRendered] Starting Q5 sequence: focusHandSignal`);
@@ -7027,15 +7195,26 @@ const StressTriggers = (() => {
               }, 12000); // 4s hand signal + 8s clear reading
               pendingTriggerTimeouts.push(timeoutId2);
             } else {
-              console.error(`[onQuestionRendered] Failed to activate focusHandSignal`);
+              console.error(
+                `[onQuestionRendered] Failed to activate focusHandSignal; falling back to readingTest handler`,
+              );
+              const timeoutIdFb = setTimeout(() => {
+                if (testQuestionIndex + 1 !== questionNumber) return;
+                activateTrigger("readingTest", {
+                  userState: currentUserState(),
+                  force: true,
+                  reason: `question_trigger:Q${questionNumber}:readingTest_fallback`,
+                  questionNumber: questionNumber,
+                });
+              }, 600);
+              pendingTriggerTimeouts.push(timeoutIdFb);
             }
           }, delayMs);
           pendingTriggerTimeouts.push(timeoutId1);
         }
         
-        // Q6 → HARD_PEER_DOUBT (with pre-sequence + interception)
-        // Same pre-sequence as Q2: difficultyCheckPrompt → 2.5s pause → hardQuestion challenge
-        else if (triggerInfo.name === 'hardPeerDoubt') {
+        // Q6 → HARD_PEER_DOUBT
+        else if (questionNumber === 6) {
           // Hide question immediately for Q6
           if (questionStem) questionStem.style.visibility = 'hidden';
           if (questionOptions) questionOptions.style.visibility = 'hidden';
@@ -7102,9 +7281,7 @@ const StressTriggers = (() => {
         }
         
         // Q7 → BILLIARD_BALL
-        // Fires 1.5 seconds after Q7 loads
-        // Sequence: premiumImagePopup (4s taunt) → 0.8s gap → bouncingQuestion (indefinite)
-        else if (triggerInfo.name === 'billiardBall') {
+        else if (questionNumber === 7) {
           delayMs = 1500;
           const timeoutId1 = setTimeout(() => {
             console.log(`[onQuestionRendered] Starting Q7 sequence: premiumImagePopup taunt`);
@@ -7145,6 +7322,42 @@ const StressTriggers = (() => {
           }, delayMs);
           pendingTriggerTimeouts.push(timeoutId1);
         }
+
+        // Returning-user plans can assign any medium/hard trigger to Q2–Q7. If the backend
+        // maps e.g. SCREEN_FLIP to Q5, none of the dedicated branches above run; without
+        // this we returned early and fired nothing (and AI triggers stay disabled).
+        else if (triggerHandlers[triggerInfo.name]) {
+          const name = triggerInfo.name;
+          const fallbackDelay =
+            name === "screenFlip"
+              ? 5000
+              : name === "torchlightSpotlight"
+                ? 6000
+                : name === "accuracyTest"
+                  ? 1000
+                  : name === "readingTest"
+                    ? 3000
+                    : name === "billiardBall"
+                      ? 1500
+                      : 2500;
+          const timeoutId = setTimeout(() => {
+            if (String(state.currentQuestionId) !== String(question?.question_id || "")) return;
+            activateTrigger(name, {
+              userState: currentUserState(),
+              force: true,
+              reason: `question_trigger:Q${questionNumber}:planned_generic`,
+              questionNumber: questionNumber,
+            });
+          }, fallbackDelay);
+          pendingTriggerTimeouts.push(timeoutId);
+          console.warn(
+            `[onQuestionRendered] No dedicated sequence for Q${questionNumber} trigger "${name}"; using generic activation after ${fallbackDelay}ms`,
+          );
+        } else {
+          console.warn(
+            `[onQuestionRendered] Planned trigger "${triggerInfo.name}" for Q${questionNumber} has no local handler`,
+          );
+        }
         
         console.log(`[onQuestionRendered] Trigger sequence initiated for Q${questionNumber}:`, triggerInfo.name);
         
@@ -7155,6 +7368,12 @@ const StressTriggers = (() => {
       console.log('[onQuestionRendered] Hard question detected - using hardQuestionChallenge only');
     }
     
+    // Ensure Q1 personalized popup appears every session even without trigger plan.
+    // Also suppress AI auto-triggers on Q1 so only this emotional popup is shown.
+    if (scheduleQ1SessionPopup()) {
+      return;
+    }
+
     // Only call AI trigger system if no question-level trigger was activated
     // Skip AI triggers for questions with custom trigger sequences
     if (!triggerInfo || !triggerInfo.name) {
@@ -7454,6 +7673,7 @@ const StressTriggers = (() => {
     state.followupAnswers = [];
     state.wrongAnswersCount = 0;
     state.totalSubmissions = 0;
+    state.q1PopupShownThisSession = false;
     state.correctStreak = 0;
     state.aiDecisionInFlight = false;
     state.lastAIDecisionAt = 0;
@@ -7920,7 +8140,7 @@ function ensureStemOptionsInQuestion(q, parts) {
       const label = (opt?.label || "").trim();
       const text = (opt?.text || "").trim();
       if (!label && !text) return "";
-      return `<div class="stem-option-row"><strong>${label}${label ? ")" : ""}</strong> ${text}</div>`;
+      return `<div class="stem-option-row"><strong>${label}${label ? ")" : ""}</strong> ${processAcadzaHtml(text)}</div>`;
     })
     .filter(Boolean);
   if (!rows.length) return;
@@ -7945,11 +8165,11 @@ function collectQuestionImageUrls(q) {
       if (typeof src === "string" && src.trim()) urls.push(src.trim());
     });
   }
-  const html = q?.question_html || "";
+  const html = processAcadzaHtml(q?.question_html || "");
   const regex = /<img[^>]+src=["']([^"']+)["']/gi;
   let match = regex.exec(html);
   while (match) {
-    if (match[1]) urls.push(match[1]);
+    if (match[1]) urls.push(processAcadzaHtml(match[1]));
     match = regex.exec(html);
   }
   return urls;
@@ -8085,12 +8305,54 @@ function stripHardQuestionLabel(html) {
   return html.replace(/<strong>\s*HARD\s+QUESTION\s*:\s*<\/strong>\s*/gi, '');
 }
 
+function processAcadzaHtml(html) {
+  if (window.AcadzaRender?.processAcadzaHtml) {
+    return window.AcadzaRender.processAcadzaHtml(html);
+  }
+  return html || "";
+}
+
+function clearQuestionStem(message) {
+  if (questionStem && window.AcadzaRender?.destroy) {
+    window.AcadzaRender.destroy(questionStem);
+  }
+  if (questionStem) questionStem.textContent = message || "";
+}
+
+function buildQuestionStemHtml(q) {
+  const parts = [];
+  if (q?.question_html) {
+    const cleanedHtml = stripHardQuestionLabel(q.question_html);
+    parts.push(stripEmbeddedOptionsFromQuestionHtml(cleanedHtml));
+  }
+  ensureStemOptionsInQuestion(q, parts);
+  if (Array.isArray(q?.question_images)) {
+    q.question_images.forEach((src) => {
+      if (typeof src !== "string" || !src.trim()) return;
+      const url = processAcadzaHtml(src.trim());
+      parts.push(`<div class="q-img"><img src="${url}" alt="question image" /></div>`);
+    });
+  }
+  return parts.join("");
+}
+
+function renderQuestionStemHtml(q, onReady) {
+  if (!questionStem) return;
+  const html = buildQuestionStemHtml(q);
+  if (window.AcadzaRender?.renderInto) {
+    window.AcadzaRender.renderInto(questionStem, html, { onReady });
+    return;
+  }
+  questionStem.innerHTML = processAcadzaHtml(html);
+  if (typeof onReady === "function") onReady();
+}
+
 function renderTestQuestion() {
   if (!questionStem || !questionOptions || !questionCounter) return;
   if (isLoadingTestBank) return;
 
   if (!testQuestions.length) {
-    questionStem.textContent = "Questions will appear here with options.";
+    clearQuestionStem("Questions will appear here with options.");
     questionOptions.innerHTML = "";
     questionCounter.textContent = "Q. 1 of 1";
     if (questionSubject) questionSubject.textContent = "ID: —";
@@ -8105,6 +8367,9 @@ function renderTestQuestion() {
 
   testQuestionIndex = Math.min(Math.max(testQuestionIndex, 0), testQuestions.length - 1);
   const q = testQuestions[testQuestionIndex];
+  // Q2/Q6 hard-fog sequences hide stem/options; always restore when switching questions.
+  if (questionStem) questionStem.style.visibility = "visible";
+  if (questionOptions) questionOptions.style.visibility = "visible";
   if (questionCounter) {
     questionCounter.textContent = `Q. ${testQuestionIndex + 1} of ${testQuestions.length}`;
   }
@@ -8142,20 +8407,10 @@ function renderTestQuestion() {
   }
   updateSolutionButtonState();
   updateTestHintForQuestion(q);
-  const parts = [];
-  if (q.question_html) {
-    // Strip "HARD QUESTION:" label before rendering
-    const cleanedHtml = stripHardQuestionLabel(q.question_html);
-    parts.push(stripEmbeddedOptionsFromQuestionHtml(cleanedHtml));
-  }
-  ensureStemOptionsInQuestion(q, parts);
-  if (Array.isArray(q.question_images)) {
-    q.question_images.forEach((src) => {
-      parts.push(`<div class="q-img"><img src="${src}" alt="question image" /></div>`);
-    });
-  }
-  questionStem.innerHTML = parts.join("");
-  applyAdaptiveQuestionDensity(q);
+  renderQuestionStemHtml(q, () => {
+    applyAdaptiveQuestionDensity(q);
+    StressTriggers.onQuestionRendered(q);
+  });
   questionOptions.innerHTML = "";
 
   const opts = q.options || [];
@@ -8204,7 +8459,11 @@ function renderTestQuestion() {
       markEl.textContent = "";
       const textEl = document.createElement("div");
       textEl.className = "option-text";
-      textEl.textContent = "";
+      if (window.AcadzaRender?.renderPlainHtml) {
+        window.AcadzaRender.renderPlainHtml(textEl, opt.text || "");
+      } else {
+        textEl.innerHTML = processAcadzaHtml(opt.text || "");
+      }
       body.appendChild(labelEl);
       body.appendChild(markEl);
       body.appendChild(textEl);
@@ -8221,7 +8480,6 @@ function renderTestQuestion() {
   updateScoreMeta();
   updateLifelineState();
   renderResultStateForCurrentQuestion();
-  StressTriggers.onQuestionRendered(q);
 }
 
 /* ── question prefetch metadata ─────────────────────────────────────── */
@@ -8249,7 +8507,7 @@ async function loadTestQuestions() {
   if (questionTypeSelect) questionTypeSelect.options[0].textContent = "";
   if (questionProgress) questionProgress.style.width = "0%";
   clearMutationTimers();
-  questionStem.textContent = "";
+  clearQuestionStem("");
   questionOptions.innerHTML = "";
   try {
     let payload = {};
@@ -8324,6 +8582,32 @@ async function loadTestQuestions() {
   }
 }
 
+function buildLocalNewUserTriggerPlan() {
+  const sequence = LOCAL_NEW_USER_TRIGGER_NAMES.map((trigger_name, idx) => ({
+    question_number: idx + 1,
+    trigger_name,
+    difficulty: trigger_name.includes("HARD") ? "hard" : "medium",
+    intensity: idx < 2 ? "mild" : idx < 5 ? "moderate" : "strong",
+    is_hard: trigger_name === "HARD_FOG" || trigger_name === "HARD_PEER_DOUBT",
+    is_meta_question: trigger_name === "HARD_FOG" || trigger_name === "HARD_PEER_DOUBT",
+  }));
+  return {
+    status: "success",
+    is_new_user: true,
+    user_type: "new",
+    total_questions: 7,
+    medium_count: sequence.filter((t) => !t.is_hard).length,
+    hard_count: sequence.filter((t) => t.is_hard).length,
+    sequence,
+  };
+}
+
+function ensureQuestionTriggerPlan() {
+  if (questionTriggerPlan?.sequence?.length === 7) return;
+  questionTriggerPlan = buildLocalNewUserTriggerPlan();
+  console.log("[ensureQuestionTriggerPlan] Using local new-user sequence");
+}
+
 async function fetchQuestionTriggerPlan() {
   try {
     // Get user from auth system
@@ -8336,7 +8620,8 @@ async function fetchQuestionTriggerPlan() {
       name: user?.display_name || '',
       test_count: user?.completed_sessions || 0,
       completed_sessions: user?.completed_sessions || 0,  // Send both fields for backend compatibility
-      previous_triggers: previousTriggers
+      previous_triggers: previousTriggers,
+      force_new_user: true,
     };
     
     // Extract question difficulties from loaded questions
@@ -8351,6 +8636,9 @@ async function fetchQuestionTriggerPlan() {
     });
     
     questionTriggerPlan = response;
+    if (!questionTriggerPlan?.sequence?.length) {
+      questionTriggerPlan = buildLocalNewUserTriggerPlan();
+    }
     console.log('[fetchQuestionTriggerPlan] Trigger plan received:', questionTriggerPlan);
     console.log('[fetchQuestionTriggerPlan] Sequence:', questionTriggerPlan?.sequence);
     console.log('[fetchQuestionTriggerPlan] User type:', questionTriggerPlan?.user_type);
@@ -8364,11 +8652,12 @@ async function fetchQuestionTriggerPlan() {
   } catch (err) {
     console.error('[fetchQuestionTriggerPlan] Failed to fetch trigger plan:', err);
     console.error('[fetchQuestionTriggerPlan] Error details:', err.message, err.stack);
-    questionTriggerPlan = null;
+    questionTriggerPlan = buildLocalNewUserTriggerPlan();
   }
 }
 
 function getQuestionTrigger(questionNumber) {
+  ensureQuestionTriggerPlan();
   console.log('[getQuestionTrigger] Called for question:', questionNumber);
   console.log('[getQuestionTrigger] questionTriggerPlan:', questionTriggerPlan);
   
@@ -9616,7 +9905,12 @@ function openSolutionModal() {
   const answer = labelAnswer || integerAnswer || "Not available";
   if (solutionAnswerLine) solutionAnswerLine.textContent = `Correct answer: ${answer}`;
   if (solutionContent) {
-    solutionContent.innerHTML = q.solution_html || "<p>Solution not available.</p>";
+    const solutionHtml = q.solution_html || "<p>Solution not available.</p>";
+    if (window.AcadzaRender?.renderInto) {
+      window.AcadzaRender.renderInto(solutionContent, solutionHtml);
+    } else {
+      solutionContent.innerHTML = processAcadzaHtml(solutionHtml);
+    }
   }
   solutionModalOpen = true;
   solutionModal.hidden = false;
@@ -9624,6 +9918,10 @@ function openSolutionModal() {
 
 function closeSolutionModal() {
   if (solutionModal) solutionModal.hidden = true;
+  if (solutionContent && window.AcadzaRender?.destroy) {
+    window.AcadzaRender.destroy(solutionContent);
+    solutionContent.textContent = "";
+  }
   solutionModalOpen = false;
   if (pendingAdvanceAfterSubmit) {
     pendingAdvanceAfterSubmit = false;

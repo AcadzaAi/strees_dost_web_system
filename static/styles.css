@@ -2782,12 +2782,13 @@ pre {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(15, 23, 42, 0.55);
-  -webkit-backdrop-filter: blur(4px);
-  backdrop-filter: blur(4px);
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   opacity: 0;
   transition: opacity 280ms ease;
   padding: 16px;
+  pointer-events: none;
 }
 
 .psyq-overlay--visible {
@@ -2795,6 +2796,72 @@ pre {
 }
 
 /* Card — matches the app's test-card / confirm-card language */
+.psyq-card--warning {
+  width: min(400px, 100%);
+  padding: 22px 22px 20px;
+}
+
+.psyq-card--warning .psyq-header {
+  margin-bottom: 12px;
+}
+
+.psyq-card--warning .psyq-icon {
+  font-size: 28px;
+}
+
+.psyq-card--warning .psyq-reflection {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.35;
+  min-height: 0;
+  margin-bottom: 6px;
+}
+
+.psyq-card--warning .psyq-question {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: rgba(15, 23, 42, 0.72);
+}
+
+.psyq-card--warning .psyq-divider {
+  margin: 12px 0;
+}
+
+.psyq-actions--single {
+  display: block;
+  margin-top: 4px;
+}
+
+.psyq-actions--delayed {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 400ms ease;
+}
+
+.psyq-actions--delayed.psyq-actions--ready {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.psyq-btn-ack {
+  width: 100%;
+  background: rgba(15, 23, 42, 0.06);
+  border: 1px solid rgba(15, 23, 42, 0.2);
+  color: rgba(15, 23, 42, 0.85);
+  font-weight: 700;
+}
+
+.psyq-btn-ack:disabled {
+  opacity: 0.45;
+  cursor: wait;
+}
+
+.psyq-btn-ack:not(:disabled):hover {
+  background: rgba(15, 23, 42, 0.1);
+  border-color: rgba(15, 23, 42, 0.28);
+}
+
 .psyq-card {
   width: min(520px, 100%);
   background: #ffffff;
@@ -2804,6 +2871,7 @@ pre {
   box-shadow: 0 20px 60px rgba(15, 23, 42, 0.18), 0 2px 8px rgba(15, 23, 42, 0.06);
   color: var(--text);
   animation: psyqSlideUp 260ms cubic-bezier(0.22, 0.78, 0.24, 1) both;
+  pointer-events: auto;
 }
 
 @keyframes psyqSlideUp {
@@ -2867,6 +2935,33 @@ pre {
   color: var(--muted);
   line-height: 1.55;
   margin: 0 0 24px;
+}
+
+.psyq-subline {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: rgba(15, 23, 42, 0.72);
+  margin: 0 0 14px;
+}
+
+.psyq-question--highlight {
+  font-size: 19px;
+  font-weight: 800;
+  color: #991b1b;
+  line-height: 1.45;
+  margin: 0 0 20px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(254, 226, 226, 0.95), rgba(254, 243, 199, 0.85));
+  border: 2px solid rgba(239, 68, 68, 0.45);
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.12);
+  animation: psyqHighlightPulse 2.2s ease-in-out infinite;
+}
+
+@keyframes psyqHighlightPulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.12); }
+  50% { box-shadow: 0 0 0 6px rgba(239, 68, 68, 0.22); }
 }
 
 /* Yes / No buttons */
@@ -3978,6 +4073,25 @@ body.stress-blur-attack .app-shell {
   letter-spacing: 0.16em;
   box-shadow: 0 10px 20px rgba(0, 0, 0, 0.24);
   animation: bounceFocusTag 200ms linear forwards;
+}
+
+.stress-torchlight-caption {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10060;
+  max-width: min(420px, calc(100vw - 24px));
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.92);
+  color: #f8fafc;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+  text-align: center;
+  pointer-events: none;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 .stress-torchlight-mask {

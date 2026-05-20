@@ -75,8 +75,12 @@ def _build_acadza_headers() -> Dict:
 ACADZA_HEADERS = _build_acadza_headers()
 
 
-def _local_fallback_questions(count: int = 7) -> List[Dict]:
-    """Return deterministic local questions when Acadza questions are unavailable."""
+def _local_fallback_questions(
+    count: int = 7,
+    subject: str | None = None,
+    topics: List[str] | None = None,
+) -> List[Dict]:
+    """Return local fallback questions, prioritizing selected subject/topics."""
     bank = [
         {
             "question_id": "fallback-1",
@@ -208,9 +212,30 @@ def _local_fallback_questions(count: int = 7) -> List[Dict]:
         },
     ]
 
-    # Return questions in order: Q1=Easy, Q2=Hard, Q3=Medium, Q4=Medium, Q5=Medium, Q6=Hard, Q7=Easy
+    selected_subject = (subject or "").strip().lower()
+    selected_topics = {str(t).strip().lower() for t in (topics or []) if str(t).strip()}
+
+    prioritized: list[Dict] = []
+    if selected_subject:
+        # 1) Exact subject + topic/chapter matches first
+        if selected_topics:
+            prioritized.extend(
+                q for q in bank
+                if (q.get("subject", "").strip().lower() == selected_subject)
+                and (q.get("chapter", "").strip().lower() in selected_topics)
+            )
+        # 2) Remaining same-subject questions
+        prioritized.extend(
+            q for q in bank
+            if (q.get("subject", "").strip().lower() == selected_subject) and (q not in prioritized)
+        )
+        # 3) Fill with remaining fallback bank
+        prioritized.extend(q for q in bank if q not in prioritized)
+    else:
+        prioritized = list(bank)
+
     out: List[Dict] = []
-    for idx, q in enumerate(bank[:count]):
+    for idx, q in enumerate(prioritized[:count]):
         item = dict(q)
         item["question_index"] = idx + 1
         out.append(item)
@@ -749,7 +774,7 @@ def load_test_questions():
 
     question_ids = question_loader.get_test_ids(subject=subject, topics=topics, is_new_user=is_new_user)
     if not question_ids:
-        fallback = _local_fallback_questions(count=7)
+        fallback = _local_fallback_questions(count=7, subject=subject, topics=topics)
         return jsonify(
             {
                 "status": "success",
@@ -763,7 +788,7 @@ def load_test_questions():
 
     raw_questions = acadza_fetcher.fetch_multiple(question_ids)
     if not raw_questions:
-        fallback = _local_fallback_questions(count=7)
+        fallback = _local_fallback_questions(count=7, subject=subject, topics=topics)
         return jsonify(
             {
                 "status": "success",
