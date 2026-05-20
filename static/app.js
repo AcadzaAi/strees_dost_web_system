@@ -813,6 +813,78 @@ function summarizeFollowupThemes(followups) {
   return out.slice(0, 4);
 }
 
+function setDevilBriefLoadingState() {
+  if (devilTitle) devilTitle.textContent = "Preparing your brief...";
+  if (devilIntro) devilIntro.textContent = "Reading what you shared.";
+  if (devilChallengeLine) devilChallengeLine.textContent = "Building a sharper read on your pattern.";
+  const insightEl = document.getElementById("devilInsightSummary");
+  if (insightEl) insightEl.textContent = "Looking at your pattern...";
+  const insightSubEl = document.querySelector(".devil-insight-sub");
+  if (insightSubEl) insightSubEl.style.display = "none";
+  if (devilProblems) {
+    devilProblems.style.display = "none";
+    devilProblems.innerHTML = "";
+  }
+  const warningEl = document.getElementById("devilWarning");
+  if (warningEl) warningEl.style.display = "none";
+}
+
+function buildDevilBriefLocalFallback(initialText, followups) {
+  const baseText = String(initialText || "").trim();
+  const namedPerson = extractNamedPersonFromText(baseText);
+  const lowered = `${baseText} ${(followups || []).map((f) => f?.answer || "").join(" ")}`.toLowerCase();
+
+  if (namedPerson) {
+    return {
+      devil_name: "The Attention Leak",
+      core_issue: `${namedPerson} is taking space your work needed`,
+      problem_points: [
+        `Your mind keeps drifting back to ${namedPerson} instead of staying on the task in front of you`,
+        "You are giving emotional energy to a distraction that gives nothing back to your own goals",
+      ],
+      challenge_line: "Now the paper gets that same version of your attention.",
+      source: "local_fallback",
+    };
+  }
+
+  if (/reel|short|scroll|instagram|youtube|movie|web ?series|anime|edit/.test(lowered)) {
+    return {
+      devil_name: "The Attention Leak",
+      core_issue: "Fast entertainment is eating into your working focus",
+      problem_points: [
+        "Quick-hit content has trained your brain to expect stimulation before effort",
+        "The moment work gets slower than entertainment, your attention starts looking for an exit",
+      ],
+      challenge_line: "The paper is slower than your feed. Stay anyway.",
+      source: "local_fallback",
+    };
+  }
+
+  if (/distract|beautiful|crush|obsess|fantasy/.test(lowered)) {
+    return {
+      devil_name: "The Split Mind",
+      core_issue: "Your attention is divided before the test has even started",
+      problem_points: [
+        "Part of your mind is still following the distraction instead of settling into the question",
+        "You lose control early because the distraction is emotionally louder than the work",
+      ],
+      challenge_line: "Let's see if your focus obeys you or the distraction.",
+      source: "local_fallback",
+    };
+  }
+
+  return {
+    devil_name: "The Focus Breaker",
+    core_issue: "Your attention is too easy to pull away from the work",
+    problem_points: [
+      "Your mind shifts too quickly toward what feels easier or more stimulating",
+      "Once your attention drifts, getting it back costs more than you think",
+    ],
+    challenge_line: "Now you find out how expensive that drift really is.",
+    source: "local_fallback",
+  };
+}
+
 async function buildDevilBriefPage(passedInitialText, passedHistory) {
   const followups = StressTriggers.getFollowupAnswers ? StressTriggers.getFollowupAnswers() : [];
   const user = window.StressDostAuth?.getUser?.();
@@ -867,15 +939,19 @@ async function buildDevilBriefPage(passedInitialText, passedHistory) {
     }
   } catch (err) {
     console.warn("[buildDevilBriefPage] AI call failed:", err);
-    brief = null;
+    brief = buildDevilBriefLocalFallback(initialText, effectiveFollowups);
+  }
+
+  if (!brief || brief?.source === "fallback") {
+    brief = buildDevilBriefLocalFallback(initialText, effectiveFollowups);
   }
 
   const devilName = brief?.devil_name || "The Focus Breaker";
-  const coreIssue = brief?.core_issue || "Unclear focus patterns need measurement";
+  const coreIssue = brief?.core_issue || "Your attention is too easy to pull away from the work";
   const problemPoints = Array.isArray(brief?.problem_points) && brief.problem_points.length
     ? brief.problem_points
-    : ["Your attention baseline needs to be established", "Focus endurance under pressure is unknown"];
-  const challengeLine = brief?.challenge_line || "Let's see what breaks your concentration first.";
+    : buildDevilBriefLocalFallback(initialText, effectiveFollowups).problem_points;
+  const challengeLine = brief?.challenge_line || "Now you find out how expensive that drift really is.";
 
   // Fill HTML
   if (devilTitle) devilTitle.textContent = devilName;
@@ -3820,11 +3896,26 @@ const StressTriggers = (() => {
     }, dismissMs);
   }
 
-  function showQuestionWarningPopup(questionNumber, onComplete) {
+  async function showQuestionWarningPopup(questionNumber, onComplete) {
     const qNum = Number(questionNumber || 1);
     const fallbackCopy = buildQuestionWarningFallbackCopy(qNum);
     const cacheKey = getQuestionWarningCacheKey(qNum);
-    const resolvedCopy = questionWarningCopyCache.get(cacheKey) || fallbackCopy;
+    let resolvedCopy = questionWarningCopyCache.get(cacheKey) || null;
+
+    if (!resolvedCopy) {
+      try {
+        resolvedCopy = await Promise.race([
+          fetchQuestionWarningCopy(qNum),
+          sleep(1800).then(() => null),
+        ]);
+      } catch (_) {
+        resolvedCopy = null;
+      }
+    }
+
+    if (!resolvedCopy) {
+      resolvedCopy = questionWarningCopyCache.get(cacheKey) || fallbackCopy;
+    }
 
     document.querySelectorAll(".psyq-overlay[data-question-warning='1']").forEach((el) => el.remove());
 
@@ -9451,9 +9542,15 @@ async function handleCompletion() {
 
     // Show the devil stage immediately, then hydrate its content in the background.
     showStage("devil");
+    setDevilBriefLoadingState();
     if (devilHint) devilHint.textContent = "Preparing your brief...";
 
-    const extractionPromise = window.academicTopics?.decideAndStore?.(sessionId, initialText, conversationHistory);
+    const extractionPromise = Promise.resolve(
+      window.academicTopics?.decideAndStore?.(sessionId, initialText, conversationHistory)
+    ).catch((err) => {
+      console.warn("[handleCompletion] academic extraction failed:", err);
+      return null;
+    });
     const popupPrefetchPromise = prefetchQuestionWarningCopies().catch((err) => {
       console.warn("[handleCompletion] popup prefetch failed:", err);
       return [];
@@ -9464,7 +9561,24 @@ async function handleCompletion() {
       if (devilHint) devilHint.textContent = "";
     } catch (e) {
       console.warn("[handleCompletion] devil brief build failed:", e);
-      if (devilHint) devilHint.textContent = "Brief unavailable right now. You can still continue.";
+      const fallbackBrief = buildDevilBriefLocalFallback(initialText, conversationHistory);
+      if (devilTitle) devilTitle.textContent = fallbackBrief.devil_name;
+      if (devilIntro) devilIntro.textContent = `I've analyzed your patterns, ${window.StressDostAuth?.getUser?.()?.display_name || "challenger"}.`;
+      const insightEl = document.getElementById("devilInsightSummary");
+      if (insightEl) insightEl.textContent = fallbackBrief.core_issue;
+      const insightSubEl = document.querySelector(".devil-insight-sub");
+      if (insightSubEl) insightSubEl.style.display = "block";
+      if (devilProblems) {
+        devilProblems.style.display = "block";
+        devilProblems.innerHTML = "";
+        fallbackBrief.problem_points.slice(0, 2).forEach((line) => {
+          const li = document.createElement("li");
+          li.innerHTML = `<span class="insight-icon">🔥</span> ${escapeHTML(line)}`;
+          devilProblems.appendChild(li);
+        });
+      }
+      if (devilChallengeLine) devilChallengeLine.textContent = fallbackBrief.challenge_line;
+      if (devilHint) devilHint.textContent = "";
     }
 
     await popupPrefetchPromise;
@@ -9476,7 +9590,7 @@ async function handleCompletion() {
     console.error("[handleCompletion] error during completion flow:", err);
     window.__academicDecision = null;
     showStage("devil");
-    if (devilHint) devilHint.textContent = "Something failed while preparing the brief. You can still continue.";
+    if (devilHint) devilHint.textContent = "";
   }
 }
 
