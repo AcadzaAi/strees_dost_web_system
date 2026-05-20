@@ -124,6 +124,7 @@ let suggestTimer = null;
 let loadingTicker = null;
 let loadingFrameIndex = 0;
 let lastAnswerEcho = "";
+let sessionInitialQuery = "";
 let solutionModalOpen = false;
 let pendingAdvanceAfterSubmit = false;
 let questionTriggerPlan = null; // Stores trigger plan from backend
@@ -739,6 +740,7 @@ function resetFlow() {
   sessionId = null;
   currentDomain = null;
   currentSlot = null;
+  sessionInitialQuery = "";
   clearGhost();
   btnAnswer.disabled = true;
   btnAnswer.hidden = true;
@@ -3485,6 +3487,10 @@ const StressTriggers = (() => {
     return String(fallbackTopic || "distractions");
   }
 
+  function getSessionInitialQuery() {
+    return String(sessionInitialQuery || $("initialText")?.value || "").trim();
+  }
+
   function extractLiteralPopupTopic(rawInitial, rawFollowup, fallbackTopic) {
     const clean = (value) =>
       String(value || "")
@@ -3511,21 +3517,16 @@ const StressTriggers = (() => {
    * Calls onComplete() after the user dismisses the response popup.
    */
   function buildQ1WarningCopy() {
-    const { topic, sourceText } = buildPersonalizedQuizPrompt();
-    const initialSnippet = String(lastAnswerEcho || $("initialText")?.value || "")
-      .trim()
+    const rawInitial = getSessionInitialQuery();
+    const initialSnippet = rawInitial
       .split(/\s+/)
       .slice(0, 12)
       .join(" ");
-    const firstFollowupAnswer = String(state.followupAnswers?.[0]?.answer || "").trim();
-    const severity = inferDistractionSeverity(
-      `${sourceText || ""} ${firstFollowupAnswer}`,
-      Array.isArray(state.followupAnswers) ? state.followupAnswers.length : 0
-    );
-    const subjectLine = summarizeDistractionTopic(firstFollowupAnswer, topic);
-    const literalTopic = extractLiteralPopupTopic(initialSnippet, firstFollowupAnswer, subjectLine);
+    const subjectLine = summarizeDistractionTopic(rawInitial, rawInitial || "distractions");
+    const severity = inferDistractionSeverity(rawInitial, 0);
+    const literalTopic = extractLiteralPopupTopic(initialSnippet, "", subjectLine);
     const topicLead = literalTopic ? `"${literalTopic}"` : subjectLine;
-    const reelRoast = /reel|instagram|shorts|scroll|phone/i.test(`${literalTopic} ${subjectLine} ${sourceText}`);
+    const reelRoast = /reel|instagram|shorts|scroll|phone/i.test(`${rawInitial} ${literalTopic} ${subjectLine}`);
     const lines = {
       medium: reelRoast
         ? `You typed ${topicLead}. Good. That filth is already sitting beside you on question one.`
@@ -8977,6 +8978,7 @@ async function startSessionFlow() {
     }
 
     lastAnswerEcho = text;
+    sessionInitialQuery = text;
 
     setIntroHint("");
     showStage("loading", "Absorbing your story…");
