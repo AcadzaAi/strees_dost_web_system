@@ -2863,36 +2863,6 @@ pre {
   font-weight: 600;
 }
 
-.psyq-warning-layout {
-  display: block;
-}
-
-.psyq-warning-layout--with-media {
-  display: grid;
-  grid-template-columns: minmax(140px, 176px) minmax(0, 1fr);
-  gap: 18px;
-  align-items: center;
-}
-
-.psyq-warning-media-wrap {
-  width: 100%;
-  border-radius: 18px;
-  overflow: hidden;
-  background: linear-gradient(180deg, rgba(15, 23, 42, 0.06), rgba(15, 23, 42, 0.12));
-  box-shadow: 0 18px 34px rgba(15, 23, 42, 0.14);
-}
-
-.psyq-warning-media {
-  display: block;
-  width: 100%;
-  height: 220px;
-  object-fit: cover;
-}
-
-.psyq-warning-copy {
-  min-width: 0;
-}
-
 .psyq-card--warning .psyq-question {
   font-size: 13px;
   font-weight: 500;
@@ -2952,17 +2922,6 @@ pre {
 
 .psyq-card--warning-slow {
   animation: none;
-}
-
-@media (max-width: 720px) {
-  .psyq-warning-layout--with-media {
-    grid-template-columns: 1fr;
-    gap: 14px;
-  }
-
-  .psyq-warning-media {
-    height: 180px;
-  }
 }
 
 @keyframes psyqSlideUp {

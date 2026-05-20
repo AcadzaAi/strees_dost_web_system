@@ -127,7 +127,6 @@ let lastAnswerEcho = "";
 let sessionInitialQuery = "";
 let questionWarningCopyCache = new Map();
 let questionWarningCopyPromises = new Map();
-let katrinaAssetsPreloaded = false;
 let solutionModalOpen = false;
 let pendingAdvanceAfterSubmit = false;
 let questionTriggerPlan = null; // Stores trigger plan from backend
@@ -744,7 +743,6 @@ function resetFlow() {
   currentDomain = null;
   currentSlot = null;
   sessionInitialQuery = "";
-  katrinaAssetsPreloaded = false;
   questionWarningCopyCache = new Map();
   questionWarningCopyPromises = new Map();
   clearGhost();
@@ -3597,44 +3595,6 @@ const StressTriggers = (() => {
     });
   }
 
-  function isKatrinaPopupFlow() {
-    return /\bkatrina\s+kaif\b/i.test(getSessionInitialQuery());
-  }
-
-  function getKatrinaPopupConfig(questionNumber) {
-    const config = {
-      1: { src: "/katrina/k1.jpg", fallbackSrc: "/katrina/k1.jpg", alt: "Katrina Kaif image", text: "How's she looking?" },
-      2: { src: "/katrina/k2.jpg", fallbackSrc: "/katrina/k1.jpg", alt: "Katrina Kaif image", text: "What do u think about her new look?" },
-      3: { src: "/katrina/gif.gif", fallbackSrc: "/katrina/k1.jpg", alt: "Katrina Kaif GIF", text: "Did u see here latest ad?" },
-      4: { src: "/katrina/k3.jpg", fallbackSrc: "/katrina/k1.jpg", alt: "Katrina Kaif image", text: "What do u think about her new look?" },
-      5: { src: "/katrina/k4.jpg", fallbackSrc: "/katrina/k1.jpg", alt: "Katrina Kaif image", text: "Do u like here smile?" },
-      6: { src: "/katrina/k2.jpg", fallbackSrc: "/katrina/k1.jpg", alt: "Katrina Kaif image", text: "Did u watch her latest interview?" },
-      7: { src: "/katrina/k1.jpg", fallbackSrc: "/katrina/k1.jpg", alt: "Katrina Kaif image", text: "Rate her last movie out of 10" },
-    };
-    return config[Number(questionNumber || 1)] || null;
-  }
-
-  function preloadKatrinaPopupAssets() {
-    if (katrinaAssetsPreloaded || !isKatrinaPopupFlow()) return;
-    katrinaAssetsPreloaded = true;
-    const srcs = Array.from(new Set(
-      Object.values({
-        1: "/katrina/k1.jpg",
-        2: "/katrina/k2.jpg",
-        3: "/katrina/gif.gif",
-        4: "/katrina/k3.jpg",
-        5: "/katrina/k4.jpg",
-        6: "/katrina/k2.jpg",
-        7: "/katrina/k1.jpg",
-      })
-    ));
-    srcs.forEach((src) => {
-      const img = new Image();
-      img.decoding = "async";
-      img.src = src;
-    });
-  }
-
   function extractNamedPersonFromText(rawText) {
     const text = String(rawText || "").trim();
     if (!text) return "";
@@ -3865,11 +3825,6 @@ const StressTriggers = (() => {
     const fallbackCopy = buildQuestionWarningFallbackCopy(qNum);
     const cacheKey = getQuestionWarningCacheKey(qNum);
     const resolvedCopy = questionWarningCopyCache.get(cacheKey) || fallbackCopy;
-    const katrinaConfig = isKatrinaPopupFlow() ? getKatrinaPopupConfig(qNum) : null;
-
-    if (katrinaConfig) {
-      preloadKatrinaPopupAssets();
-    }
 
     document.querySelectorAll(".psyq-overlay[data-question-warning='1']").forEach((el) => el.remove());
 
@@ -3883,25 +3838,7 @@ const StressTriggers = (() => {
     overlay.innerHTML = `
       <div class="psyq-card psyq-card--warning psyq-card--warning-slow psyq-card--minimal" id="psyqCard">
         <button class="psyq-close psyq-close--minimal" id="psyqClose" type="button" aria-label="Close popup">×</button>
-        ${katrinaConfig ? `
-          <div class="psyq-warning-layout psyq-warning-layout--with-media" id="psyqWarningLayout">
-            <div class="psyq-warning-media-wrap" id="psyqWarningMediaWrap">
-              <img
-                class="psyq-warning-media"
-                id="psyqWarningMedia"
-                src="${katrinaConfig.src}"
-                alt="${escapeHTML(katrinaConfig.alt)}"
-                loading="eager"
-                decoding="async"
-              />
-            </div>
-            <div class="psyq-warning-copy">
-              <p class="psyq-reflection" id="psyqReflection"></p>
-            </div>
-          </div>
-        ` : `
-          <p class="psyq-reflection" id="psyqReflection"></p>
-        `}
+        <p class="psyq-reflection" id="psyqReflection"></p>
       </div>
     `;
 
@@ -3910,20 +3847,8 @@ const StressTriggers = (() => {
 
     const reflEl = overlay.querySelector("#psyqReflection");
     const closeBtn = overlay.querySelector("#psyqClose");
-    const mediaEl = overlay.querySelector("#psyqWarningMedia");
 
-    if (reflEl) {
-      reflEl.textContent = katrinaConfig?.text || resolvedCopy.headline || fallbackCopy.headline;
-    }
-    mediaEl?.addEventListener("error", () => {
-      const fallbackSrc = katrinaConfig?.fallbackSrc;
-      if (fallbackSrc && mediaEl.dataset.fallbackApplied !== "1" && mediaEl.src !== new URL(fallbackSrc, window.location.origin).href) {
-        mediaEl.dataset.fallbackApplied = "1";
-        mediaEl.src = fallbackSrc;
-        return;
-      }
-      mediaEl.src = "/katrina/k1.jpg";
-    });
+    if (reflEl) reflEl.textContent = resolvedCopy.headline || fallbackCopy.headline;
 
     closeBtn?.addEventListener("click", () => dismissPsyqOverlay(overlay, onComplete));
   }
@@ -9291,7 +9216,6 @@ async function startSessionFlow() {
 
     lastAnswerEcho = text;
     sessionInitialQuery = text;
-    preloadKatrinaPopupAssets();
     questionWarningCopyCache = new Map();
     questionWarningCopyPromises = new Map();
 
