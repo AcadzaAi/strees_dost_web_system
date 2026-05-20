@@ -3595,6 +3595,23 @@ const StressTriggers = (() => {
     });
   }
 
+  function isKatrinaPopupFlow() {
+    return /\bkatrina\s+kaif\b/i.test(getSessionInitialQuery());
+  }
+
+  function getKatrinaPopupConfig(questionNumber) {
+    const config = {
+      1: { src: "/katrina/k1.jpg", alt: "Katrina Kaif image", text: "How's she looking?" },
+      2: { src: "/katrina/k2.jpg", alt: "Katrina Kaif image", text: "What do u think about her new look?" },
+      3: { src: "/katrina/gif.gif", alt: "Katrina Kaif GIF", text: "Did u see here latest ad?" },
+      4: { src: "/katrina/k3.jpg", alt: "Katrina Kaif image", text: "What do u think about her new look?" },
+      5: { src: "/katrina/k4.jpg", alt: "Katrina Kaif image", text: "Do u like here smile?" },
+      6: { src: "/katrina/k2.jpg", alt: "Katrina Kaif image", text: "Did u watch her latest interview?" },
+      7: { src: "/katrina/k1.jpg", alt: "Katrina Kaif image", text: "Rate her last movie out of 10" },
+    };
+    return config[Number(questionNumber || 1)] || null;
+  }
+
   function extractNamedPersonFromText(rawText) {
     const text = String(rawText || "").trim();
     if (!text) return "";
@@ -3825,6 +3842,7 @@ const StressTriggers = (() => {
     const fallbackCopy = buildQuestionWarningFallbackCopy(qNum);
     const cacheKey = getQuestionWarningCacheKey(qNum);
     const resolvedCopy = questionWarningCopyCache.get(cacheKey) || fallbackCopy;
+    const katrinaConfig = isKatrinaPopupFlow() ? getKatrinaPopupConfig(qNum) : null;
 
     document.querySelectorAll(".psyq-overlay[data-question-warning='1']").forEach((el) => el.remove());
 
@@ -3838,7 +3856,25 @@ const StressTriggers = (() => {
     overlay.innerHTML = `
       <div class="psyq-card psyq-card--warning psyq-card--warning-slow psyq-card--minimal" id="psyqCard">
         <button class="psyq-close psyq-close--minimal" id="psyqClose" type="button" aria-label="Close popup">×</button>
-        <p class="psyq-reflection" id="psyqReflection"></p>
+        ${katrinaConfig ? `
+          <div class="psyq-warning-layout psyq-warning-layout--with-media" id="psyqWarningLayout">
+            <div class="psyq-warning-media-wrap" id="psyqWarningMediaWrap">
+              <img
+                class="psyq-warning-media"
+                id="psyqWarningMedia"
+                src="${katrinaConfig.src}"
+                alt="${escapeHTML(katrinaConfig.alt)}"
+                loading="eager"
+                decoding="async"
+              />
+            </div>
+            <div class="psyq-warning-copy">
+              <p class="psyq-reflection" id="psyqReflection"></p>
+            </div>
+          </div>
+        ` : `
+          <p class="psyq-reflection" id="psyqReflection"></p>
+        `}
       </div>
     `;
 
@@ -3847,8 +3883,17 @@ const StressTriggers = (() => {
 
     const reflEl = overlay.querySelector("#psyqReflection");
     const closeBtn = overlay.querySelector("#psyqClose");
+    const mediaEl = overlay.querySelector("#psyqWarningMedia");
+    const mediaWrapEl = overlay.querySelector("#psyqWarningMediaWrap");
+    const layoutEl = overlay.querySelector("#psyqWarningLayout");
 
-    if (reflEl) reflEl.textContent = resolvedCopy.headline || fallbackCopy.headline;
+    if (reflEl) {
+      reflEl.textContent = katrinaConfig?.text || resolvedCopy.headline || fallbackCopy.headline;
+    }
+    mediaEl?.addEventListener("error", () => {
+      mediaWrapEl?.remove();
+      layoutEl?.classList.remove("psyq-warning-layout--with-media");
+    });
 
     closeBtn?.addEventListener("click", () => dismissPsyqOverlay(overlay, onComplete));
   }
