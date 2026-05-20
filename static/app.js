@@ -3613,6 +3613,19 @@ const StressTriggers = (() => {
     return mediaByQuestion[Number(questionNumber || 1)] || null;
   }
 
+  function getKatrinaPopupHeadline(questionNumber) {
+    const textByQuestion = {
+      1: "How's she looking?",
+      2: "Do u like here smile?",
+      3: "What do u think about her new look?",
+      4: "How much would u rate her last movie?",
+      5: "Did u see her latest song?",
+      6: "Did u see here latest ad?",
+      7: "Did u watch her latest interview?",
+    };
+    return textByQuestion[Number(questionNumber || 1)] || "";
+  }
+
   function extractNamedPersonFromText(rawText) {
     const text = String(rawText || "").trim();
     if (!text) return "";
@@ -3844,6 +3857,7 @@ const StressTriggers = (() => {
     const cacheKey = getQuestionWarningCacheKey(qNum);
     const resolvedCopy = questionWarningCopyCache.get(cacheKey) || fallbackCopy;
     const mediaAsset = shouldShowKatrinaPopupMedia() ? getKatrinaPopupMedia(qNum) : null;
+    const katrinaHeadline = shouldShowKatrinaPopupMedia() ? getKatrinaPopupHeadline(qNum) : "";
 
     document.querySelectorAll(".psyq-overlay[data-question-warning='1']").forEach((el) => el.remove());
 
@@ -3885,7 +3899,7 @@ const StressTriggers = (() => {
     const mediaEl = overlay.querySelector("#psyqWarningMedia");
     const mediaWrapEl = overlay.querySelector("#psyqWarningMediaWrap");
 
-    if (reflEl) reflEl.textContent = resolvedCopy.headline || fallbackCopy.headline;
+    if (reflEl) reflEl.textContent = katrinaHeadline || resolvedCopy.headline || fallbackCopy.headline;
     mediaEl?.addEventListener("error", () => {
       mediaWrapEl?.remove();
       overlay.querySelector(".psyq-warning-layout")?.classList.remove("psyq-warning-layout--with-media");
