@@ -3595,37 +3595,6 @@ const StressTriggers = (() => {
     });
   }
 
-  function shouldShowKatrinaPopupMedia() {
-    const initialText = getSessionInitialQuery();
-    return /\bkatrina\s+kaif\b/i.test(initialText);
-  }
-
-  function getKatrinaPopupMedia(questionNumber) {
-    const mediaByQuestion = {
-      1: { src: "/katrina/k1.jpg", alt: "Katrina Kaif portrait", kind: "image" },
-      2: { src: "/katrina/k2.jpg", alt: "Katrina Kaif close-up", kind: "image" },
-      3: { src: "/katrina/gif.gif", alt: "Katrina Kaif animated reaction", kind: "gif" },
-      4: { src: encodeURI("/katrina/katrina kaif GIF.gif"), alt: "Katrina Kaif animated welcome", kind: "gif" },
-      5: { src: "/katrina/k4.jpg", alt: "Katrina Kaif still image", kind: "image" },
-      6: { src: "/katrina/gif.gif", alt: "Katrina Kaif animated reaction", kind: "gif" },
-      7: { src: encodeURI("/katrina/katrina kaif GIF.gif"), alt: "Katrina Kaif animated welcome", kind: "gif" },
-    };
-    return mediaByQuestion[Number(questionNumber || 1)] || null;
-  }
-
-  function getKatrinaPopupHeadline(questionNumber) {
-    const textByQuestion = {
-      1: "How's she looking?",
-      2: "Do u like here smile?",
-      3: "What do u think about her new look?",
-      4: "How much would u rate her last movie?",
-      5: "Did u see her latest song?",
-      6: "Did u see here latest ad?",
-      7: "Did u watch her latest interview?",
-    };
-    return textByQuestion[Number(questionNumber || 1)] || "";
-  }
-
   function extractNamedPersonFromText(rawText) {
     const text = String(rawText || "").trim();
     if (!text) return "";
@@ -3856,8 +3825,6 @@ const StressTriggers = (() => {
     const fallbackCopy = buildQuestionWarningFallbackCopy(qNum);
     const cacheKey = getQuestionWarningCacheKey(qNum);
     const resolvedCopy = questionWarningCopyCache.get(cacheKey) || fallbackCopy;
-    const mediaAsset = shouldShowKatrinaPopupMedia() ? getKatrinaPopupMedia(qNum) : null;
-    const katrinaHeadline = shouldShowKatrinaPopupMedia() ? getKatrinaPopupHeadline(qNum) : "";
 
     document.querySelectorAll(".psyq-overlay[data-question-warning='1']").forEach((el) => el.remove());
 
@@ -3871,23 +3838,7 @@ const StressTriggers = (() => {
     overlay.innerHTML = `
       <div class="psyq-card psyq-card--warning psyq-card--warning-slow psyq-card--minimal" id="psyqCard">
         <button class="psyq-close psyq-close--minimal" id="psyqClose" type="button" aria-label="Close popup">×</button>
-        <div class="psyq-warning-layout${mediaAsset ? " psyq-warning-layout--with-media" : ""}">
-          ${mediaAsset ? `
-            <div class="psyq-warning-media-wrap" id="psyqWarningMediaWrap">
-              <img
-                class="psyq-warning-media psyq-warning-media--${mediaAsset.kind}"
-                id="psyqWarningMedia"
-                src="${mediaAsset.src}"
-                alt="${escapeHTML(mediaAsset.alt)}"
-                loading="eager"
-                decoding="async"
-              />
-            </div>
-          ` : ""}
-          <div class="psyq-warning-copy">
-            <p class="psyq-reflection" id="psyqReflection"></p>
-          </div>
-        </div>
+        <p class="psyq-reflection" id="psyqReflection"></p>
       </div>
     `;
 
@@ -3896,14 +3847,8 @@ const StressTriggers = (() => {
 
     const reflEl = overlay.querySelector("#psyqReflection");
     const closeBtn = overlay.querySelector("#psyqClose");
-    const mediaEl = overlay.querySelector("#psyqWarningMedia");
-    const mediaWrapEl = overlay.querySelector("#psyqWarningMediaWrap");
 
-    if (reflEl) reflEl.textContent = katrinaHeadline || resolvedCopy.headline || fallbackCopy.headline;
-    mediaEl?.addEventListener("error", () => {
-      mediaWrapEl?.remove();
-      overlay.querySelector(".psyq-warning-layout")?.classList.remove("psyq-warning-layout--with-media");
-    });
+    if (reflEl) reflEl.textContent = resolvedCopy.headline || fallbackCopy.headline;
 
     closeBtn?.addEventListener("click", () => dismissPsyqOverlay(overlay, onComplete));
   }
