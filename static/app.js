@@ -887,10 +887,10 @@ async function buildDevilBriefPage(passedInitialText, passedHistory) {
 
   // Show the "Specifically" section and fill problem points
   const insightSubEl = document.querySelector(".devil-insight-sub");
-  if (insightSubEl) insightSubEl.style.display = "block";
+  if (insightSubEl) insightSubEl.style.display = problemPoints.length ? "block" : "none";
   
   if (devilProblems) {
-    devilProblems.style.display = "block";
+    devilProblems.style.display = problemPoints.length ? "block" : "none";
     devilProblems.innerHTML = "";
     problemPoints.slice(0, 2).forEach((line) => {
       const li = document.createElement("li");
@@ -9464,7 +9464,7 @@ async function handleCompletion() {
       if (devilHint) devilHint.textContent = "";
     } catch (e) {
       console.warn("[handleCompletion] devil brief build failed:", e);
-      if (devilHint) devilHint.textContent = "Brief unavailable right now. You can still continue.";
+      if (devilHint) devilHint.textContent = "";
     }
 
     await popupPrefetchPromise;
@@ -9476,7 +9476,7 @@ async function handleCompletion() {
     console.error("[handleCompletion] error during completion flow:", err);
     window.__academicDecision = null;
     showStage("devil");
-    if (devilHint) devilHint.textContent = "Something failed while preparing the brief. You can still continue.";
+    if (devilHint) devilHint.textContent = "";
   }
 }
 
