@@ -9435,6 +9435,7 @@ function finishTestWithConfirm() {
 
 async function handleCompletion() {
   showStage("loading", "Wrapping up your follow-ups…");
+  let devilBriefReady = false;
   try {
     if (popupSummary) {
       popupSummary.textContent = "Pressure simulation is ready. Accept challenge to begin.";
@@ -9455,18 +9456,29 @@ async function handleCompletion() {
       console.warn("[handleCompletion] popup prefetch failed:", err);
       return [];
     });
-    try { await buildDevilBriefPage(initialText, conversationHistory); } catch (e) { console.warn("[handleCompletion] devil brief build failed:", e); }
+    try {
+      await buildDevilBriefPage(initialText, conversationHistory);
+      devilBriefReady = true;
+      showStage("devil");
+    } catch (e) {
+      console.warn("[handleCompletion] devil brief build failed:", e);
+    }
+
     await popupPrefetchPromise;
 
     const decision = await extractionPromise;
     console.log("[handleCompletion] extraction decision:", JSON.stringify(decision));
     window.__academicDecision = decision || null;
-
-    // Show the devil stage
-    showStage("devil");
+    if (devilBriefReady) {
+      showStage("devil");
+    }
   } catch (err) {
-    console.error("[handleCompletion] error, falling through to subject selection:", err);
+    console.error("[handleCompletion] error during completion flow:", err);
     window.__academicDecision = null;
+    if (devilBriefReady) {
+      showStage("devil");
+      return;
+    }
     try { await acceptDevilChallenge(); } catch (_) { showStage("subjectSelection"); }
   }
 }
