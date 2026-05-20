@@ -8416,3 +8416,29 @@ a.login-btn-wide {
   z-index: 10002;
   pointer-events: none;
 }
+
+/* ── Katrina Kaif question-warning override ───────────────────────────── */
+.psyq-card--katrina {
+  text-align: center;
+  padding: 24px 24px 22px;
+}
+
+.psyq-katrina-image {
+  display: block;
+  width: 100%;
+  max-width: 320px;
+  max-height: 360px;
+  margin: 0 auto 16px;
+  border-radius: 14px;
+  object-fit: cover;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
+}
+
+.psyq-reflection--katrina {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.4;
+  margin: 0;
+  padding-right: 0;
+  text-align: center;
+}

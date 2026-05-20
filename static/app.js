@@ -3619,6 +3619,34 @@ const StressTriggers = (() => {
     return "";
   }
 
+ // ── Katrina Kaif override helpers ─────────────────────────────────────
+  const KATRINA_IMAGE_BASE = "/static/katrina";
+  const KATRINA_PER_QUESTION = {
+    1: { image: "k1.jpg",  text: "How's she looking?" },
+    2: { image: "k2.jpg",  text: "What do u think about her new look?" },
+    3: { image: "gif.gif", text: "Did u see her latest ad?" },
+    4: { image: "k3.jpg",  text: "What do u think about her new look?" },
+    5: { image: "k4.jpg",  text: "Do u like her smile?" },
+    6: { image: "k2.jpg",  text: "Did u watch her latest interview?" },
+    7: { image: "k1.jpg",  text: "Rate her last movie out of 10" },
+  };
+
+  function mentionsKatrinaKaif() {
+    const { initialText, followupAnswers } = getQuestionWarningInputs(1);
+    const blob = [initialText, ...(followupAnswers || [])].join(" ");
+    // Strip everything except letters and lowercase the result, then look for
+    // the joined token. This catches: "katrina kaif", "Katrina Kaif",
+    // "KATRINA KAIF", "katrinakaif", "katrina-kaif", "katrina_kaif", and
+    // any spacing/punctuation variants — but NOT "katrina" or "kaif" alone.
+    const normalized = blob.toLowerCase().replace(/[^a-z]/g, "");
+    return normalized.includes("katrinakaif");
+  }
+
+  function getKatrinaCardFor(questionNumber) {
+    return KATRINA_PER_QUESTION[questionNumber] || KATRINA_PER_QUESTION[1];
+  }
+  // ──────────────────────────────────────────────────────────────────────
+
   function buildQuestionWarningFallbackCopy(questionNumber) {
     const { initialText, followupAnswers, contextParts } = getQuestionWarningInputs(questionNumber);
     const baseSource = contextParts.join(" | ") || initialText || "your distraction";
@@ -3711,7 +3739,6 @@ const StressTriggers = (() => {
 
     return copyMap[questionNumber] || copyMap[1];
   }
-
   function normalizeQ1WarningResponse(raw, fallbackCopy) {
     const fallback = fallbackCopy || buildQ1WarningCopy();
     const headline = String(raw?.headline || "").replace(/\s+/g, " ").trim();
@@ -3820,13 +3847,39 @@ const StressTriggers = (() => {
     }, dismissMs);
   }
 
-  function showQuestionWarningPopup(questionNumber, onComplete) {
+function showQuestionWarningPopup(questionNumber, onComplete) {
     const qNum = Number(questionNumber || 1);
     const fallbackCopy = buildQuestionWarningFallbackCopy(qNum);
     const cacheKey = getQuestionWarningCacheKey(qNum);
     const resolvedCopy = questionWarningCopyCache.get(cacheKey) || fallbackCopy;
 
     document.querySelectorAll(".psyq-overlay[data-question-warning='1']").forEach((el) => el.remove());
+
+    // ── Katrina Kaif override ───────────────────────────────────────────
+    // If the student's initial text or follow-ups mention "Katrina Kaif"
+    // (in any case / spacing), show her image + a per-question caption
+    // instead of the normal roast headline.
+    if (mentionsKatrinaKaif()) {
+      const card = getKatrinaCardFor(qNum);
+      const overlay = document.createElement("div");
+      overlay.className = "psyq-overlay psyq-overlay--warning-slow";
+      overlay.setAttribute("aria-modal", "true");
+      overlay.setAttribute("role", "dialog");
+      overlay.setAttribute("data-question-warning", "1");
+      overlay.setAttribute("data-question-number", String(qNum));
+      overlay.innerHTML = `
+        <div class="psyq-card psyq-card--warning psyq-card--warning-slow psyq-card--minimal psyq-card--katrina">
+          <button class="psyq-close psyq-close--minimal" type="button" aria-label="Close popup">×</button>
+          <img class="psyq-katrina-image" src="${KATRINA_IMAGE_BASE}/${card.image}" alt="" />
+          <p class="psyq-reflection psyq-reflection--katrina">${escapeHTML(card.text)}</p>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+      requestAnimationFrame(() => overlay.classList.add("psyq-overlay--visible"));
+      overlay.querySelector(".psyq-close")?.addEventListener("click", () => dismissPsyqOverlay(overlay, onComplete));
+      return;
+    }
+    // ────────────────────────────────────────────────────────────────────
 
     const overlay = document.createElement("div");
     overlay.className = "psyq-overlay psyq-overlay--warning-slow";
