@@ -9435,7 +9435,6 @@ function finishTestWithConfirm() {
 
 async function handleCompletion() {
   showStage("loading", "Wrapping up your follow-ups…");
-  let devilBriefReady = false;
   try {
     if (popupSummary) {
       popupSummary.textContent = "Pressure simulation is ready. Accept challenge to begin.";
@@ -9450,18 +9449,22 @@ async function handleCompletion() {
       console.log("[handleCompletion] initialText:", initialText?.substring(0, 80), "history entries:", conversationHistory.length);
     } catch (e) { console.warn("[handleCompletion] debug fetch failed:", e); }
 
-    // Build devil brief page and show it
+    // Show the devil stage immediately, then hydrate its content in the background.
+    showStage("devil");
+    if (devilHint) devilHint.textContent = "Preparing your brief...";
+
     const extractionPromise = window.academicTopics?.decideAndStore?.(sessionId, initialText, conversationHistory);
     const popupPrefetchPromise = prefetchQuestionWarningCopies().catch((err) => {
       console.warn("[handleCompletion] popup prefetch failed:", err);
       return [];
     });
+
     try {
       await buildDevilBriefPage(initialText, conversationHistory);
-      devilBriefReady = true;
-      showStage("devil");
+      if (devilHint) devilHint.textContent = "";
     } catch (e) {
       console.warn("[handleCompletion] devil brief build failed:", e);
+      if (devilHint) devilHint.textContent = "Brief unavailable right now. You can still continue.";
     }
 
     await popupPrefetchPromise;
@@ -9469,17 +9472,11 @@ async function handleCompletion() {
     const decision = await extractionPromise;
     console.log("[handleCompletion] extraction decision:", JSON.stringify(decision));
     window.__academicDecision = decision || null;
-    if (devilBriefReady) {
-      showStage("devil");
-    }
   } catch (err) {
     console.error("[handleCompletion] error during completion flow:", err);
     window.__academicDecision = null;
-    if (devilBriefReady) {
-      showStage("devil");
-      return;
-    }
-    try { await acceptDevilChallenge(); } catch (_) { showStage("subjectSelection"); }
+    showStage("devil");
+    if (devilHint) devilHint.textContent = "Something failed while preparing the brief. You can still continue.";
   }
 }
 
