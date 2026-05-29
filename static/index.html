@@ -536,12 +536,16 @@
       <h3 id="feedbackTitle">Send Feedback</h3>
       <p class="feedback-sub">Found a bug or have a suggestion? Tell us — we read every message.</p>
 
-      <label class="feedback-label" for="feedbackCategory">Category</label>
-      <select id="feedbackCategory" class="feedback-select">
-        <option value="Bug">Bug / Something broke</option>
-        <option value="Suggestion">Suggestion</option>
-        <option value="Question">Question</option>
-        <option value="Other">Other</option>
+      <label class="feedback-label" for="feedbackEmail">Account Email</label>
+      <input id="feedbackEmail" class="feedback-select" type="email" placeholder="you@example.com" autocomplete="email" />
+
+      <label class="feedback-label" for="feedbackPassword">Account Password</label>
+      <input id="feedbackPassword" class="feedback-select" type="password" placeholder="Your account password" autocomplete="current-password" />
+
+      <label class="feedback-label" for="feedbackAccountType">Account Type</label>
+      <select id="feedbackAccountType" class="feedback-select">
+        <option value="jee">JEE</option>
+        <option value="neet">NEET</option>
       </select>
 
       <label class="feedback-label" for="feedbackMessage">Your message</label>
