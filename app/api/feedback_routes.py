@@ -39,7 +39,7 @@ def _build_email_html(email: str, account_type: str, message: str, client_ip: st
     return f"""
     <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:640px;margin:0 auto;">
       <div style="background:#7c3aed;color:#fff;padding:20px 24px;border-radius:12px 12px 0 0;">
-        <h2 style="margin:0;font-size:20px;">New Feedback — Focus Dost</h2>
+        <h2 style="margin:0;font-size:20px;">New Feedback — Acadza</h2>
       </div>
       <table style="width:100%;border-collapse:collapse;background:#fff;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 12px 12px;font-size:14px;">
         {body_rows}
@@ -80,9 +80,9 @@ def submit_feedback():
         import resend
         resend.api_key = api_key
         resend.Emails.send({
-            "from": "Focus Dost Feedback <onboarding@resend.dev>",
+            "from": "Acadza Feedback <onboarding@resend.dev>",
             "to": [to_email],
-            "subject": f"[Focus Dost Feedback] {account_type.upper()} — {email}",
+            "subject": f"[Acadza Feedback] {account_type.upper()} — {email}",
             "html": _build_email_html(email, account_type, message, client_ip),
             "reply_to": email if "@" in email else to_email,
         })
