@@ -349,20 +349,31 @@ You are given:
 YOUR ONLY JOB:
 Generate EXACTLY 1 follow-up question that goes one layer deeper than what they just said and helps identify a concrete weak point.
 
+CRITICAL RULE — NEVER RESTATE THE OBVIOUS:
+If the student already made their problem clear (e.g. "tamanna bhatiya reels", "I watch movies", "I play PUBG"), 
+DO NOT ask "How does X affect your studies?" — that's obvious and adds no value.
+Instead, dig DEEPER:
+- Ask about WHEN/HOW MUCH: "How many hours a day do you spend on this?"
+- Ask about TRIGGER: "What usually makes you pick up your phone — boredom, stress, or habit?"
+- Ask about AWARENESS: "Do you realize mid-session that you've lost time, or only after?"
+- Ask about PATTERN: "Is this more of a night thing or does it happen during study hours too?"
+- Ask about IMPACT SPECIFICS: "Which subject or topic suffers the most because of this?"
+
 RULES:
 - Scan conversation_so_far and student_answers_so_far first.
   If a slot (name / subject / app / number) was already answered — do NOT ask for it again.
 - Use their EXACT words, not synonyms.
+- CRITICAL: If the student mentions ANY specific entity (celebrity name, movie name, app name, game name, person name, show name), you MUST reference that EXACT entity in your follow-up question. NEVER drop or ignore specific names they mentioned.
+  Example: If they said "Alia Bhatt and movies" → your question MUST mention "Alia Bhatt" specifically, not just "movies"
+  Example: If they said "tamanna bhatiya reels" → your question MUST mention "tamanna bhatiya" or "reels" specifically
+  Example: If they said "PUBG and Instagram" → your question MUST mention BOTH "PUBG" and "Instagram"
 - Match the student's language style:
         if input is English, ask in English;
         if input is Hinglish, ask in simple Hinglish.
-- Avoid mixing language unnecessarily in one question.
 - Ask about ONE actionable weak-point dimension at a time:
         trigger, study habit, concentration drop, time-planning gap, confidence dip, avoidance pattern, social pressure impact, or recovery strategy.
 - Keep it specific enough that the answer is concrete (person, subject, app, chapter, time-window, event, or behavior).
 - Keep the tone friendly and human; the question should feel personally relevant.
-- Prefer one gentle reflective twist that makes the student pause and think, without sounding scary or too personal.
-- If a person is involved, keep relational context and identity clarity in the same follow-up.
 - 9–18 words. Ends with "?".
 - Avoid generic prompts like "tell me more" and avoid repeating anything in already_asked.
 - Use short, plain words. Avoid long or heavy sentence structures.

@@ -849,22 +849,8 @@ async function buildDevilBriefPage(passedInitialText, passedHistory) {
       followup_answers: effectiveFollowups,
       initial_text: initialText,
       planned_test: planned,
-    }, { timeoutMs: 15000 });
+    }, { timeoutMs: 10000 });
     console.log("[buildDevilBriefPage] Response source:", brief?.source, "core_issue:", brief?.core_issue);
-    
-    // If backend returned fallback, retry once
-    if (brief?.source === "fallback") {
-      console.warn("[buildDevilBriefPage] Got fallback response, retrying...");
-      const retry = await postJSON("/api/triggers/devil-brief", {
-        followup_answers: effectiveFollowups,
-        initial_text: initialText,
-        planned_test: planned,
-      }, { timeoutMs: 15000 });
-      if (retry?.source === "ai") {
-        brief = retry;
-        console.log("[buildDevilBriefPage] Retry succeeded with AI response");
-      }
-    }
   } catch (err) {
     console.warn("[buildDevilBriefPage] AI call failed:", err);
     brief = null;
@@ -3496,6 +3482,7 @@ const StressTriggers = (() => {
   }
 
   function extractLiteralPopupTopic(rawInitial, rawFollowup, fallbackTopic) {
+    const NOISE = new Set(["hello","hi","hey","ok","okay","yes","no","nothing","idk","fine","good","bad","help","please","thanks","test","testing","hii","yo","sup"]);
     const clean = (value) =>
       String(value || "")
         .replace(/\s+/g, " ")
@@ -3508,6 +3495,9 @@ const StressTriggers = (() => {
 
     for (const candidate of candidates) {
       const words = candidate.split(/\s+/).filter(Boolean);
+      // Skip noise words and very short inputs
+      if (words.length === 1 && NOISE.has(words[0].toLowerCase())) continue;
+      if (candidate.length < 4) continue;
       if (words.length >= 1 && words.length <= 8 && candidate.length <= 80) {
         return candidate;
       }
@@ -3598,16 +3588,44 @@ const StressTriggers = (() => {
   function extractNamedPersonFromText(rawText) {
     const text = String(rawText || "").trim();
     if (!text) return "";
+    
+    // Common noise words that are NOT person/entity names
+    const NOISE_WORDS = new Set([
+      "hello", "hi", "hey", "ok", "okay", "yes", "no", "nothing", "idk",
+      "fine", "good", "bad", "help", "please", "thanks", "study", "studies",
+      "focus", "distract", "problem", "issue", "stress", "exam", "test",
+      "phone", "mobile", "internet", "time", "day", "night", "morning",
+      "always", "never", "sometimes", "often", "just", "only", "really",
+      "very", "too", "much", "many", "lot", "lots", "bit", "little",
+    ]);
+    
     const cleaned = text
-      .replace(/\b(?:reels?|shorts?|movies?|movie|videos?|video|songs?|edits?|photos?|pics?|images?|and|with|of|about|on|watching|watch)\b/gi, " ")
+      .replace(/\b(?:reels?|shorts?|movies?|movie|videos?|video|songs?|edits?|photos?|pics?|images?|and|with|of|about|on|watching|watch|i|my|me|the|a|an|is|are|was|were|be|been|being|have|has|had|do|does|did|will|would|could|should|may|might|can|get|got|getting|like|likes|liked|love|loves|loved)\b/gi, " ")
       .replace(/\s+/g, " ")
       .trim();
+    
     if (!cleaned) return "";
+    
     const parts = cleaned.split(/\s+/).filter(Boolean);
-    if (parts.length >= 1 && parts.length <= 4) {
-      return parts.join(" ");
-    }
-    return "";
+    
+    // Must be 1-4 words, each word must start with uppercase (proper noun) or be a known entity
+    // Single lowercase common words are NOT person names
+    if (parts.length < 1 || parts.length > 4) return "";
+    
+    // Check if it looks like a proper noun (at least one word starts with uppercase in original)
+    const hasProperNoun = parts.some(p => /^[A-Z]/.test(p));
+    const allLower = parts.every(p => p === p.toLowerCase());
+    
+    // If all lowercase and single word, check it's not a noise word
+    if (allLower && parts.length === 1 && NOISE_WORDS.has(parts[0].toLowerCase())) return "";
+    
+    // If all lowercase and short (1-2 chars), skip
+    if (allLower && cleaned.length <= 3) return "";
+    
+    // Require at least 4 chars total to be meaningful
+    if (cleaned.length < 4) return "";
+    
+    return parts.join(" ");
   }
 
   function detectMediaCue(rawText) {
@@ -3619,31 +3637,92 @@ const StressTriggers = (() => {
     return "";
   }
 
- // ── Katrina Kaif override helpers ─────────────────────────────────────
-const KATRINA_IMAGE_BASE = "/katrina";
-  const KATRINA_PER_QUESTION = {
-    1: { image: "k1.jpg",  text: "How's she looking?" },
-    2: { image: "k2.jpg",  text: "What do u think about her new look?" },
-    3: { image: "gif.gif", text: "Did u see her latest ad?" },
-    4: { image: "k3.jpg",  text: "What do u think about her new look?" },
-    5: { image: "k4.jpg",  text: "Do u like her smile?" },
-    6: { image: "k2.jpg",  text: "Did u watch her latest interview?" },
-    7: { image: "k1.jpg",  text: "Rate her last movie out of 10" },
-  };
+ // ── Distraction image helpers ─────────────────────────────────────
+  const _imageCache = new Map();       // cacheKey -> url string | null
+  const _imageFetching = new Map();    // cacheKey -> Promise<string|null>
 
-  function mentionsKatrinaKaif() {
-    const { initialText, followupAnswers } = getQuestionWarningInputs(1);
-    const blob = [initialText, ...(followupAnswers || [])].join(" ");
-    // Strip everything except letters and lowercase the result, then look for
-    // the joined token. This catches: "katrina kaif", "Katrina Kaif",
-    // "KATRINA KAIF", "katrinakaif", "katrina-kaif", "katrina_kaif", and
-    // any spacing/punctuation variants — but NOT "katrina" or "kaif" alone.
-    const normalized = blob.toLowerCase().replace(/[^a-z]/g, "");
-    return normalized.includes("katrinakaif");
+  function _makeImagePayload(questionNumber, overrideText, overrideFollowups) {
+    return {
+      initial_text: overrideText || getSessionInitialQuery(),
+      followup_answers: overrideFollowups || (Array.isArray(state.followupAnswers)
+        ? state.followupAnswers.map(f => String(f?.answer || "").trim()).filter(Boolean)
+        : []),
+      question_number: questionNumber,
+    };
   }
 
-  function getKatrinaCardFor(questionNumber) {
-    return KATRINA_PER_QUESTION[questionNumber] || KATRINA_PER_QUESTION[1];
+  async function fetchDistractionImage(questionNumber, overrideText, overrideFollowups) {
+    const cacheKey = `img_q${questionNumber}`;
+    
+    // Already resolved
+    if (_imageCache.has(cacheKey)) {
+      console.log(`[img] Q${questionNumber} cache hit:`, _imageCache.get(cacheKey) ? 'has url' : 'null');
+      return _imageCache.get(cacheKey);
+    }
+    
+    // Already in-flight — return same promise
+    if (_imageFetching.has(cacheKey)) {
+      console.log(`[img] Q${questionNumber} already in-flight, reusing promise`);
+      return _imageFetching.get(cacheKey);
+    }
+    
+    const payload = _makeImagePayload(questionNumber, overrideText, overrideFollowups);
+    console.log(`[img] Q${questionNumber} starting fetch — initial_text: "${payload.initial_text?.substring(0,40)}", followups: ${payload.followup_answers?.length}`);
+    
+    if (!payload.initial_text && !payload.followup_answers.length) {
+      console.warn(`[img] Q${questionNumber} no context — skipping`);
+      _imageCache.set(cacheKey, null);
+      return null;
+    }
+    
+    // Start polling promise
+    const promise = (async () => {
+      const maxAttempts = 45;
+      for (let i = 0; i < maxAttempts; i++) {
+        try {
+          const data = await postJSON("/api/triggers/distraction-image", payload, { timeoutMs: 5000 });
+          console.log(`[img] Q${questionNumber} poll ${i+1}: status=${data?.status} url=${data?.image_url ? data.image_url.substring(0,60) : 'null'}`);
+          if (data?.status === "ready") {
+            const url = data?.image_url || null;
+            _imageCache.set(cacheKey, url);
+            _imageFetching.delete(cacheKey);
+            return url;
+          }
+          if (data?.status === "pending") {
+            await new Promise(r => setTimeout(r, 1000));
+            continue;
+          }
+          console.warn(`[img] Q${questionNumber} unexpected status: ${data?.status}`);
+          _imageCache.set(cacheKey, null);
+          _imageFetching.delete(cacheKey);
+          return null;
+        } catch (err) {
+          console.error(`[img] Q${questionNumber} poll error:`, err.message);
+          _imageCache.set(cacheKey, null);
+          _imageFetching.delete(cacheKey);
+          return null;
+        }
+      }
+      console.warn(`[img] Q${questionNumber} timed out after ${maxAttempts}s`);
+      _imageCache.set(cacheKey, null);
+      _imageFetching.delete(cacheKey);
+      return null;
+    })();
+    
+    _imageFetching.set(cacheKey, promise);
+    return promise;
+  }
+
+  function prefetchDistractionImage(initialText, followupAnswers) {
+    console.log(`[img] prefetch starting — text: "${(initialText||'').substring(0,40)}", followups: ${(followupAnswers||[]).length}`);
+    for (let q = 1; q <= 3; q++) {
+      const cacheKey = `img_q${q}`;
+      if (_imageCache.has(cacheKey) || _imageFetching.has(cacheKey)) {
+        console.log(`[img] Q${q} already fetched/in-flight, skipping prefetch`);
+        continue;
+      }
+      fetchDistractionImage(q, initialText, followupAnswers);
+    }
   }
   // ──────────────────────────────────────────────────────────────────────
 
@@ -3847,7 +3926,7 @@ const KATRINA_IMAGE_BASE = "/katrina";
     }, dismissMs);
   }
 
-function showQuestionWarningPopup(questionNumber, onComplete) {
+async function showQuestionWarningPopup(questionNumber, onComplete) {
     const qNum = Number(questionNumber || 1);
     const fallbackCopy = buildQuestionWarningFallbackCopy(qNum);
     const cacheKey = getQuestionWarningCacheKey(qNum);
@@ -3855,32 +3934,25 @@ function showQuestionWarningPopup(questionNumber, onComplete) {
 
     document.querySelectorAll(".psyq-overlay[data-question-warning='1']").forEach((el) => el.remove());
 
-    // ── Katrina Kaif override ───────────────────────────────────────────
-    // If the student's initial text or follow-ups mention "Katrina Kaif"
-    // (in any case / spacing), show her image + a per-question caption
-    // instead of the normal roast headline.
-    if (mentionsKatrinaKaif()) {
-      const card = getKatrinaCardFor(qNum);
-      const overlay = document.createElement("div");
-      overlay.className = "psyq-overlay psyq-overlay--warning-slow";
-      overlay.setAttribute("aria-modal", "true");
-      overlay.setAttribute("role", "dialog");
-      overlay.setAttribute("data-question-warning", "1");
-      overlay.setAttribute("data-question-number", String(qNum));
-      overlay.innerHTML = `
-        <div class="psyq-card psyq-card--warning psyq-card--warning-slow psyq-card--minimal psyq-card--katrina">
-          <button class="psyq-close psyq-close--minimal" type="button" aria-label="Close popup">×</button>
-          <img class="psyq-katrina-image" src="${KATRINA_IMAGE_BASE}/${card.image}" alt="" />
-          <p class="psyq-reflection psyq-reflection--katrina">${escapeHTML(card.text)}</p>
-        </div>
-      `;
-      document.body.appendChild(overlay);
-      requestAnimationFrame(() => overlay.classList.add("psyq-overlay--visible"));
-      overlay.querySelector(".psyq-close")?.addEventListener("click", () => dismissPsyqOverlay(overlay, onComplete));
-      return;
+    // Get image — use cache, in-flight promise, or start fresh fetch
+    let imgUrl = null;
+    try {
+      const cachedKey = `img_q${qNum}`;
+      // Access via StressTriggers exported method
+      if (StressTriggers.getImageCache && StressTriggers.getImageCache(cachedKey) !== undefined) {
+        imgUrl = StressTriggers.getImageCache(cachedKey);
+        console.log(`[popup] Q${qNum} using cached image:`, imgUrl ? imgUrl.substring(0,60) : 'null');
+      } else {
+        console.log(`[popup] Q${qNum} image not in cache, fetching now`);
+        imgUrl = await StressTriggers.fetchDistractionImage(qNum);
+        console.log(`[popup] Q${qNum} fetch result:`, imgUrl ? imgUrl.substring(0,60) : 'null');
+      }
+    } catch(imgErr) {
+      console.warn(`[popup] Q${qNum} image error:`, imgErr.message);
+      imgUrl = null;
     }
-    // ────────────────────────────────────────────────────────────────────
 
+    console.log(`[popup] Q${qNum} FINAL imgUrl:`, imgUrl, '| will show image:', !!imgUrl);
     const overlay = document.createElement("div");
     overlay.className = "psyq-overlay psyq-overlay--warning-slow";
     overlay.setAttribute("aria-modal", "true");
@@ -3889,9 +3961,10 @@ function showQuestionWarningPopup(questionNumber, onComplete) {
     overlay.setAttribute("data-question-number", String(qNum));
 
     overlay.innerHTML = `
-      <div class="psyq-card psyq-card--warning psyq-card--warning-slow psyq-card--minimal" id="psyqCard">
+      <div class="psyq-card psyq-card--warning psyq-card--warning-slow psyq-card--minimal ${imgUrl ? 'psyq-card--katrina' : ''}" id="psyqCard">
         <button class="psyq-close psyq-close--minimal" id="psyqClose" type="button" aria-label="Close popup">×</button>
-        <p class="psyq-reflection" id="psyqReflection"></p>
+        ${imgUrl ? `<img class="psyq-katrina-image" src="${imgUrl}" alt="" onerror="console.error('[popup] Image failed to load:', this.src)" onload="console.log('[popup] Image loaded OK:', this.src.substring(0,60))" />` : "<!-- no image -->"}
+        <p class="psyq-reflection ${imgUrl ? 'psyq-reflection--katrina' : ''}" id="psyqReflection"></p>
       </div>
     `;
 
@@ -7438,7 +7511,26 @@ function showQuestionWarningPopup(questionNumber, onComplete) {
     console.log('[onQuestionRendered] Question ID:', question?.question_id);
     console.log('[onQuestionRendered] Question difficulty:', question?.difficulty);
 
-    if (questionNumber >= 1 && questionNumber <= 7) {
+    if (questionNumber >= 1 && questionNumber <= 3) {
+      const renderedQuestionId = String(question?.question_id || "");
+      void fetchQuestionWarningCopy(questionNumber);
+      // Start image fetch — returns same promise if already in-flight
+      const imageFetchPromise = fetchDistractionImage(questionNumber);
+      
+      const timeoutId = setTimeout(async () => {
+        if (String(state.currentQuestionId || "") !== renderedQuestionId) return;
+        // Wait for image (already been fetching since question rendered or since devil screen)
+        await imageFetchPromise;
+        if (String(state.currentQuestionId || "") !== renderedQuestionId) return;
+        const imgReady = StressTriggers.getImageCache && StressTriggers.getImageCache(`img_q${questionNumber}`);
+        console.log(`[popup] Q${questionNumber} showing, image: ${imgReady ? 'YES' : 'NO'}`);
+        showQuestionWarningPopup(questionNumber, () => {});
+      }, 15000);
+      pendingTriggerTimeouts.push(timeoutId);
+      return;
+    }
+
+    if (questionNumber > 3 && questionNumber <= 7) {
       const renderedQuestionId = String(question?.question_id || "");
       void fetchQuestionWarningCopy(questionNumber);
       const timeoutId = setTimeout(() => {
@@ -8264,6 +8356,10 @@ function showQuestionWarningPopup(questionNumber, onComplete) {
     recordFollowupAnswer,
     getFollowupAnswers,
     consumePostSubmitDelayMs,
+    prefetchDistractionImage,
+    prefetchQuestionWarningCopies,
+    fetchDistractionImage,
+    getImageCache: (key) => _imageCache.get(key),
     // Q6 interception helpers
     isOptionFeedbackInterceptionEnabled: () => state.optionFeedbackInterceptionEnabled,
     getOptionFeedbackInterceptionCount: () => state.optionFeedbackInterceptionCount,
@@ -9487,7 +9583,7 @@ function finishTestWithConfirm() {
 }
 
 async function handleCompletion() {
-  showStage("loading", "Wrapping up your follow-ups…");
+  showStage("loading", "Absorbing your story…");
   try {
     if (popupSummary) {
       popupSummary.textContent = "Pressure simulation is ready. Accept challenge to begin.";
@@ -9502,32 +9598,72 @@ async function handleCompletion() {
       console.log("[handleCompletion] initialText:", initialText?.substring(0, 80), "history entries:", conversationHistory.length);
     } catch (e) { console.warn("[handleCompletion] debug fetch failed:", e); }
 
-    // Show the devil stage immediately, then hydrate its content in the background.
-    showStage("devil");
-    if (devilHint) devilHint.textContent = "Preparing your brief...";
-
+    // Stay on loading stage while AI fetches — don't show devil yet
     const extractionPromise = window.academicTopics?.decideAndStore?.(sessionId, initialText, conversationHistory);
-    const popupPrefetchPromise = prefetchQuestionWarningCopies().catch((err) => {
+    const popupPrefetchPromise = (StressTriggers.prefetchQuestionWarningCopies ? StressTriggers.prefetchQuestionWarningCopies() : Promise.resolve([])).catch((err) => {
       console.warn("[handleCompletion] popup prefetch failed:", err);
       return [];
     });
+    // Start prefetching distraction images NOW (from devil screen) so they're ready by Q1-Q3
+    try {
+      if (typeof StressTriggers !== 'undefined' && StressTriggers.prefetchDistractionImage) {
+        // Pass followup answers from conversation history for better relevance
+        const followupTexts = conversationHistory
+          .filter(h => h.role === "user")
+          .map(h => String(h.text || h.content || "").trim())
+          .filter(Boolean);
+        StressTriggers.prefetchDistractionImage(initialText, followupTexts);
+      }
+    } catch(_) {}
 
+    // Fetch devil brief while still on loading screen
+    const userName = window.StressDostAuth?.getUser?.()?.display_name || "challenger";
     try {
       await buildDevilBriefPage(initialText, conversationHistory);
-      if (devilHint) devilHint.textContent = "";
     } catch (e) {
-      console.warn("[handleCompletion] devil brief build failed:", e);
-      if (devilHint) devilHint.textContent = "";
+      console.error("[handleCompletion] devil brief build FAILED:", e, e?.stack || "");
+      // Pre-fill fallback so devil screen is never empty
+      if (devilTitle) devilTitle.textContent = "The Focus Breaker";
+      if (document.getElementById("devilIntro")) document.getElementById("devilIntro").textContent = `I've analyzed your patterns, ${userName}.`;
+      if (document.getElementById("devilInsightSummary")) document.getElementById("devilInsightSummary").textContent = "Unclear focus patterns need measurement";
+      if (document.getElementById("devilChallengeLine")) document.getElementById("devilChallengeLine").textContent = "Let's see what breaks your concentration first.";
+      const _sub = document.querySelector(".devil-insight-sub");
+      if (_sub) _sub.style.display = "block";
+      if (devilProblems) {
+        devilProblems.style.display = "block";
+        devilProblems.innerHTML = `
+          <li><span class="insight-icon">🔥</span> Your attention baseline needs to be established</li>
+          <li><span class="insight-icon">🔥</span> Focus endurance under pressure is unknown</li>
+        `;
+      }
     }
 
-    await popupPrefetchPromise;
+    // Now switch to devil stage — content is ready
+    showStage("devil");
+    if (devilHint) devilHint.textContent = "";
 
-    const decision = await extractionPromise;
+    // Non-blocking
+    try { await popupPrefetchPromise; } catch (_) {}
+    let decision = null;
+    try { decision = await extractionPromise; } catch (_) {}
     console.log("[handleCompletion] extraction decision:", JSON.stringify(decision));
     window.__academicDecision = decision || null;
   } catch (err) {
     console.error("[handleCompletion] error during completion flow:", err);
     window.__academicDecision = null;
+    // Pre-fill fallback then show devil
+    if (devilTitle) devilTitle.textContent = "The Focus Breaker";
+    if (document.getElementById("devilInsightSummary")) document.getElementById("devilInsightSummary").textContent = "Unclear focus patterns need measurement";
+    if (document.getElementById("devilChallengeLine")) document.getElementById("devilChallengeLine").textContent = "Let's see what breaks your concentration first.";
+    if (devilProblems) {
+      devilProblems.style.display = "block";
+      devilProblems.innerHTML = `
+        <li><span class="insight-icon">🔥</span> Your attention baseline needs to be established</li>
+        <li><span class="insight-icon">🔥</span> Focus endurance under pressure is unknown</li>
+      `;
+    }
+    const _sub2 = document.querySelector(".devil-insight-sub");
+    if (_sub2) _sub2.style.display = "block";
     showStage("devil");
     if (devilHint) devilHint.textContent = "";
   }
@@ -9770,8 +9906,12 @@ document.addEventListener('MSFullscreenChange', updateFullscreenStatus);
 // Store the original acceptDevilChallenge logic
 let pendingTestStart = null;
 
+let _proceedingToTest = false;
+
 async function proceedToTest() {
   if (!pendingTestStart) return;
+  if (_proceedingToTest) return; // Prevent double-call
+  _proceedingToTest = true;
   
   const { autoSubject, autoTopics } = pendingTestStart;
   
@@ -9933,6 +10073,7 @@ async function showTestEndScreen(timeUsedMs) {
   
   // Mark test as inactive IMMEDIATELY — this blocks all trigger activation
   isTestActive = false;
+  _proceedingToTest = false;
   hideFullscreenWarning();
   
   // Kill all triggers completely

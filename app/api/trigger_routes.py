@@ -10,7 +10,7 @@ from typing import Any
 from flask import Blueprint, jsonify, request
 
 from ..db.repo import get_session
-from ..services.openai_client import chat_json, chat_json_no_retry
+from ..services.openai_client import chat_json, chat_json_no_retry, client as _openai_client
 
 logger = logging.getLogger(__name__)
 
@@ -232,16 +232,20 @@ CRITICAL RULES:
 
 1. CORE_ISSUE (max 60 chars):
    - Identify the ACTUAL root problem, not surface symptoms
+   - MUST reference the student's specific words/entities (if they said "Alia Bhatt" or "movies" or "PUBG", use those exact words in your analysis)
    - If they say "I watch movies" → core issue is "Dopamine addiction replacing study discipline"
    - If they say "I'm stressed" → core issue is "Anxiety masking as productivity concern"
    - If they say "I procrastinate" → core issue is "Fear of failure disguised as laziness"
    - If they say "I get distracted" → core issue is "Attention fragmentation from digital overload"
+   - If they mention a celebrity/person → connect it: "Celebrity obsession consuming study bandwidth"
    - Be SPECIFIC and INSIGHTFUL, not generic
    - Use behavioral psychology framing
 
 2. PROBLEM_POINTS (exactly 2 items, each max 70 chars):
    - Explain HOW this issue manifests in their behavior
-   - Connect to their actual responses but add psychological insight
+   - MUST connect to their SPECIFIC answers — use their exact words, names, entities
+   - If they mentioned "Katrina Kaif" → reference Katrina Kaif in the problem point
+   - If they mentioned "reels" → reference reels specifically
    - Examples:
      * "Your brain seeks instant rewards from entertainment over delayed academic gains"
      * "Sustained focus feels harder because attention span adapts to rapid content"
@@ -1145,6 +1149,16 @@ def question_warning_copy():
     if not initial_text:
         return jsonify({"error": "initial_text is required"}), 400
 
+    # Filter out noise/greeting inputs that have no real distraction content
+    NOISE_INPUTS = {
+        "hello", "hi", "hey", "ok", "okay", "yes", "no", "nothing", "idk",
+        "fine", "good", "bad", "help", "please", "thanks", "test", "testing",
+        "hii", "helo", "helo", "yo", "sup", "wassup", "nm", "nothing much",
+    }
+    if initial_text.lower().strip() in NOISE_INPUTS or len(initial_text.strip()) < 5:
+        logger.info("question_warning_copy: noise input detected, returning empty")
+        return jsonify({"headline": "", "sub": "", "source": "noise"})
+
     payload = {
         "question_number": question_number,
         "initial_text": initial_text,
@@ -1408,3 +1422,180 @@ def companion_chat():
             "stat_card": None,
             "source": "fallback",
         })
+
+
+# ── OpenAI Web Search Image Finder ────────────────────────────────────────────
+
+# Cache: context_key -> list of 3 image URLs
+_distraction_image_cache: dict[str, list[str]] = {}
+_distraction_image_pending: set[str] = set()
+
+def _fetch_wikimedia_images(query: str) -> list[str]:
+    """Use Wikipedia/Wikimedia API to get real, working image URLs."""
+    import requests as req_lib, re, hashlib
+    
+    # Clean query — remove noise words, keep the subject
+    clean = re.sub(r'\b(reels?|movies?|films?|gaming|games?|watching|boredom|study|studies|because|they|are|good|bad|and|the|a|an|in|on|at|to|for|of|with)\b', '', query, flags=re.IGNORECASE)
+    clean = ' '.join(clean.split())[:80].strip()
+    if not clean:
+        return []
+    
+    try:
+        # Wikipedia pageimages API — most reliable
+        resp = req_lib.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={
+                "action": "query",
+                "titles": clean,
+                "prop": "pageimages",
+                "pithumbsize": 500,
+                "format": "json",
+                "redirects": 1,
+            },
+            timeout=5,
+            headers={"User-Agent": "FocusDost/1.0"},
+        )
+        pages = resp.json().get("query", {}).get("pages", {})
+        urls = []
+        for page in pages.values():
+            if page.get("pageid", -1) == -1:
+                continue  # page not found
+            thumb = page.get("thumbnail", {}).get("source", "")
+            if thumb:
+                urls.append(thumb)
+                # Also try 300px and 200px variants
+                urls.append(re.sub(r'/\d+px-', '/300px-', thumb))
+                urls.append(re.sub(r'/\d+px-', '/200px-', thumb))
+        if urls:
+            logger.info("Wikipedia API found image for: %s → %s", clean, urls[0][:80])
+            return list(dict.fromkeys(urls))[:3]
+    except Exception as exc:
+        logger.warning("Wikipedia API failed: %s", exc)
+    
+    return []
+
+
+def _fetch_images_via_openai(initial_text: str, followup_answers: list[str]) -> list[str]:
+    """Fetch images: try Wikipedia API first, then OpenAI web search."""
+    combined = initial_text.strip()
+    if followup_answers:
+        combined += " " + " ".join(followup_answers[:3])
+    
+    if not combined.strip():
+        return []
+    
+    # Try Wikipedia API first — always returns real URLs
+    wiki_urls = _fetch_wikimedia_images(combined)
+    if wiki_urls:
+        return wiki_urls
+    
+    # Fallback: OpenAI web search
+    prompt = (
+        "Student's distraction: \"" + combined[:200] + "\"\n"
+        "Find the Wikipedia page for the main subject (celebrity/movie/game) and return "
+        "the direct thumbnail image URL from that page.\n"
+        "The URL must be from upload.wikimedia.org and end in .jpg or .png.\n"
+        "Return ONLY the URL, nothing else."
+    )
+    try:
+        resp = _openai_client.chat.completions.create(
+            model="gpt-4o-search-preview",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=150,
+        )
+        content = resp.choices[0].message.content or ""
+        logger.info("OpenAI image search response: %s", content[:200])
+        import re as re2
+        urls = re2.findall(r'https://upload\.wikimedia\.org/[^\s\'"<>]+\.(?:jpg|jpeg|png|webp)', content, re2.IGNORECASE)
+        if urls:
+            logger.info("OpenAI found Wikimedia URL: %s", urls[0][:80])
+            return list(dict.fromkeys(urls))[:3]
+    except Exception as exc:
+        logger.warning("OpenAI image search failed: %s", exc)
+    
+    return []
+
+
+@bp.post("/distraction-image")
+def distraction_image():
+    """Find a relevant image URL using OpenAI web search based on user's distraction."""
+    body = request.get_json(force=True, silent=True) or {}
+    initial_text = str(body.get("initial_text") or "").strip()[:300]
+    followup_answers = [str(f or "").strip()[:150] for f in (body.get("followup_answers") or [])[:6] if str(f or "").strip()]
+    question_number = int(body.get("question_number") or 1)
+    
+    # Only serve images for Q1-Q3
+    if question_number > 3:
+        return jsonify({"image_url": None, "source": "skipped"})
+    
+    if not initial_text and not followup_answers:
+        return jsonify({"image_url": None, "source": "no_context"})
+    
+    # Get or generate image URLs for this context — non-blocking
+    cache_key = f"{initial_text[:80]}|{len(followup_answers)}"
+    
+    # If result is ready, return it
+    if cache_key in _distraction_image_cache:
+        urls = _distraction_image_cache[cache_key]
+        idx = min(question_number - 1, len(urls) - 1) if urls else 0
+        image_url = urls[idx] if urls else None
+        logger.info("distraction-image q=%d cache hit url=%s", question_number, (image_url or "")[:80])
+        # Proxy through our server to avoid CORS/hotlinking blocks
+        if image_url:
+            from urllib.parse import quote
+            image_url = f"/proxy-image?url={quote(image_url, safe='')}"
+        return jsonify({"image_url": image_url, "status": "ready"})
+    
+    # If not started yet, kick off background thread
+    if cache_key not in _distraction_image_pending:
+        import threading
+        _distraction_image_pending.add(cache_key)
+        logger.info("distraction-image q=%d starting background fetch — text=%r followups=%d", 
+                    question_number, initial_text[:60], len(followup_answers))
+        
+        def _run():
+            try:
+                urls = _fetch_images_via_openai(initial_text, followup_answers)
+                logger.info("distraction-image background fetch done — got %d urls: %s", 
+                           len(urls), [u[:60] for u in urls])
+                # Pre-fetch and cache the actual image bytes to avoid rate limiting
+                if urls:
+                    import requests as req_lib
+                    for u in urls:
+                        try:
+                            # Normalize URL for consistent cache key
+                            from urllib.parse import unquote as _unq
+                            u_norm = u
+                            prev = None
+                            while prev != u_norm:
+                                prev = u_norm
+                                u_norm = _unq(u_norm)
+                            
+                            img_resp = req_lib.get(u_norm, timeout=8, headers={
+                                "User-Agent": "Mozilla/5.0 (compatible; FocusDost/1.0)",
+                                "Referer": "https://en.wikipedia.org/",
+                                "Accept": "image/*,*/*",
+                            })
+                            if img_resp.status_code == 200:
+                                content_type = img_resp.headers.get("Content-Type", "image/jpeg")
+                                from ..api.ui_routes import proxy_image
+                                if not hasattr(proxy_image, "_cache"):
+                                    proxy_image._cache = {}
+                                proxy_image._cache[u_norm] = (img_resp.content, content_type)
+                                logger.info("Pre-cached image bytes for: %s", u_norm[:60])
+                            else:
+                                logger.warning("Pre-cache image returned %d for: %s", img_resp.status_code, u_norm[:60])
+                        except Exception as img_exc:
+                            logger.warning("Failed to pre-cache image %s: %s", u[:60], img_exc)
+                _distraction_image_cache[cache_key] = urls if urls else []
+            except Exception as exc:
+                logger.error("Background image fetch failed: %s", exc)
+                _distraction_image_cache[cache_key] = []
+            finally:
+                _distraction_image_pending.discard(cache_key)
+        
+        threading.Thread(target=_run, daemon=True).start()
+    else:
+        logger.info("distraction-image q=%d fetch already in progress", question_number)
+    
+    return jsonify({"image_url": None, "status": "pending"})

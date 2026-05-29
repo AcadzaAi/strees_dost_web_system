@@ -20,3 +20,6 @@ numpy==2.1.3
 pandas==2.2.3
 wheel
 setuptools
+
+Flask-Limiter==3.8.0
+resend==2.4.0

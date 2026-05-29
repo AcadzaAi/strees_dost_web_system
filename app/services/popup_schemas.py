@@ -34,6 +34,26 @@ TYPE_MAP = {
     "fear": "fear",
     "system_warning": "system_warning",
     "girlfriend": "distraction",
+    # Common AI-generated variants that should map to valid types
+    "boredom": "distraction",
+    "procrastination": "distraction",
+    "entertainment": "distraction",
+    "social_media": "distraction",
+    "phone": "distraction",
+    "gaming": "distraction",
+    "laziness": "motivation",
+    "burnout": "motivation",
+    "exhaustion": "motivation",
+    "overwhelm": "panic",
+    "overwhelmed": "panic",
+    "confidence": "self_doubt",
+    "low_confidence": "self_doubt",
+    "peer_pressure": "pressure",
+    "exam_pressure": "pressure",
+    "jealousy": "comparison",
+    "envy": "comparison",
+    "shame": "guilt",
+    "regret": "guilt",
 }
 
 
@@ -48,7 +68,8 @@ class Popup(BaseModel):
         if not isinstance(value, str):
             return value
         key = value.strip().lower().replace("-", "_").replace(" ", "_")
-        return TYPE_MAP.get(key, key)
+        # Map to valid type, default to "distraction" for any unknown type
+        return TYPE_MAP.get(key, "distraction")
 
     @field_validator("message")
     @classmethod

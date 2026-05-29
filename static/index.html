@@ -522,9 +522,44 @@
     </div>
   </div>
 
+  <!-- Feedback Button + Modal -->
+  <button id="feedbackFab" type="button" aria-label="Send feedback" title="Send feedback">
+    <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+    </svg>
+  </button>
+
+  <div id="feedbackModal" class="feedback-modal" hidden>
+    <div class="feedback-backdrop" data-feedback-close></div>
+    <div class="feedback-card" role="dialog" aria-modal="true" aria-labelledby="feedbackTitle">
+      <button class="feedback-close" type="button" aria-label="Close" data-feedback-close>×</button>
+      <h3 id="feedbackTitle">Send Feedback</h3>
+      <p class="feedback-sub">Found a bug or have a suggestion? Tell us — we read every message.</p>
+
+      <label class="feedback-label" for="feedbackCategory">Category</label>
+      <select id="feedbackCategory" class="feedback-select">
+        <option value="Bug">Bug / Something broke</option>
+        <option value="Suggestion">Suggestion</option>
+        <option value="Question">Question</option>
+        <option value="Other">Other</option>
+      </select>
+
+      <label class="feedback-label" for="feedbackMessage">Your message</label>
+      <textarea id="feedbackMessage" class="feedback-textarea" rows="5" placeholder="Describe what happened or what you'd like to see..." maxlength="4000"></textarea>
+
+      <div class="feedback-hint" id="feedbackHint"></div>
+
+      <div class="feedback-actions">
+        <button id="feedbackCancel" class="btn ghost small" type="button" data-feedback-close>Cancel</button>
+        <button id="feedbackSend" class="btn primary small" type="button">Send</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   <script src="/auth.js"></script>
   <script src="/app.js"></script>
   <script src="/academic_topics.js"></script>
+  <script src="/feedback.js"></script>
 </body>
 </html>

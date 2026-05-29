@@ -503,15 +503,18 @@ class AcadzaQuestionFetcher:
     def __init__(self, api_url: str, headers: Dict):
         self.api_url = api_url
         self.headers = _build_acadza_headers()
-        self.request_timeout = 8
-        self.retry_timeout = 5
+        self.request_timeout = 6
+        self.retry_timeout = 4
         raw_verify = os.getenv("ACADZA_VERIFY", "true").strip().lower()
         self.verify_ssl = raw_verify not in {"0", "false", "no"}
         self.cert_path = _CERTIFI_PATH if self.verify_ssl and _CERTIFI_PATH else self.verify_ssl
-        # Persistent session for connection pooling (reuses TCP connections)
+        # Persistent session with larger connection pool
         self._session = requests.Session()
         self._session.headers.update(self.headers)
         self._session.verify = self.cert_path
+        # Increase pool size to handle parallel requests
+        adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
+        self._session.mount("https://", adapter)
 
     def fetch_question(self, question_id: str, timeout: int = None) -> Optional[Dict]:
         try:
@@ -526,7 +529,6 @@ class AcadzaQuestionFetcher:
             if response.status_code == 200:
                 data = response.json()
                 if isinstance(data, dict) and data.get("status") == "error":
-                    logger.warning("Acadza API error for %s: %s", question_id, data.get("message"))
                     return None
                 if isinstance(data, dict) and data.get("message") == "Auth failed":
                     logger.warning("Acadza API Auth failed for %s", question_id)
@@ -547,45 +549,28 @@ class AcadzaQuestionFetcher:
             return None
 
     def fetch_multiple(self, question_ids: List[str]) -> List[Dict]:
-        """Fetch multiple questions in parallel with retry for failed ones."""
+        """Fetch multiple questions — sequential with short timeout to avoid pool exhaustion."""
         if not question_ids:
             return []
 
-        import concurrent.futures
-        
         fetched: dict[str, Dict] = {}
+        failed_ids: list[str] = []
         
-        def _fetch_batch(ids: list[str], timeout: int) -> tuple[dict, list]:
-            successes = {}
-            failures = []
-            max_workers = min(7, len(ids))
-            
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                future_to_qid = {executor.submit(self.fetch_question, qid, timeout): qid for qid in ids}
-                for future in concurrent.futures.as_completed(future_to_qid):
-                    qid = future_to_qid[future]
-                    try:
-                        data = future.result()
-                        if data:
-                            successes[qid] = data
-                        else:
-                            failures.append(qid)
-                    except Exception as exc:
-                        logger.error("Question %s fetch failed: %s", qid, exc)
-                        failures.append(qid)
-            return successes, failures
+        # Fetch sequentially to avoid overwhelming the API
+        for qid in question_ids:
+            data = self.fetch_question(qid, self.request_timeout)
+            if data:
+                fetched[qid] = data
+            else:
+                failed_ids.append(qid)
         
-        # First attempt — all 7 in parallel
-        batch_result, failed_ids = _fetch_batch(question_ids, self.request_timeout)
-        fetched.update(batch_result)
-        
-        # Retry failed ones with shorter timeout
+        # Retry failed ones once
         if failed_ids:
-            logger.info("Retrying %d failed fetches: %s", len(failed_ids), failed_ids)
-            retry_result, still_failed = _fetch_batch(failed_ids, self.retry_timeout)
-            fetched.update(retry_result)
-            if still_failed:
-                logger.warning("Still failed after retry: %s", still_failed)
+            logger.info("Retrying %d failed fetches", len(failed_ids))
+            for qid in failed_ids:
+                data = self.fetch_question(qid, self.retry_timeout)
+                if data:
+                    fetched[qid] = data
         
         # Preserve original order
         questions = [fetched[qid] for qid in question_ids if qid in fetched]
