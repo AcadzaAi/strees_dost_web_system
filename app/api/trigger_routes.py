@@ -1432,11 +1432,14 @@ def companion_chat():
 # ── OpenAI Web Search Image Pipeline ──────────────────────────────────────────
 #
 # Strategy (OpenAI ONLY — no Wikimedia, no Unsplash):
-#   1. Ask gpt-4o-search-preview (web search) to find the SINGLE most important
-#      distraction subject + a pool of 5-8 candidate direct image URLs for it.
-#   2. Download each candidate URL in parallel, validating that it is a real,
-#      reachable image (HTTP 200 + image content-type). This kills hallucinated
-#      / dead URLs that plagued earlier attempts.
+#   0. PERSONALIZED INTENT: gpt-4o-mini reads everything the student said and
+#      decides the single most tempting thing to show them (the exact celebrity,
+#      app, game, or object), turning it into a focused image-search query.
+#   1. Ask gpt-4o-search-preview (web search) to find a pool of candidate image
+#      / page URLs for that intent.
+#   2. Download each candidate in parallel, validating that it is a real,
+#      reachable image (resolving og:image for webpage URLs). This kills
+#      hallucinated / dead URLs that plagued earlier attempts.
 #   3. Encode the verified images as base64 and send them to gpt-4o-mini
 #      (vision) and ask it to rank which images are genuinely a photo of the
 #      distraction subject. Keep the top 3.
@@ -1449,6 +1452,8 @@ def companion_chat():
 # cache_key -> list of internal image ids (already downloaded + vision-ranked)
 _distraction_image_cache: dict[str, list[str]] = {}
 _distraction_image_pending: set[str] = set()
+# When an empty result was cached, so it can expire and be retried.
+_distraction_image_empty_ts: dict[str, float] = {}
 
 # Shared in-memory store of downloaded image bytes, keyed by a short id.
 #   id -> (bytes, content_type)
@@ -1456,11 +1461,111 @@ _image_byte_store: dict[str, tuple[bytes, str]] = {}
 
 
 def _distraction_subject(initial_text: str, followup_answers: list[str]) -> str:
-    """Build a compact subject string from the user's words for searching."""
+    """Build a compact raw text blob from the user's words (used as LLM input)."""
     combined = (initial_text or "").strip()
     if followup_answers:
         combined += " " + " ".join(followup_answers[:3])
     return combined.strip()[:240]
+
+
+def _build_image_intent(initial_text: str, followup_answers: list[str]) -> dict[str, str]:
+    """Personalized intent step.
+
+    Reads everything the student said and decides the single most relevant
+    image to show them. Handles three kinds of input:
+      - DISTRACTION (celebrity, app, game, show, food, phone): show the lure.
+      - EMOTIONAL state (stress, anxiety, not feeling good, sleepy): show a
+        relatable photographic scene of a student in that state.
+      - ACADEMIC topic (maths/physics/chemistry or a specific chapter): show a
+        study visual / diagram for that topic.
+    Returns {"subject", "image_query", "kind"}.
+
+    Examples:
+      - "Tamannaah reels"      -> subject "Tamannaah Bhatia", query
+        "Tamannaah Bhatia glamorous photoshoot", kind "celebrity"
+      - "I have a lot of stress" -> subject "stressed student", query
+        "stressed student overwhelmed at desk with books", kind "emotion"
+      - "problem in calculus"  -> subject "calculus integration", query
+        "calculus integration equations on blackboard", kind "academic"
+    """
+    raw = _distraction_subject(initial_text, followup_answers)
+    if not raw:
+        return {}
+
+    payload = {
+        "initial_text": initial_text or "",
+        "followup_answers": followup_answers[:4],
+    }
+    system = (
+        "You choose a single relevant image for a focus-training app, based on "
+        "what a student typed about their studying. The text may be one of "
+        "THREE kinds — handle each differently:\n\n"
+        "A) A DISTRACTION (a person, app, game, show, movie, anime, food, "
+        "phone, social media, etc.). Pick the ONE thing that would most pull "
+        "this student's attention and make an image query for it.\n"
+        "B) An EMOTIONAL / WELLBEING state (stress, anxiety, 'not feeling "
+        "good', pressure, sadness, burnout, low motivation, sleepy, lazy, can't "
+        "focus). Pick a warm, relatable photographic scene of a student in that "
+        "exact state, e.g. 'stressed student overwhelmed at desk with books', "
+        "'tired teenager rubbing eyes while studying late', 'anxious student "
+        "holding head before exam'.\n"
+        "C) An ACADEMIC TOPIC or subject they struggle with (maths, physics, "
+        "chemistry, biology, or a specific chapter like calculus, "
+        "thermodynamics, organic chemistry, integration, electrostatics, "
+        "trigonometry). The subject is that exact topic and the image should "
+        "depict its real STUDY VISUAL — a textbook diagram, formula sheet, or "
+        "apparatus, e.g. 'calculus integration formula diagram', "
+        "'thermodynamics PV diagram physics', 'organic chemistry benzene "
+        "structure diagram', 'human heart biology labelled diagram'. Avoid the "
+        "word 'blackboard' (it collides with the Blackboard LMS); say 'diagram' "
+        "or 'formula' instead. For a broad subject with no chapter, pick a "
+        "well-known concept in it (e.g. maths -> 'Pythagoras theorem diagram').\n\n"
+        "Detailed rules:\n"
+        "- If a specific PERSON is named (celebrity, influencer, athlete, "
+        "creator), the subject MUST be that person's exact real name, and "
+        "image_query should describe a tempting real photo of them (e.g. "
+        "'Alia Bhatt glamorous red carpet photo'). Never generalize a named "
+        "person into 'a celebrity'.\n"
+        "- If a specific GAME, SHOW, MOVIE, or ANIME is named, the subject is "
+        "its exact title and image_query should describe its actual CONTENT — "
+        "characters, key art, poster, or gameplay (e.g. 'One Piece anime Luffy "
+        "key visual', 'PUBG Mobile intense gameplay screenshot'). Describe the "
+        "thing itself, not a person watching it.\n"
+        "- For a purely GENERIC distraction with no named title (phone, social "
+        "media, scrolling, sleep, food, friends), describe a vivid, real "
+        "PHOTOGRAPHIC SCENE of a young person enjoying it.\n"
+        "- ALWAYS pick something concrete and visual. Even for vague input like "
+        "'I have a problem' or 'I am not feeling good', infer the most likely "
+        "study-related scene (e.g. a stressed/overwhelmed student) so there is "
+        "always a usable image.\n"
+        "- image_query must be 3-9 words, concrete, photographic or diagram-"
+        "like, and good for an image search engine. No punctuation, no quotes.\n"
+        "- kind is one of: celebrity, influencer, athlete, app, game, show, "
+        "movie, anime, object, activity, emotion, academic, other.\n\n"
+        "Return ONLY JSON: "
+        '{"subject": "...", "image_query": "...", "kind": "..."}'
+    )
+    try:
+        resp = chat_json(
+            model="gpt-4o-mini",
+            system=system,
+            user=json.dumps(payload, ensure_ascii=False),
+            max_tokens=120,
+        )
+        obj = json.loads(resp.choices[0].message.content or "{}")
+        subject = str(obj.get("subject") or "").strip()
+        image_query = str(obj.get("image_query") or "").strip()
+        kind = str(obj.get("kind") or "").strip().lower()
+        if not image_query:
+            image_query = subject or raw
+        if not subject:
+            subject = image_query
+        intent = {"subject": subject[:120], "image_query": image_query[:120], "kind": kind[:30]}
+        logger.info("image intent: %s", intent)
+        return intent
+    except Exception as exc:
+        logger.warning("image intent LLM failed (%s) — using raw text", exc)
+        return {"subject": raw[:120], "image_query": raw[:120], "kind": "other"}
 
 
 def _extract_og_image(html: str, base_url: str) -> str | None:
@@ -1476,12 +1581,55 @@ def _extract_og_image(html: str, base_url: str) -> str | None:
         m = re.search(pat, html, re.IGNORECASE)
         if m:
             candidate = m.group(1).strip()
-            if candidate:
+            if candidate and not _looks_like_logo(candidate):
                 return urljoin(base_url, candidate)
     return None
 
 
-def _browser_headers(referer: str = "https://www.google.com/") -> dict[str, str]:
+def _extract_inline_images(html: str, base_url: str, limit: int = 6) -> list[str]:
+    """Collect candidate inline <img> URLs from a page body.
+
+    Used when a page has no usable og:image (common on educational sites whose
+    diagrams live in the article body). Prefers larger images and skips obvious
+    logos/icons/sprites/data-URIs.
+    """
+    from urllib.parse import urljoin
+    out: list[str] = []
+    seen: set[str] = set()
+    # src and common lazy-load attributes.
+    for m in re.finditer(
+        r'<img\b[^>]*?(?:data-src|data-original|data-lazy-src|src)\s*=\s*["\']([^"\']+)["\']',
+        html, re.IGNORECASE,
+    ):
+        src = (m.group(1) or "").strip()
+        if not src or src.startswith("data:"):
+            continue
+        low = src.lower()
+        if not re.search(r"\.(jpg|jpeg|png|webp)(\?|$)", low):
+            continue
+        if _looks_like_logo(src):
+            continue
+        full = urljoin(base_url, src)
+        if full in seen:
+            continue
+        seen.add(full)
+        out.append(full)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _browser_headers(url: str = "", referer: str = "https://www.google.com/") -> dict[str, str]:
+    # Wikimedia rate-limits (429) generic browser UAs; it asks for a descriptive
+    # User-Agent with contact info, so use one for its hosts.
+    low = url.lower()
+    if "wikimedia.org" in low or "wikipedia.org" in low:
+        return {
+            "User-Agent": "FocusDostBot/1.0 (focus-training app; contact@focusdost.app)",
+            "Accept": "image/avif,image/webp,image/png,image/jpeg,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://en.wikipedia.org/",
+        }
     return {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                       "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -1505,38 +1653,146 @@ def _read_capped(resp, cap: int = 5 * 1024 * 1024) -> bytes:
     return b"".join(chunks)
 
 
+_LOGO_URL_HINTS = (
+    "logo", "sprite", "icon", "favicon", "placeholder", "default",
+    "blank", "avatar", "spacer", "1x1", "pixel", "loading",
+)
+
+
+def _normalize_candidate(url: str) -> str | None:
+    """Normalize a candidate URL; convert YouTube links to direct thumbnails.
+
+    Returns the (possibly rewritten) URL, or None if it should be dropped
+    (e.g. obvious fake/placeholder URLs the search model sometimes invents).
+    """
+    low = url.lower()
+    # YouTube watch / youtu.be / shorts → direct thumbnail (always hotlinkable).
+    m = re.search(
+        r"(?:youtube\.com/(?:watch\?v=|shorts/|embed/)|youtu\.be/)([A-Za-z0-9_-]{6,})",
+        url,
+    )
+    if "youtube.com" in low or "youtu.be" in low:
+        if not m:
+            return None
+        vid = m.group(1)
+        # Reject obvious placeholders the model invents (example1, abcdef, etc.)
+        if vid.lower().startswith("example") or vid.lower() in {"video_id", "videoid", "xxxxxxxxxxx"}:
+            return None
+        return f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
+    # Drop other clearly fake placeholder URLs.
+    if "example.com" in low or "/example" in low or "yourimage" in low:
+        return None
+    return url
+
+
+def _looks_like_logo(url: str) -> bool:
+    low = url.lower()
+    return any(h in low for h in _LOGO_URL_HINTS)
+
+
+def _validate_image_quality(data: bytes, url: str) -> bool:
+    """Reject vague / low-quality images using Pillow.
+
+    Guards against: corrupt files, tiny thumbnails, icons, sprite sheets,
+    banner/strip aspect ratios, and near-blank placeholder images.
+    """
+    try:
+        from PIL import Image
+    except Exception:
+        # Pillow unavailable → fall back to byte-size check only.
+        return len(data) >= 6000
+
+    import io
+    try:
+        img = Image.open(io.BytesIO(data))
+        img.verify()  # detects truncated/corrupt files
+        # Re-open after verify() (verify leaves the file unusable).
+        img = Image.open(io.BytesIO(data))
+        w, h = img.size
+    except Exception as exc:
+        logger.info("  reject %s → not a valid image (%s)", url[:60], exc)
+        return False
+
+    # Minimum dimensions — a real photo, not an icon/avatar/thumbnail.
+    if w < 200 or h < 200:
+        logger.info("  reject %s → too small %dx%d", url[:60], w, h)
+        return False
+    # Total pixel area floor.
+    if w * h < 90_000:  # < ~300x300
+        logger.info("  reject %s → low resolution %dx%d", url[:60], w, h)
+        return False
+    # Aspect ratio — drop banners/strips/columns that are never a clean portrait.
+    ar = w / h if h else 99
+    if ar > 3.0 or ar < 0.33:
+        logger.info("  reject %s → bad aspect ratio %.2f (%dx%d)", url[:60], ar, w, h)
+        return False
+
+    # Near-blank / single-colour placeholder detection via a tiny thumbnail.
+    try:
+        small = img.convert("RGB").resize((24, 24))
+        pixels = list(small.getdata())
+        # Variance of luminance across the thumbnail.
+        lums = [0.299 * r + 0.587 * g + 0.114 * b for (r, g, b) in pixels]
+        mean = sum(lums) / len(lums)
+        var = sum((l - mean) ** 2 for l in lums) / len(lums)
+        if var < 80:  # almost uniform → blank/gradient/placeholder
+            logger.info("  reject %s → near-blank image (var=%.1f)", url[:60], var)
+            return False
+    except Exception:
+        pass  # if analysis fails, don't block a structurally valid image
+
+    return True
+
+
 def _download_image(url: str, timeout: int = 8, _depth: int = 0) -> tuple[bytes, str] | None:
     """Resolve a candidate URL to real image bytes.
 
     The OpenAI web-search tool usually returns *webpage* URLs rather than direct
     image files. So if a candidate is an HTML page, we parse its og:image /
     twitter:image meta tag (standard, hotlink-friendly) and fetch that instead.
+    Rejects SVGs, logos, tiny/blank/banner images via a Pillow quality gate.
     Returns (bytes, content_type) or None.
     """
     try:
-        resp = req_lib.get(url, timeout=timeout, headers=_browser_headers(), stream=True)
+        resp = req_lib.get(url, timeout=timeout, headers=_browser_headers(url), stream=True)
         if resp.status_code != 200:
             logger.info("  candidate %s → HTTP %d", url[:70], resp.status_code)
             return None
         ctype = (resp.headers.get("Content-Type") or "").lower().split(";")[0].strip()
 
-        # Direct image → use it.
+        # Direct image → use it (but reject vector logos/icons).
         if ctype.startswith("image/"):
+            if "svg" in ctype:
+                logger.info("  candidate %s → rejected SVG (logo/icon)", url[:70])
+                return None
+            if _looks_like_logo(url):
+                logger.info("  candidate %s → rejected logo-like url", url[:70])
+                return None
             data = _read_capped(resp)
-            if len(data) < 1024:
+            if len(data) < 6000:  # too small to be a real photo (icon/pixel)
                 logger.info("  candidate %s → too small (%d bytes)", url[:70], len(data))
+                return None
+            if not _validate_image_quality(data, url):
                 return None
             logger.info("  candidate %s → image OK (%d bytes, %s)", url[:70], len(data), ctype)
             return data, ctype
 
-        # HTML page → extract og:image and recurse once.
+        # HTML page → extract og:image (or fall back to largest inline image).
         if ctype.startswith("text/html") and _depth == 0:
             html = _read_capped(resp, cap=1024 * 1024).decode("utf-8", errors="ignore")
             og = _extract_og_image(html, url)
-            if og and og != url:
+            if og and og != url and not _looks_like_logo(og):
                 logger.info("  candidate %s → resolved og:image %s", url[:55], og[:70])
-                return _download_image(og, timeout=timeout, _depth=1)
-            logger.info("  candidate %s → html with no og:image", url[:70])
+                got = _download_image(og, timeout=timeout, _depth=1)
+                if got:
+                    return got
+            # No usable og:image → try inline article images, best-effort.
+            for inline in _extract_inline_images(html, url):
+                logger.info("  candidate %s → trying inline img %s", url[:50], inline[:60])
+                got = _download_image(inline, timeout=timeout, _depth=1)
+                if got:
+                    return got
+            logger.info("  candidate %s → html with no usable image", url[:70])
             return None
 
         logger.info("  candidate %s → unusable content-type %r", url[:70], ctype)
@@ -1546,20 +1802,47 @@ def _download_image(url: str, timeout: int = 8, _depth: int = 0) -> tuple[bytes,
         return None
 
 
-def _openai_find_candidate_urls(subject: str) -> list[str]:
-    """Use OpenAI web search to gather a pool of candidate image/page URLs."""
+def _openai_find_candidate_urls(intent: dict[str, str], retry: bool = False) -> list[str]:
+    """Use OpenAI web search to gather candidate image/page URLs for the intent."""
+    subject = intent.get("subject") or ""
+    image_query = intent.get("image_query") or subject
+    kind = intent.get("kind") or "other"
+    retry_hint = (
+        "\nThis is a SECOND attempt — the first set of URLs were unreachable or "
+        "blocked. Return a DIFFERENT, broader set of URLs from easily "
+        "hotlinkable sites (Wikipedia, news articles, fan wikis, YouTube "
+        "thumbnails, blogs). Avoid any stock-photo sites entirely.\n"
+        if retry else ""
+    )
     prompt = (
-        "A student is distracted by the following thing they typed:\n"
-        f"\"{subject}\"\n\n"
-        "Identify the single most important real-world subject in that text "
-        "(a celebrity, influencer, movie, TV show, game, sports star, or app).\n"
-        "Then search the web and return 8 URLs of web pages or images that "
-        "prominently feature a clear, real photo of that exact subject.\n\n"
+        "I need real, hotlinkable images for a focus-training app.\n"
+        f"Target subject: \"{subject}\" (type: {kind}).\n"
+        f"Ideal image search query: \"{image_query}\".\n"
+        f"{retry_hint}\n"
+        "Search the web and return 10 URLs of web pages or images that "
+        "prominently feature a clear, high-quality image matching that query "
+        "and subject.\n\n"
         "Rules for the URLs:\n"
         "- Direct image files (.jpg/.jpeg/.png/.webp) are best, but reputable "
         "article or gallery pages that show the subject are also fine — I will "
         "extract the preview image from them.\n"
-        "- Prefer well-known, reachable sites (news, Wikipedia, official pages).\n"
+        "- The image must clearly match the subject. For a named person it must "
+        "be that real person; for an academic topic a clear textbook-style "
+        "diagram/equation/apparatus is ideal; for an emotion a relatable photo "
+        "of a student in that state.\n"
+        "- AVOID paywalled stock-photo and stock-video sites that block "
+        "hotlinking: pexels, getty, gettyimages, shutterstock, istockphoto, "
+        "istock, adobe stock, stock.adobe, alamy, dreamstime, depositphotos, "
+        "123rf, storyblocks, motionarray, vecteezy, freepik, unsplash. Their "
+        "URLs return 403 and are useless to me.\n"
+        "- Do NOT construct or guess direct upload.wikimedia.org/.../commons/ "
+        "file paths — those are almost always wrong (404). For Wikipedia, give "
+        "the normal article page URL (e.g. https://en.wikipedia.org/wiki/...) "
+        "and I will extract its image myself.\n"
+        "- PREFER freely hotlinkable sources: Wikipedia article pages, news and "
+        "magazine articles, fan wikis (fandom.com), educational sites "
+        "(geeksforgeeks, byjus, khanacademy, toppr, vedantu, wikihow), blogs, "
+        "YouTube watch pages (I read their thumbnails), and official pages.\n"
         "- Do NOT invent URLs. Only return URLs you actually found via search.\n\n"
         "Respond with ONLY a JSON object of the form:\n"
         '{"subject": "<subject>", "images": ["url1", "url2", ...]}'
@@ -1590,15 +1873,62 @@ def _openai_find_candidate_urls(subject: str) -> list[str]:
     # Fallback: regex sweep for any http URL in the text.
     if not urls:
         urls = re.findall(r"https?://[^\s\"'<>)\]]+", content)
-    # De-dupe, keep order, cap the pool.
+    # De-dupe, keep order, drop known hotlink-blocking stock hosts, cap pool.
+    blocked_hosts = (
+        "pexels.com", "gettyimages.", "getty.", "shutterstock.com",
+        "istockphoto.com", "istock.", "stock.adobe.com", "adobe.com",
+        "alamy.com", "dreamstime.com", "depositphotos.com", "123rf.com",
+        "storyblocks.com", "motionarray.com", "vecteezy.com", "freepik.com",
+        "unsplash.com", "stockcake.com", "pikwizard.com",
+        # GIF / meme / AI-generated image hosts — not real photos.
+        "tenor.com", "giphy.com", "gfycat.com", "craiyon.com",
+        "imgflip.com", "knowyourmeme.com",
+    )
+    # Non-image document/file extensions we never want.
+    bad_ext = (".pdf", ".djvu", ".doc", ".docx", ".ppt", ".pptx", ".txt",
+               ".zip", ".gif", ".svg", ".mp4", ".webm", ".mov", ".ogg")
     seen, pool = set(), []
     for u in urls:
-        u = u.strip().rstrip(".,)")
-        if u and u not in seen and u.startswith("http"):
-            seen.add(u)
-            pool.append(u)
+        u = u.strip()
+        # Trim trailing sentence punctuation, but preserve a balanced closing
+        # paren (Wikipedia URLs like Free_Fire_(video_game) need it).
+        u = u.rstrip(".,")
+        if u.endswith(")") and u.count("(") < u.count(")"):
+            u = u[:-1]
+        if not u or not u.startswith("http"):
+            continue
+        u = _normalize_candidate(u)
+        if not u or u in seen:
+            continue
+        low = u.lower()
+        if any(h in low for h in blocked_hosts):
+            continue
+        # Drop direct links to document/non-photo files.
+        path_only = low.split("?")[0]
+        if path_only.endswith(bad_ext):
+            continue
+        # Model frequently hallucinates direct upload.wikimedia.org commons file
+        # paths (404). Skip them — it should give article pages instead.
+        if "upload.wikimedia.org" in low:
+            continue
+        seen.add(u)
+        pool.append(u)
     logger.info("openai web-search candidate pool: %d urls", len(pool))
-    return pool[:8]
+    return pool[:10]
+
+
+def _download_pool(urls: list[str]) -> list[tuple[str, bytes, str]]:
+    """Download + validate candidate URLs in parallel, preserving search order."""
+    slots: list[tuple[str, bytes, str] | None] = [None] * len(urls)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        future_map = {pool.submit(_download_image, u): i for i, u in enumerate(urls)}
+        for fut in as_completed(future_map):
+            i = future_map[fut]
+            result = fut.result()
+            if result:
+                data, ctype = result
+                slots[i] = (uuid.uuid4().hex[:16], data, ctype)
+    return [s for s in slots if s is not None]
 
 
 def _vision_rank_images(subject: str, items: list[tuple[str, bytes, str]]) -> list[str]:
@@ -1669,33 +1999,32 @@ def _vision_rank_images(subject: str, items: list[tuple[str, bytes, str]]) -> li
 
 def _build_distraction_images(initial_text: str, followup_answers: list[str]) -> list[str]:
     """Full pipeline → returns up to 3 internal image ids served via /proxy-image."""
-    subject = _distraction_subject(initial_text, followup_answers)
-    if not subject:
+    intent = _build_image_intent(initial_text, followup_answers)
+    if not intent or not intent.get("image_query"):
+        logger.warning("no image intent derived from user text")
         return []
+    subject = intent.get("subject") or intent.get("image_query")
 
-    candidate_urls = _openai_find_candidate_urls(subject)
-    if not candidate_urls:
-        logger.warning("no candidate urls for subject=%r", subject[:60])
-        return []
+    candidate_urls = _openai_find_candidate_urls(intent)
+    downloaded: list[tuple[str, bytes, str]] = []
+    seen_urls: set[str] = set(candidate_urls)
+    if candidate_urls:
+        downloaded = _download_pool(candidate_urls)
+        logger.info("downloaded %d/%d valid images for subject=%r",
+                    len(downloaded), len(candidate_urls), subject[:50])
 
-    # Download + validate candidates in parallel, but KEEP the original web-search
-    # order (most relevant first) by indexing results back into a slot list.
-    slots: list[tuple[str, bytes, str] | None] = [None] * len(candidate_urls)
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        future_map = {
-            pool.submit(_download_image, u): i for i, u in enumerate(candidate_urls)
-        }
-        for fut in as_completed(future_map):
-            i = future_map[fut]
-            result = fut.result()
-            if result:
-                data, ctype = result
-                slots[i] = (uuid.uuid4().hex[:16], data, ctype)
+    # If too few survived (blocked/dead hosts), do one broader retry search.
+    if len(downloaded) < 3:
+        retry_urls = [u for u in _openai_find_candidate_urls(intent, retry=True)
+                      if u not in seen_urls]
+        if retry_urls:
+            logger.info("retry search added %d new candidate urls", len(retry_urls))
+            downloaded += _download_pool(retry_urls)
+            logger.info("after retry: %d valid images for subject=%r",
+                        len(downloaded), subject[:50])
 
-    downloaded = [s for s in slots if s is not None]
-    logger.info("downloaded %d/%d valid images for subject=%r",
-                len(downloaded), len(candidate_urls), subject[:50])
     if not downloaded:
+        logger.warning("no valid images for subject=%r", subject[:60])
         return []
 
     # Rank by relevance with vision (best, if the API key allows image input).
@@ -1712,7 +2041,7 @@ def _build_distraction_images(initial_text: str, followup_answers: list[str]) ->
         if img_id in by_id and img_id not in final_ids:
             _image_byte_store[img_id] = by_id[img_id]
             final_ids.append(img_id)
-    # Ensure we always have up to 3 by topping up from download order.
+    # Ensure we always have up to 3 distinct images by topping up from order.
     for img_id, data, ctype in downloaded:
         if len(final_ids) >= 3:
             break
@@ -1748,6 +2077,14 @@ def distraction_image():
 
     cache_key = f"{initial_text[:80]}|{len(followup_answers)}"
 
+    # Empty results expire so a transient web-search miss can be retried later.
+    if cache_key in _distraction_image_cache and not _distraction_image_cache[cache_key]:
+        ts = _distraction_image_empty_ts.get(cache_key, 0)
+        if time.time() - ts > 45:  # stale empty result → allow a fresh attempt
+            _distraction_image_cache.pop(cache_key, None)
+            _distraction_image_empty_ts.pop(cache_key, None)
+            logger.info("distraction-image evicted stale empty result for retry")
+
     # Result ready → return the per-question image id as a proxy URL.
     if cache_key in _distraction_image_cache:
         ids = _distraction_image_cache[cache_key]
@@ -1773,9 +2110,12 @@ def distraction_image():
             try:
                 ids = _build_distraction_images(initial_text, followup_answers)
                 _distraction_image_cache[cache_key] = ids
+                if not ids:
+                    _distraction_image_empty_ts[cache_key] = time.time()
             except Exception as exc:
                 logger.error("distraction-image pipeline failed: %s", exc, exc_info=True)
                 _distraction_image_cache[cache_key] = []
+                _distraction_image_empty_ts[cache_key] = time.time()
             finally:
                 _distraction_image_pending.discard(cache_key)
 
