@@ -17,60 +17,34 @@ def login():
 
 @bp.get("/proxy-image")
 def proxy_image():
-    """Proxy external images to avoid CORS/hotlinking blocks. Caches bytes in memory."""
-    import requests as req
+    """Serve a downloaded, vision-verified image by its internal id.
+
+    Images are produced by the OpenAI web-search pipeline in trigger_routes,
+    which downloads + validates them and stores the raw bytes in memory. We
+    serve those bytes directly so the browser never hotlinks an external host
+    (which previously caused 400/403/429 errors).
+    """
     from flask import request, Response
-    from urllib.parse import urlparse, unquote
-    
-    url = request.args.get("url", "").strip()
-    if not url:
-        return Response("Missing url", status=400)
-    
-    # Fully decode — handle single, double, and triple encoding
-    prev = None
-    while prev != url:
-        prev = url
-        url = unquote(url)
-    
-    if not url.startswith("https://"):
-        return Response("Invalid URL", status=400)
-    
+
+    img_id = request.args.get("id", "").strip()
+    if not img_id:
+        return Response("Missing id", status=400)
+
     try:
-        domain = urlparse(url).netloc.lower()
-    except Exception:
-        return Response("Invalid URL", status=400)
-    
-    allowed = ["upload.wikimedia.org", "commons.wikimedia.org", "en.wikipedia.org"]
-    if not any(domain == d or domain.endswith("." + d) for d in allowed):
-        current_app.logger.warning("proxy-image blocked domain: %s", domain)
-        return Response("Domain not allowed", status=403)
-    
-    # In-memory cache to avoid hitting Wikimedia repeatedly
-    if not hasattr(proxy_image, "_cache"):
-        proxy_image._cache = {}
-    
-    if url in proxy_image._cache:
-        data, content_type = proxy_image._cache[url]
-        return Response(data, status=200, content_type=content_type,
-                       headers={"Cache-Control": "public, max-age=86400"})
-    
-    try:
-        resp = req.get(
-            url,
-            timeout=8,
-            headers={
-                "User-Agent": "Mozilla/5.0 (compatible; FocusDost/1.0)",
-                "Referer": "https://en.wikipedia.org/",
-                "Accept": "image/*,*/*",
-            },
-        )
-        if resp.status_code == 200:
-            content_type = resp.headers.get("Content-Type", "image/jpeg")
-            proxy_image._cache[url] = (resp.content, content_type)
-            return Response(resp.content, status=200, content_type=content_type,
-                           headers={"Cache-Control": "public, max-age=86400"})
-        current_app.logger.warning("proxy-image upstream %d for %s", resp.status_code, url[:80])
-        return Response("Upstream error", status=resp.status_code)
-    except Exception as exc:
-        current_app.logger.warning("proxy-image failed for %s: %s", url[:80], exc)
-        return Response("Fetch failed", status=502)
+        from .trigger_routes import _image_byte_store
+    except Exception as exc:  # pragma: no cover
+        current_app.logger.error("proxy-image: cannot access byte store: %s", exc)
+        return Response("Unavailable", status=503)
+
+    entry = _image_byte_store.get(img_id)
+    if not entry:
+        current_app.logger.warning("proxy-image: unknown id %s", img_id)
+        return Response("Not found", status=404)
+
+    data, content_type = entry
+    return Response(
+        data,
+        status=200,
+        content_type=content_type or "image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )

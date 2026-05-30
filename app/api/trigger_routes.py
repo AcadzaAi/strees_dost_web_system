@@ -1,12 +1,17 @@
 """AI-driven trigger recommendation routes."""
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
+import re
 import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+import requests as req_lib
 from flask import Blueprint, jsonify, request
 
 from ..db.repo import get_session
@@ -1424,178 +1429,358 @@ def companion_chat():
         })
 
 
-# ── OpenAI Web Search Image Finder ────────────────────────────────────────────
+# ── OpenAI Web Search Image Pipeline ──────────────────────────────────────────
+#
+# Strategy (OpenAI ONLY — no Wikimedia, no Unsplash):
+#   1. Ask gpt-4o-search-preview (web search) to find the SINGLE most important
+#      distraction subject + a pool of 5-8 candidate direct image URLs for it.
+#   2. Download each candidate URL in parallel, validating that it is a real,
+#      reachable image (HTTP 200 + image content-type). This kills hallucinated
+#      / dead URLs that plagued earlier attempts.
+#   3. Encode the verified images as base64 and send them to gpt-4o-mini
+#      (vision) and ask it to rank which images are genuinely a photo of the
+#      distraction subject. Keep the top 3.
+#   4. Serve the downloaded bytes directly from our own /proxy-image?id=<id>
+#      endpoint (no hotlinking at display time → no 400/429 from upstream).
+#
+# All network work happens in a background thread; the endpoint is non-blocking
+# and returns {"status": "pending"} until results are cached.
 
-# Cache: context_key -> list of 3 image URLs
+# cache_key -> list of internal image ids (already downloaded + vision-ranked)
 _distraction_image_cache: dict[str, list[str]] = {}
 _distraction_image_pending: set[str] = set()
 
-def _fetch_wikimedia_images(query: str) -> list[str]:
-    """Use Wikipedia/Wikimedia API to get real, working image URLs."""
-    import requests as req_lib, re, hashlib
-    
-    # Clean query — remove noise words, keep the subject
-    clean = re.sub(r'\b(reels?|movies?|films?|gaming|games?|watching|boredom|study|studies|because|they|are|good|bad|and|the|a|an|in|on|at|to|for|of|with)\b', '', query, flags=re.IGNORECASE)
-    clean = ' '.join(clean.split())[:80].strip()
-    if not clean:
-        return []
-    
-    try:
-        # Wikipedia pageimages API — most reliable
-        resp = req_lib.get(
-            "https://en.wikipedia.org/w/api.php",
-            params={
-                "action": "query",
-                "titles": clean,
-                "prop": "pageimages",
-                "pithumbsize": 500,
-                "format": "json",
-                "redirects": 1,
-            },
-            timeout=5,
-            headers={"User-Agent": "FocusDost/1.0"},
-        )
-        pages = resp.json().get("query", {}).get("pages", {})
-        urls = []
-        for page in pages.values():
-            if page.get("pageid", -1) == -1:
-                continue  # page not found
-            thumb = page.get("thumbnail", {}).get("source", "")
-            if thumb:
-                urls.append(thumb)
-                # Also try 300px and 200px variants
-                urls.append(re.sub(r'/\d+px-', '/300px-', thumb))
-                urls.append(re.sub(r'/\d+px-', '/200px-', thumb))
-        if urls:
-            logger.info("Wikipedia API found image for: %s → %s", clean, urls[0][:80])
-            return list(dict.fromkeys(urls))[:3]
-    except Exception as exc:
-        logger.warning("Wikipedia API failed: %s", exc)
-    
-    return []
+# Shared in-memory store of downloaded image bytes, keyed by a short id.
+#   id -> (bytes, content_type)
+_image_byte_store: dict[str, tuple[bytes, str]] = {}
 
 
-def _fetch_images_via_openai(initial_text: str, followup_answers: list[str]) -> list[str]:
-    """Fetch images: try Wikipedia API first, then OpenAI web search."""
-    combined = initial_text.strip()
+def _distraction_subject(initial_text: str, followup_answers: list[str]) -> str:
+    """Build a compact subject string from the user's words for searching."""
+    combined = (initial_text or "").strip()
     if followup_answers:
         combined += " " + " ".join(followup_answers[:3])
-    
-    if not combined.strip():
-        return []
-    
-    # Try Wikipedia API first — always returns real URLs
-    wiki_urls = _fetch_wikimedia_images(combined)
-    if wiki_urls:
-        return wiki_urls
-    
-    # Fallback: OpenAI web search
+    return combined.strip()[:240]
+
+
+def _extract_og_image(html: str, base_url: str) -> str | None:
+    """Pull a hotlinkable image URL from a page's social-preview meta tags."""
+    from urllib.parse import urljoin
+    patterns = [
+        r'<meta[^>]+property=["\']og:image(?::secure_url)?["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+        r'<meta[^>]+name=["\']twitter:image(?::src)?["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<link[^>]+rel=["\']image_src["\'][^>]+href=["\']([^"\']+)["\']',
+    ]
+    for pat in patterns:
+        m = re.search(pat, html, re.IGNORECASE)
+        if m:
+            candidate = m.group(1).strip()
+            if candidate:
+                return urljoin(base_url, candidate)
+    return None
+
+
+def _browser_headers(referer: str = "https://www.google.com/") -> dict[str, str]:
+    return {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,image/avif,image/webp,"
+                  "image/png,image/jpeg,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": referer,
+    }
+
+
+def _read_capped(resp, cap: int = 5 * 1024 * 1024) -> bytes:
+    chunks, total = [], 0
+    for chunk in resp.iter_content(chunk_size=65536):
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > cap:
+            break
+    return b"".join(chunks)
+
+
+def _download_image(url: str, timeout: int = 8, _depth: int = 0) -> tuple[bytes, str] | None:
+    """Resolve a candidate URL to real image bytes.
+
+    The OpenAI web-search tool usually returns *webpage* URLs rather than direct
+    image files. So if a candidate is an HTML page, we parse its og:image /
+    twitter:image meta tag (standard, hotlink-friendly) and fetch that instead.
+    Returns (bytes, content_type) or None.
+    """
+    try:
+        resp = req_lib.get(url, timeout=timeout, headers=_browser_headers(), stream=True)
+        if resp.status_code != 200:
+            logger.info("  candidate %s → HTTP %d", url[:70], resp.status_code)
+            return None
+        ctype = (resp.headers.get("Content-Type") or "").lower().split(";")[0].strip()
+
+        # Direct image → use it.
+        if ctype.startswith("image/"):
+            data = _read_capped(resp)
+            if len(data) < 1024:
+                logger.info("  candidate %s → too small (%d bytes)", url[:70], len(data))
+                return None
+            logger.info("  candidate %s → image OK (%d bytes, %s)", url[:70], len(data), ctype)
+            return data, ctype
+
+        # HTML page → extract og:image and recurse once.
+        if ctype.startswith("text/html") and _depth == 0:
+            html = _read_capped(resp, cap=1024 * 1024).decode("utf-8", errors="ignore")
+            og = _extract_og_image(html, url)
+            if og and og != url:
+                logger.info("  candidate %s → resolved og:image %s", url[:55], og[:70])
+                return _download_image(og, timeout=timeout, _depth=1)
+            logger.info("  candidate %s → html with no og:image", url[:70])
+            return None
+
+        logger.info("  candidate %s → unusable content-type %r", url[:70], ctype)
+        return None
+    except Exception as exc:
+        logger.info("  candidate %s → download failed: %s", url[:70], exc)
+        return None
+
+
+def _openai_find_candidate_urls(subject: str) -> list[str]:
+    """Use OpenAI web search to gather a pool of candidate image/page URLs."""
     prompt = (
-        "Student's distraction: \"" + combined[:200] + "\"\n"
-        "Find the Wikipedia page for the main subject (celebrity/movie/game) and return "
-        "the direct thumbnail image URL from that page.\n"
-        "The URL must be from upload.wikimedia.org and end in .jpg or .png.\n"
-        "Return ONLY the URL, nothing else."
+        "A student is distracted by the following thing they typed:\n"
+        f"\"{subject}\"\n\n"
+        "Identify the single most important real-world subject in that text "
+        "(a celebrity, influencer, movie, TV show, game, sports star, or app).\n"
+        "Then search the web and return 8 URLs of web pages or images that "
+        "prominently feature a clear, real photo of that exact subject.\n\n"
+        "Rules for the URLs:\n"
+        "- Direct image files (.jpg/.jpeg/.png/.webp) are best, but reputable "
+        "article or gallery pages that show the subject are also fine — I will "
+        "extract the preview image from them.\n"
+        "- Prefer well-known, reachable sites (news, Wikipedia, official pages).\n"
+        "- Do NOT invent URLs. Only return URLs you actually found via search.\n\n"
+        "Respond with ONLY a JSON object of the form:\n"
+        '{"subject": "<subject>", "images": ["url1", "url2", ...]}'
     )
     try:
         resp = _openai_client.chat.completions.create(
             model="gpt-4o-search-preview",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=150,
+            max_tokens=900,
         )
         content = resp.choices[0].message.content or ""
-        logger.info("OpenAI image search response: %s", content[:200])
-        import re as re2
-        urls = re2.findall(r'https://upload\.wikimedia\.org/[^\s\'"<>]+\.(?:jpg|jpeg|png|webp)', content, re2.IGNORECASE)
-        if urls:
-            logger.info("OpenAI found Wikimedia URL: %s", urls[0][:80])
-            return list(dict.fromkeys(urls))[:3]
+        logger.info("openai web-search raw response: %s", content[:300])
     except Exception as exc:
-        logger.warning("OpenAI image search failed: %s", exc)
-    
-    return []
+        logger.warning("openai web-search call failed: %s", exc)
+        return []
+
+    urls: list[str] = []
+    # Try strict JSON parse first.
+    try:
+        match = re.search(r"\{.*\}", content, re.DOTALL)
+        if match:
+            obj = json.loads(match.group(0))
+            for u in obj.get("images", []):
+                if isinstance(u, str):
+                    urls.append(u.strip())
+    except Exception:
+        pass
+    # Fallback: regex sweep for any http URL in the text.
+    if not urls:
+        urls = re.findall(r"https?://[^\s\"'<>)\]]+", content)
+    # De-dupe, keep order, cap the pool.
+    seen, pool = set(), []
+    for u in urls:
+        u = u.strip().rstrip(".,)")
+        if u and u not in seen and u.startswith("http"):
+            seen.add(u)
+            pool.append(u)
+    logger.info("openai web-search candidate pool: %d urls", len(pool))
+    return pool[:8]
+
+
+def _vision_rank_images(subject: str, items: list[tuple[str, bytes, str]]) -> list[str]:
+    """Send downloaded images (base64) to gpt-4o vision, rank by relevance.
+
+    items: list of (image_id, bytes, content_type)
+    Returns the image_ids of the best (max 3) matches, best first.
+    """
+    if not items:
+        return []
+    if len(items) == 1:
+        return [items[0][0]]
+
+    content: list[dict[str, Any]] = [{
+        "type": "text",
+        "text": (
+            f"A student is distracted by: \"{subject}\".\n"
+            f"I am showing you {len(items)} candidate images, labeled IMAGE 1 .. "
+            f"IMAGE {len(items)} in order.\n"
+            "Decide which images are genuinely a clear, real photo of the main "
+            "subject of that distraction (the celebrity / show / game / app).\n"
+            "Reject logos, text screenshots, collages, unrelated people, or "
+            "low-quality thumbnails.\n"
+            "Return ONLY JSON: {\"ranking\": [<1-based indexes best first>]}. "
+            "Include at most 3 indexes. If none are relevant, return "
+            "{\"ranking\": []}."
+        ),
+    }]
+    for idx, (_id, data, ctype) in enumerate(items, start=1):
+        b64 = base64.b64encode(data).decode("ascii")
+        content.append({"type": "text", "text": f"IMAGE {idx}:"})
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{ctype};base64,{b64}", "detail": "low"},
+        })
+
+    try:
+        resp = _openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": content}],
+            response_format={"type": "json_object"},
+            max_tokens=120,
+        )
+        raw = resp.choices[0].message.content or "{}"
+        logger.info("vision rank response: %s", raw[:200])
+        order = json.loads(raw).get("ranking", [])
+    except Exception as exc:
+        msg = str(exc)
+        if "missing_scope" in msg or "model.request" in msg:
+            logger.info("vision ranking unavailable (API key lacks image scope) "
+                        "— using web-search relevance order")
+        else:
+            logger.warning("vision ranking failed (%s) — using web-search order", exc)
+        return [it[0] for it in items[:3]]
+
+    ranked: list[str] = []
+    for pos in order:
+        try:
+            i = int(pos) - 1
+        except (TypeError, ValueError):
+            continue
+        if 0 <= i < len(items) and items[i][0] not in ranked:
+            ranked.append(items[i][0])
+        if len(ranked) >= 3:
+            break
+    return ranked
+
+
+def _build_distraction_images(initial_text: str, followup_answers: list[str]) -> list[str]:
+    """Full pipeline → returns up to 3 internal image ids served via /proxy-image."""
+    subject = _distraction_subject(initial_text, followup_answers)
+    if not subject:
+        return []
+
+    candidate_urls = _openai_find_candidate_urls(subject)
+    if not candidate_urls:
+        logger.warning("no candidate urls for subject=%r", subject[:60])
+        return []
+
+    # Download + validate candidates in parallel, but KEEP the original web-search
+    # order (most relevant first) by indexing results back into a slot list.
+    slots: list[tuple[str, bytes, str] | None] = [None] * len(candidate_urls)
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        future_map = {
+            pool.submit(_download_image, u): i for i, u in enumerate(candidate_urls)
+        }
+        for fut in as_completed(future_map):
+            i = future_map[fut]
+            result = fut.result()
+            if result:
+                data, ctype = result
+                slots[i] = (uuid.uuid4().hex[:16], data, ctype)
+
+    downloaded = [s for s in slots if s is not None]
+    logger.info("downloaded %d/%d valid images for subject=%r",
+                len(downloaded), len(candidate_urls), subject[:50])
+    if not downloaded:
+        return []
+
+    # Rank by relevance with vision (best, if the API key allows image input).
+    # If the key is restricted (no vision scope) this gracefully falls back to
+    # the web-search relevance order, which is already good.
+    best_ids = _vision_rank_images(subject, downloaded)
+    if not best_ids:
+        best_ids = [d[0] for d in downloaded[:3]]
+
+    # Persist only the chosen images' bytes into the shared byte store.
+    by_id = {img_id: (data, ctype) for img_id, data, ctype in downloaded}
+    final_ids: list[str] = []
+    for img_id in best_ids:
+        if img_id in by_id and img_id not in final_ids:
+            _image_byte_store[img_id] = by_id[img_id]
+            final_ids.append(img_id)
+    # Ensure we always have up to 3 by topping up from download order.
+    for img_id, data, ctype in downloaded:
+        if len(final_ids) >= 3:
+            break
+        if img_id not in final_ids:
+            _image_byte_store[img_id] = (data, ctype)
+            final_ids.append(img_id)
+    logger.info("final image ids for subject=%r: %s", subject[:50], final_ids)
+    return final_ids
 
 
 @bp.post("/distraction-image")
 def distraction_image():
-    """Find a relevant image URL using OpenAI web search based on user's distraction."""
+    """Return a relevant, vision-verified image for the user's distraction.
+
+    Non-blocking: kicks off the OpenAI pipeline in a background thread and
+    returns {"status": "pending"} until the result is cached.
+    """
     body = request.get_json(force=True, silent=True) or {}
     initial_text = str(body.get("initial_text") or "").strip()[:300]
-    followup_answers = [str(f or "").strip()[:150] for f in (body.get("followup_answers") or [])[:6] if str(f or "").strip()]
+    followup_answers = [
+        str(f or "").strip()[:150]
+        for f in (body.get("followup_answers") or [])[:6]
+        if str(f or "").strip()
+    ]
     question_number = int(body.get("question_number") or 1)
-    
+
     # Only serve images for Q1-Q3
     if question_number > 3:
-        return jsonify({"image_url": None, "source": "skipped"})
-    
+        return jsonify({"image_url": None, "status": "skipped"})
+
     if not initial_text and not followup_answers:
-        return jsonify({"image_url": None, "source": "no_context"})
-    
-    # Get or generate image URLs for this context — non-blocking
+        return jsonify({"image_url": None, "status": "no_context"})
+
     cache_key = f"{initial_text[:80]}|{len(followup_answers)}"
-    
-    # If result is ready, return it
+
+    # Result ready → return the per-question image id as a proxy URL.
     if cache_key in _distraction_image_cache:
-        urls = _distraction_image_cache[cache_key]
-        idx = min(question_number - 1, len(urls) - 1) if urls else 0
-        image_url = urls[idx] if urls else None
-        logger.info("distraction-image q=%d cache hit url=%s", question_number, (image_url or "")[:80])
-        # Proxy through our server to avoid CORS/hotlinking blocks
-        if image_url:
-            from urllib.parse import quote
-            image_url = f"/proxy-image?url={quote(image_url, safe='')}"
+        ids = _distraction_image_cache[cache_key]
+        if not ids:
+            logger.info("distraction-image q=%d ready but no images found", question_number)
+            return jsonify({"image_url": None, "status": "ready"})
+        idx = min(question_number - 1, len(ids) - 1)
+        img_id = ids[idx]
+        image_url = f"/proxy-image?id={img_id}"
+        logger.info("distraction-image q=%d → %s", question_number, image_url)
         return jsonify({"image_url": image_url, "status": "ready"})
-    
-    # If not started yet, kick off background thread
+
+    # Kick off background fetch once per context.
     if cache_key not in _distraction_image_pending:
         import threading
         _distraction_image_pending.add(cache_key)
-        logger.info("distraction-image q=%d starting background fetch — text=%r followups=%d", 
-                    question_number, initial_text[:60], len(followup_answers))
-        
+        logger.info(
+            "distraction-image q=%d starting pipeline — text=%r followups=%d",
+            question_number, initial_text[:60], len(followup_answers),
+        )
+
         def _run():
             try:
-                urls = _fetch_images_via_openai(initial_text, followup_answers)
-                logger.info("distraction-image background fetch done — got %d urls: %s", 
-                           len(urls), [u[:60] for u in urls])
-                # Pre-fetch and cache the actual image bytes to avoid rate limiting
-                if urls:
-                    import requests as req_lib
-                    for u in urls:
-                        try:
-                            # Normalize URL for consistent cache key
-                            from urllib.parse import unquote as _unq
-                            u_norm = u
-                            prev = None
-                            while prev != u_norm:
-                                prev = u_norm
-                                u_norm = _unq(u_norm)
-                            
-                            img_resp = req_lib.get(u_norm, timeout=8, headers={
-                                "User-Agent": "Mozilla/5.0 (compatible; FocusDost/1.0)",
-                                "Referer": "https://en.wikipedia.org/",
-                                "Accept": "image/*,*/*",
-                            })
-                            if img_resp.status_code == 200:
-                                content_type = img_resp.headers.get("Content-Type", "image/jpeg")
-                                from ..api.ui_routes import proxy_image
-                                if not hasattr(proxy_image, "_cache"):
-                                    proxy_image._cache = {}
-                                proxy_image._cache[u_norm] = (img_resp.content, content_type)
-                                logger.info("Pre-cached image bytes for: %s", u_norm[:60])
-                            else:
-                                logger.warning("Pre-cache image returned %d for: %s", img_resp.status_code, u_norm[:60])
-                        except Exception as img_exc:
-                            logger.warning("Failed to pre-cache image %s: %s", u[:60], img_exc)
-                _distraction_image_cache[cache_key] = urls if urls else []
+                ids = _build_distraction_images(initial_text, followup_answers)
+                _distraction_image_cache[cache_key] = ids
             except Exception as exc:
-                logger.error("Background image fetch failed: %s", exc)
+                logger.error("distraction-image pipeline failed: %s", exc, exc_info=True)
                 _distraction_image_cache[cache_key] = []
             finally:
                 _distraction_image_pending.discard(cache_key)
-        
+
         threading.Thread(target=_run, daemon=True).start()
     else:
-        logger.info("distraction-image q=%d fetch already in progress", question_number)
-    
+        logger.info("distraction-image q=%d pipeline already running", question_number)
+
     return jsonify({"image_url": None, "status": "pending"})
