@@ -2055,37 +2055,59 @@ def _build_distraction_images_base64(initial_text: str, followup_answers: list[s
     
     This approach works on Render without persistent disk or Redis.
     """
-    intent = _build_image_intent(initial_text, followup_answers)
-    if not intent or not intent.get("image_query"):
-        logger.warning("no image intent derived from user text")
+    try:
+        intent = _build_image_intent(initial_text, followup_answers)
+        if not intent or not intent.get("image_query"):
+            logger.warning("no image intent derived from user text")
+            return [None, None, None]
+        subject = intent.get("subject") or intent.get("image_query")
+        logger.info("image intent: subject=%r query=%r", subject[:50], intent.get("image_query", "")[:50])
+    except Exception as exc:
+        logger.error("_build_image_intent failed: %s", exc, exc_info=True)
         return [None, None, None]
-    subject = intent.get("subject") or intent.get("image_query")
 
-    candidate_urls = _openai_find_candidate_urls(intent)
+    try:
+        candidate_urls = _openai_find_candidate_urls(intent)
+        logger.info("found %d candidate URLs", len(candidate_urls))
+    except Exception as exc:
+        logger.error("_openai_find_candidate_urls failed: %s", exc, exc_info=True)
+        return [None, None, None]
+    
     downloaded: list[tuple[str, bytes, str]] = []
     seen_urls: set[str] = set(candidate_urls)
     if candidate_urls:
-        downloaded = _download_pool(candidate_urls)
-        logger.info("downloaded %d/%d valid images for subject=%r",
-                    len(downloaded), len(candidate_urls), subject[:50])
+        try:
+            downloaded = _download_pool(candidate_urls)
+            logger.info("downloaded %d/%d valid images for subject=%r",
+                        len(downloaded), len(candidate_urls), subject[:50])
+        except Exception as exc:
+            logger.error("_download_pool failed: %s", exc, exc_info=True)
 
     # If too few survived (blocked/dead hosts), do one broader retry search.
     if len(downloaded) < 3:
-        retry_urls = [u for u in _openai_find_candidate_urls(intent, retry=True)
-                      if u not in seen_urls]
-        if retry_urls:
-            logger.info("retry search added %d new candidate urls", len(retry_urls))
-            downloaded += _download_pool(retry_urls)
-            logger.info("after retry: %d valid images for subject=%r",
-                        len(downloaded), subject[:50])
+        try:
+            retry_urls = [u for u in _openai_find_candidate_urls(intent, retry=True)
+                          if u not in seen_urls]
+            if retry_urls:
+                logger.info("retry search added %d new candidate urls", len(retry_urls))
+                downloaded += _download_pool(retry_urls)
+                logger.info("after retry: %d valid images for subject=%r",
+                            len(downloaded), subject[:50])
+        except Exception as exc:
+            logger.error("retry search failed: %s", exc, exc_info=True)
 
     if not downloaded:
         logger.warning("no valid images for subject=%r", subject[:60])
         return [None, None, None]
 
     # Rank by relevance with vision (best, if the API key allows image input).
-    best_ids = _vision_rank_images(subject, downloaded)
-    if not best_ids:
+    try:
+        best_ids = _vision_rank_images(subject, downloaded)
+        if not best_ids:
+            best_ids = [d[0] for d in downloaded[:3]]
+        logger.info("vision ranking: selected %d images", len(best_ids))
+    except Exception as exc:
+        logger.error("_vision_rank_images failed: %s", exc, exc_info=True)
         best_ids = [d[0] for d in downloaded[:3]]
 
     # Build result list with base64-encoded images
@@ -2188,16 +2210,20 @@ def distraction_image():
 
         def _run():
             try:
+                logger.info("distraction-image background thread started")
                 img_data_list = _build_distraction_images_base64(initial_text, followup_answers)
+                logger.info("distraction-image background thread completed: %d images", len([i for i in img_data_list if i]))
                 _distraction_image_cache[cache_key] = img_data_list
                 if not img_data_list or all(i is None for i in img_data_list):
                     _distraction_image_empty_ts[cache_key] = time.time()
+                    logger.warning("distraction-image background thread: no images generated")
             except Exception as exc:
                 logger.error("distraction-image pipeline failed: %s", exc, exc_info=True)
                 _distraction_image_cache[cache_key] = [None, None, None]
                 _distraction_image_empty_ts[cache_key] = time.time()
             finally:
                 _distraction_image_pending.discard(cache_key)
+                logger.info("distraction-image background thread finished")
 
         threading.Thread(target=_run, daemon=True).start()
     else:
