@@ -40,17 +40,9 @@ def on_suggest_request(data):
         emit("suggestions", {"items": []}, to=request.sid)
         return
 
-    suggestions: list[str] = []
-
-    try:
-        suggestions = _generate_ai_suggestions(cleaned)
-    except Exception:  # pragma: no cover - defensive logging
-        logger.exception("suggest_request ai fallback")
-        suggestions = []
-
-    if not suggestions:
-        suggestions = _generate_local_suggestions(cleaned.lower())
-
+    # Use local suggestions immediately to avoid blocking
+    # AI suggestions are nice-to-have but not critical for UX
+    suggestions = _generate_local_suggestions(cleaned.lower())
     emit("suggestions", {"items": suggestions}, to=request.sid)
 
 
