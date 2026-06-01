@@ -46,22 +46,23 @@ def test_case(label, initial, followups):
     # Get images
     try:
         rr = requests.post(f"{BASE}/api/triggers/distraction-image", json=payload, timeout=15).json()
-        urls = rr.get("image_urls", [])
+        images = rr.get("images", [])
         
-        if not urls or all(u is None for u in urls):
+        if not images or all(img is None for img in images):
             print(f"  ❌ FAIL: No images returned")
             return False
         
         valid_count = 0
-        for q, u in enumerate(urls, 1):
-            if not u:
+        for q, img in enumerate(images, 1):
+            if not img or not img.get("data"):
                 print(f"  Q{q}: NO_IMAGE")
                 continue
             try:
-                ig = requests.get(f"{BASE}{u}", timeout=15)
-                w, h, fmt = analyze(ig.content)
+                import base64
+                img_bytes = base64.b64decode(img["data"])
+                w, h, fmt = analyze(img_bytes)
                 if w and h:
-                    print(f"  Q{q}: ✓ {fmt} {w}x{h} ({len(ig.content)} bytes)")
+                    print(f"  Q{q}: ✓ {img['content_type']} {fmt} {w}x{h} ({len(img_bytes)} bytes)")
                     valid_count += 1
                 else:
                     print(f"  Q{q}: ✗ Invalid image")

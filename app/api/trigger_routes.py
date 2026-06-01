@@ -2043,12 +2043,22 @@ def _vision_rank_images(subject: str, items: list[tuple[str, bytes, str]]) -> li
     return ranked
 
 
-def _build_distraction_images(initial_text: str, followup_answers: list[str]) -> list[str]:
-    """Full pipeline → returns up to 3 internal image ids served via /proxy-image."""
+def _build_distraction_images_base64(initial_text: str, followup_answers: list[str]) -> list[dict[str, Any] | None]:
+    """Full pipeline → returns up to 3 images as base64-encoded dicts.
+    
+    Returns: [
+        {"data": bytes, "content_type": "image/jpeg"},
+        {"data": bytes, "content_type": "image/png"},
+        {"data": bytes, "content_type": "image/jpeg"}
+    ]
+    or [None, None, None] if no images found.
+    
+    This approach works on Render without persistent disk or Redis.
+    """
     intent = _build_image_intent(initial_text, followup_answers)
     if not intent or not intent.get("image_query"):
         logger.warning("no image intent derived from user text")
-        return []
+        return [None, None, None]
     subject = intent.get("subject") or intent.get("image_query")
 
     candidate_urls = _openai_find_candidate_urls(intent)
@@ -2071,42 +2081,64 @@ def _build_distraction_images(initial_text: str, followup_answers: list[str]) ->
 
     if not downloaded:
         logger.warning("no valid images for subject=%r", subject[:60])
-        return []
+        return [None, None, None]
 
     # Rank by relevance with vision (best, if the API key allows image input).
-    # If the key is restricted (no vision scope) this gracefully falls back to
-    # the web-search relevance order, which is already good.
     best_ids = _vision_rank_images(subject, downloaded)
     if not best_ids:
         best_ids = [d[0] for d in downloaded[:3]]
 
-    # Persist only the chosen images' bytes into the shared byte store.
+    # Build result list with base64-encoded images
     by_id = {img_id: (data, ctype) for img_id, data, ctype in downloaded}
-    final_ids: list[str] = []
-    for img_id in best_ids:
-        if img_id in by_id and img_id not in final_ids:
+    result: list[dict[str, Any] | None] = []
+    
+    for img_id in best_ids[:3]:
+        if img_id in by_id:
             data, ctype = by_id[img_id]
-            _store_image(img_id, data, ctype)
-            final_ids.append(img_id)
-    # Ensure we always have up to 3 distinct images by topping up from order.
-    for img_id, data, ctype in downloaded:
-        if len(final_ids) >= 3:
-            break
-        if img_id not in final_ids:
-            _store_image(img_id, data, ctype)
-            final_ids.append(img_id)
-    logger.info("final image ids for subject=%r: %s", subject[:50], final_ids)
-    return final_ids
+            result.append({"data": data, "content_type": ctype})
+        else:
+            result.append(None)
+    
+    # Pad to 3 images
+    while len(result) < 3:
+        if len(downloaded) > len(result):
+            _, data, ctype = downloaded[len(result)]
+            result.append({"data": data, "content_type": ctype})
+        else:
+            result.append(None)
+    
+    logger.info("final images for subject=%r: %d valid", subject[:50], len([r for r in result if r]))
+    return result[:3]
+
+
+def _build_distraction_images(initial_text: str, followup_answers: list[str]) -> list[str]:
+    """Legacy function - kept for compatibility but deprecated.
+    Use _build_distraction_images_base64 instead."""
+    img_data_list = _build_distraction_images_base64(initial_text, followup_answers)
+    ids = []
+    for img_data in img_data_list:
+        if img_data:
+            img_id = str(uuid.uuid4().hex[:16])
+            _store_image(img_id, img_data["data"], img_data["content_type"])
+            ids.append(img_id)
+    return ids
 
 
 @bp.post("/distraction-image")
 def distraction_image():
-    """Return all 3 distraction image URLs for Q1-Q3 in one response.
+    """Return all 3 distraction images for Q1-Q3 in one response.
 
     Non-blocking: kicks off the OpenAI pipeline in a background thread and
     returns {"status": "pending"} until the result is cached.
-    Response when ready: {"status": "ready", "image_urls": [url_q1, url_q2, url_q3]}
-    Each url is either a "/proxy-image?id=..." string or null.
+    
+    Response when ready: {"status": "ready", "images": [
+        {"data": "base64...", "content_type": "image/jpeg"},
+        {"data": "base64...", "content_type": "image/jpeg"},
+        {"data": "base64...", "content_type": "image/jpeg"}
+    ]}
+    
+    Each image is either a dict with base64 data or null.
+    This approach works on Render without persistent disk or Redis.
     """
     body = request.get_json(force=True, silent=True) or {}
     initial_text = str(body.get("initial_text") or "").strip()[:300]
@@ -2117,7 +2149,7 @@ def distraction_image():
     ]
 
     if not initial_text and not followup_answers:
-        return jsonify({"image_urls": [None, None, None], "status": "no_context"})
+        return jsonify({"images": [None, None, None], "status": "no_context"})
 
     cache_key = f"{initial_text[:80]}|{len(followup_answers)}"
 
@@ -2129,18 +2161,21 @@ def distraction_image():
             _distraction_image_empty_ts.pop(cache_key, None)
             logger.info("distraction-image evicted stale empty result for retry")
 
-    # Result ready → return all 3 URLs at once.
+    # Result ready → return all 3 images as base64
     if cache_key in _distraction_image_cache:
-        ids = _distraction_image_cache[cache_key]
-        urls = []
-        for q in range(3):
-            if not ids:
-                urls.append(None)
+        img_data_list = _distraction_image_cache[cache_key]
+        images = []
+        for img_data in img_data_list:
+            if img_data:
+                data_b64 = base64.b64encode(img_data["data"]).decode("ascii")
+                images.append({
+                    "data": data_b64,
+                    "content_type": img_data["content_type"]
+                })
             else:
-                idx = min(q, len(ids) - 1)
-                urls.append(f"/proxy-image?id={ids[idx]}")
-        logger.info("distraction-image ready — urls: %s", [u and u[:50] for u in urls])
-        return jsonify({"image_urls": urls, "status": "ready"})
+                images.append(None)
+        logger.info("distraction-image ready — returning %d images as base64", len([i for i in images if i]))
+        return jsonify({"images": images, "status": "ready"})
 
     # Kick off background fetch once per context.
     if cache_key not in _distraction_image_pending:
@@ -2153,13 +2188,13 @@ def distraction_image():
 
         def _run():
             try:
-                ids = _build_distraction_images(initial_text, followup_answers)
-                _distraction_image_cache[cache_key] = ids
-                if not ids:
+                img_data_list = _build_distraction_images_base64(initial_text, followup_answers)
+                _distraction_image_cache[cache_key] = img_data_list
+                if not img_data_list or all(i is None for i in img_data_list):
                     _distraction_image_empty_ts[cache_key] = time.time()
             except Exception as exc:
                 logger.error("distraction-image pipeline failed: %s", exc, exc_info=True)
-                _distraction_image_cache[cache_key] = []
+                _distraction_image_cache[cache_key] = [None, None, None]
                 _distraction_image_empty_ts[cache_key] = time.time()
             finally:
                 _distraction_image_pending.discard(cache_key)
@@ -2168,4 +2203,4 @@ def distraction_image():
     else:
         logger.info("distraction-image pipeline already running")
 
-    return jsonify({"image_urls": [None, None, None], "status": "pending"})
+    return jsonify({"images": [None, None, None], "status": "pending"})

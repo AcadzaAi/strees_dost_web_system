@@ -78,22 +78,24 @@ def run_case(label, initial, followups, expect):
             break
         time.sleep(2)
 
-    # New unified endpoint returns all 3 URLs at once in image_urls array
+    # New unified endpoint returns all 3 images at once as base64
     results = []
     try:
         rr = requests.post(f"{BASE}/api/triggers/distraction-image", json=payload, timeout=25).json()
-        urls = rr.get("image_urls", [None, None, None])
+        images = rr.get("images", [None, None, None])
         for q in (1, 2, 3):
-            u = urls[q - 1] if q <= len(urls) else None
-            if not u:
+            img = images[q - 1] if q <= len(images) else None
+            if not img or not img.get("data"):
                 results.append((q, None, "NO_IMAGE"))
                 continue
             try:
-                ig = requests.get(f"{BASE}{u}", timeout=25)
-                w, h, fmt = analyze(ig.content)
-                results.append((q, u, f"{ig.status_code} {fmt} {w}x{h} {len(ig.content)}B"))
+                # Decode base64 and analyze
+                import base64
+                img_bytes = base64.b64decode(img["data"])
+                w, h, fmt = analyze(img_bytes)
+                results.append((q, f"base64:{len(img['data'])} chars", f"{img['content_type']} {fmt} {w}x{h} {len(img_bytes)}B"))
             except Exception as e:
-                results.append((q, u, f"fetch-error:{e}"))
+                results.append((q, "base64", f"decode-error:{e}"))
     except Exception as e:
         for q in (1, 2, 3):
             results.append((q, None, f"req-error:{e}"))

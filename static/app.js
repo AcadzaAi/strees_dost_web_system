@@ -3692,10 +3692,14 @@ const StressTriggers = (() => {
       for (let i = 0; i < maxAttempts; i++) {
         try {
           const data = await postJSON("/api/triggers/distraction-image", payload, { timeoutMs: 6000 });
-          console.log(`[img] poll ${i+1}: status=${data?.status} urls=${JSON.stringify((data?.image_urls||[]).map(u=>u?u.substring(0,50):null))}`);
+          console.log(`[img] poll ${i+1}: status=${data?.status} images=${data?.images ? data.images.length : 0}`);
           if (data?.status === "ready") {
-            const urls = Array.isArray(data.image_urls) ? data.image_urls : [null, null, null];
-            _imageUrls = [urls[0] || null, urls[1] || null, urls[2] || null];
+            const images = Array.isArray(data.images) ? data.images : [null, null, null];
+            // Convert base64 images to data URLs
+            _imageUrls = images.map(img => {
+              if (!img || !img.data) return null;
+              return `data:${img.content_type || 'image/jpeg'};base64,${img.data}`;
+            });
             _imageFetchPromise = null;
             return _imageUrls;
           }
