@@ -3641,6 +3641,13 @@ const StressTriggers = (() => {
   const _imageCache = new Map();       // cacheKey -> url string | null
   const _imageFetching = new Map();    // cacheKey -> Promise<string|null>
 
+  // Called from onReset() — wipe image state so a new session fetches fresh images.
+  function clearImageCache() {
+    _imageCache.clear();
+    _imageFetching.clear();
+    console.log('[img] cache cleared for new session');
+  }
+
   function _makeImagePayload(questionNumber, overrideText, overrideFollowups) {
     return {
       initial_text: overrideText || getSessionInitialQuery(),
@@ -3713,6 +3720,39 @@ const StressTriggers = (() => {
     return promise;
   }
 
+  /**
+   * Preload an image URL and verify it actually renders.
+   * Returns the URL if it loads successfully, null if broken.
+   */
+  async function _verifyImageUrl(url) {
+    if (!url) return null;
+    return new Promise((resolve) => {
+      const img = new Image();
+      const timer = setTimeout(() => {
+        img.onload = img.onerror = null;
+        console.warn(`[img] verify timeout for ${url.substring(0,60)}`);
+        resolve(null);
+      }, 8000);
+      img.onload = () => {
+        clearTimeout(timer);
+        // Reject suspiciously tiny images (broken placeholder served as 200)
+        if (img.naturalWidth < 50 || img.naturalHeight < 50) {
+          console.warn(`[img] verify rejected tiny ${img.naturalWidth}x${img.naturalHeight}: ${url.substring(0,60)}`);
+          resolve(null);
+        } else {
+          console.log(`[img] verify OK ${img.naturalWidth}x${img.naturalHeight}: ${url.substring(0,60)}`);
+          resolve(url);
+        }
+      };
+      img.onerror = () => {
+        clearTimeout(timer);
+        console.warn(`[img] verify failed (load error): ${url.substring(0,60)}`);
+        resolve(null);
+      };
+      img.src = url;
+    });
+  }
+
   function prefetchDistractionImage(initialText, followupAnswers) {
     console.log(`[img] prefetch starting — text: "${(initialText||'').substring(0,40)}", followups: ${(followupAnswers||[]).length}`);
     for (let q = 1; q <= 3; q++) {
@@ -3721,6 +3761,8 @@ const StressTriggers = (() => {
         console.log(`[img] Q${q} already fetched/in-flight, skipping prefetch`);
         continue;
       }
+      // Pass the same context for all 3 questions so the backend pipeline runs
+      // once and returns 3 distinct image ids (one per question slot).
       fetchDistractionImage(q, initialText, followupAnswers);
     }
   }
@@ -3934,18 +3976,24 @@ async function showQuestionWarningPopup(questionNumber, onComplete) {
 
     document.querySelectorAll(".psyq-overlay[data-question-warning='1']").forEach((el) => el.remove());
 
-    // Get image — use cache, in-flight promise, or start fresh fetch
+    // Get image — use cache, in-flight promise, or start fresh fetch.
+    // Then verify it actually loads (preload) so we never show a broken <img>.
     let imgUrl = null;
     try {
       const cachedKey = `img_q${qNum}`;
-      // Access via StressTriggers exported method
+      let rawUrl = null;
       if (StressTriggers.getImageCache && StressTriggers.getImageCache(cachedKey) !== undefined) {
-        imgUrl = StressTriggers.getImageCache(cachedKey);
-        console.log(`[popup] Q${qNum} using cached image:`, imgUrl ? imgUrl.substring(0,60) : 'null');
+        rawUrl = StressTriggers.getImageCache(cachedKey);
+        console.log(`[popup] Q${qNum} using cached image:`, rawUrl ? rawUrl.substring(0,60) : 'null');
       } else {
         console.log(`[popup] Q${qNum} image not in cache, fetching now`);
-        imgUrl = await StressTriggers.fetchDistractionImage(qNum);
-        console.log(`[popup] Q${qNum} fetch result:`, imgUrl ? imgUrl.substring(0,60) : 'null');
+        rawUrl = await StressTriggers.fetchDistractionImage(qNum);
+        console.log(`[popup] Q${qNum} fetch result:`, rawUrl ? rawUrl.substring(0,60) : 'null');
+      }
+      // Verify the URL actually renders before injecting into the DOM.
+      if (rawUrl) {
+        imgUrl = await StressTriggers.verifyImageUrl(rawUrl);
+        if (!imgUrl) console.warn(`[popup] Q${qNum} image failed verification, showing without image`);
       }
     } catch(imgErr) {
       console.warn(`[popup] Q${qNum} image error:`, imgErr.message);
@@ -3963,7 +4011,9 @@ async function showQuestionWarningPopup(questionNumber, onComplete) {
     overlay.innerHTML = `
       <div class="psyq-card psyq-card--warning psyq-card--warning-slow psyq-card--minimal ${imgUrl ? 'psyq-card--katrina' : ''}" id="psyqCard">
         <button class="psyq-close psyq-close--minimal" id="psyqClose" type="button" aria-label="Close popup">×</button>
-        ${imgUrl ? `<img class="psyq-katrina-image" src="${imgUrl}" alt="" onerror="console.error('[popup] Image failed to load:', this.src)" onload="console.log('[popup] Image loaded OK:', this.src.substring(0,60))" />` : "<!-- no image -->"}
+        ${imgUrl ? `<img class="psyq-katrina-image" src="${imgUrl}" alt=""
+            onerror="this.style.display='none';this.closest('.psyq-card').classList.remove('psyq-card--katrina');console.warn('[popup] img onerror hidden:', this.src.substring(0,60))"
+            onload="console.log('[popup] img loaded OK:', this.src.substring(0,60))" />` : "<!-- no image -->"}
         <p class="psyq-reflection ${imgUrl ? 'psyq-reflection--katrina' : ''}" id="psyqReflection"></p>
       </div>
     `;
@@ -7516,17 +7566,48 @@ async function showQuestionWarningPopup(questionNumber, onComplete) {
       void fetchQuestionWarningCopy(questionNumber);
       // Start image fetch — returns same promise if already in-flight
       const imageFetchPromise = fetchDistractionImage(questionNumber);
-      
-      const timeoutId = setTimeout(async () => {
+
+      // Fire popup as soon as BOTH conditions are met:
+      //   1. At least 5 seconds have elapsed since the question rendered
+      //   2. The image fetch has resolved (ready or failed)
+      // Hard cap: 45 seconds — show popup regardless after that.
+      const questionRenderedAt = Date.now();
+      const MIN_WAIT_MS = 5000;
+      const HARD_CAP_MS = 45000;
+
+      let popupFired = false;
+      const firePopup = () => {
+        if (popupFired) return;
         if (String(state.currentQuestionId || "") !== renderedQuestionId) return;
-        // Wait for image (already been fetching since question rendered or since devil screen)
-        await imageFetchPromise;
-        if (String(state.currentQuestionId || "") !== renderedQuestionId) return;
+        popupFired = true;
         const imgReady = StressTriggers.getImageCache && StressTriggers.getImageCache(`img_q${questionNumber}`);
-        console.log(`[popup] Q${questionNumber} showing, image: ${imgReady ? 'YES' : 'NO'}`);
+        console.log(`[popup] Q${questionNumber} firing — image: ${imgReady ? 'YES' : 'NO'}, elapsed: ${Date.now() - questionRenderedAt}ms`);
         showQuestionWarningPopup(questionNumber, () => {});
-      }, 15000);
-      pendingTriggerTimeouts.push(timeoutId);
+      };
+
+      // Watch for image ready + minimum wait elapsed.
+      const watchId = setInterval(() => {
+        if (popupFired) { clearInterval(watchId); return; }
+        if (String(state.currentQuestionId || "") !== renderedQuestionId) { clearInterval(watchId); return; }
+        const elapsed = Date.now() - questionRenderedAt;
+        const imgDone = _imageCache.has(`img_q${questionNumber}`); // resolved (url or null)
+        if (elapsed >= MIN_WAIT_MS && imgDone) {
+          clearInterval(watchId);
+          clearTimeout(hardCapId);
+          firePopup();
+        }
+      }, 250);
+
+      // Hard cap — never wait more than 45s
+      const hardCapId = setTimeout(() => {
+        clearInterval(watchId);
+        firePopup();
+      }, HARD_CAP_MS);
+
+      pendingTriggerTimeouts.push(hardCapId);
+      // Store watchId so cancelPendingTriggers can clear it too
+      // (setInterval ids are numbers just like setTimeout ids)
+      pendingTriggerTimeouts.push(watchId);
       return;
     }
 
@@ -8153,6 +8234,8 @@ async function showQuestionWarningPopup(questionNumber, onComplete) {
     state.optionFeedbackInterceptionCount = 0;
     closeOptionFeedbackPopup();
     deactivateAllTriggers();
+    // Clear distraction image cache so the next session fetches fresh images.
+    clearImageCache();
   }
 
   function recordFollowupAnswer(answer, domain, slot, questionText) {
@@ -8360,6 +8443,8 @@ async function showQuestionWarningPopup(questionNumber, onComplete) {
     prefetchQuestionWarningCopies,
     fetchDistractionImage,
     getImageCache: (key) => _imageCache.get(key),
+    clearImageCache,
+    verifyImageUrl: _verifyImageUrl,
     // Q6 interception helpers
     isOptionFeedbackInterceptionEnabled: () => state.optionFeedbackInterceptionEnabled,
     getOptionFeedbackInterceptionCount: () => state.optionFeedbackInterceptionCount,
