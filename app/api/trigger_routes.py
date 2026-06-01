@@ -2201,7 +2201,6 @@ def distraction_image():
 
     # Kick off background fetch once per context.
     if cache_key not in _distraction_image_pending:
-        import threading
         _distraction_image_pending.add(cache_key)
         logger.info(
             "distraction-image starting pipeline — text=%r followups=%d",
@@ -2225,7 +2224,14 @@ def distraction_image():
                 _distraction_image_pending.discard(cache_key)
                 logger.info("distraction-image background thread finished")
 
-        threading.Thread(target=_run, daemon=True).start()
+        # Use eventlet.spawn for compatibility with eventlet worker
+        try:
+            import eventlet
+            eventlet.spawn(_run)
+        except ImportError:
+            # Fallback to threading for non-eventlet environments
+            import threading
+            threading.Thread(target=_run, daemon=True).start()
     else:
         logger.info("distraction-image pipeline already running")
 
