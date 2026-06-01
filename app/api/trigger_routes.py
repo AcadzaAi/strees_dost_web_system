@@ -2054,10 +2054,12 @@ def _build_distraction_images(initial_text: str, followup_answers: list[str]) ->
 
 @bp.post("/distraction-image")
 def distraction_image():
-    """Return a relevant, vision-verified image for the user's distraction.
+    """Return all 3 distraction image URLs for Q1-Q3 in one response.
 
     Non-blocking: kicks off the OpenAI pipeline in a background thread and
     returns {"status": "pending"} until the result is cached.
+    Response when ready: {"status": "ready", "image_urls": [url_q1, url_q2, url_q3]}
+    Each url is either a "/proxy-image?id=..." string or null.
     """
     body = request.get_json(force=True, silent=True) or {}
     initial_text = str(body.get("initial_text") or "").strip()[:300]
@@ -2066,44 +2068,40 @@ def distraction_image():
         for f in (body.get("followup_answers") or [])[:6]
         if str(f or "").strip()
     ]
-    question_number = int(body.get("question_number") or 1)
-
-    # Only serve images for Q1-Q3
-    if question_number > 3:
-        return jsonify({"image_url": None, "status": "skipped"})
 
     if not initial_text and not followup_answers:
-        return jsonify({"image_url": None, "status": "no_context"})
+        return jsonify({"image_urls": [None, None, None], "status": "no_context"})
 
     cache_key = f"{initial_text[:80]}|{len(followup_answers)}"
 
     # Empty results expire so a transient web-search miss can be retried later.
     if cache_key in _distraction_image_cache and not _distraction_image_cache[cache_key]:
         ts = _distraction_image_empty_ts.get(cache_key, 0)
-        if time.time() - ts > 45:  # stale empty result → allow a fresh attempt
+        if time.time() - ts > 45:
             _distraction_image_cache.pop(cache_key, None)
             _distraction_image_empty_ts.pop(cache_key, None)
             logger.info("distraction-image evicted stale empty result for retry")
 
-    # Result ready → return the per-question image id as a proxy URL.
+    # Result ready → return all 3 URLs at once.
     if cache_key in _distraction_image_cache:
         ids = _distraction_image_cache[cache_key]
-        if not ids:
-            logger.info("distraction-image q=%d ready but no images found", question_number)
-            return jsonify({"image_url": None, "status": "ready"})
-        idx = min(question_number - 1, len(ids) - 1)
-        img_id = ids[idx]
-        image_url = f"/proxy-image?id={img_id}"
-        logger.info("distraction-image q=%d → %s", question_number, image_url)
-        return jsonify({"image_url": image_url, "status": "ready"})
+        urls = []
+        for q in range(3):
+            if not ids:
+                urls.append(None)
+            else:
+                idx = min(q, len(ids) - 1)
+                urls.append(f"/proxy-image?id={ids[idx]}")
+        logger.info("distraction-image ready — urls: %s", [u and u[:50] for u in urls])
+        return jsonify({"image_urls": urls, "status": "ready"})
 
     # Kick off background fetch once per context.
     if cache_key not in _distraction_image_pending:
         import threading
         _distraction_image_pending.add(cache_key)
         logger.info(
-            "distraction-image q=%d starting pipeline — text=%r followups=%d",
-            question_number, initial_text[:60], len(followup_answers),
+            "distraction-image starting pipeline — text=%r followups=%d",
+            initial_text[:60], len(followup_answers),
         )
 
         def _run():
@@ -2121,6 +2119,6 @@ def distraction_image():
 
         threading.Thread(target=_run, daemon=True).start()
     else:
-        logger.info("distraction-image q=%d pipeline already running", question_number)
+        logger.info("distraction-image pipeline already running")
 
-    return jsonify({"image_url": None, "status": "pending"})
+    return jsonify({"image_urls": [None, None, None], "status": "pending"})

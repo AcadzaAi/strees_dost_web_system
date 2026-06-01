@@ -3638,86 +3638,104 @@ const StressTriggers = (() => {
   }
 
  // ── Distraction image helpers ─────────────────────────────────────
-  const _imageCache = new Map();       // cacheKey -> url string | null
-  const _imageFetching = new Map();    // cacheKey -> Promise<string|null>
+  // Single shared state for the whole session.
+  // _imageUrls[0..2] = resolved URL (string) or null for Q1/Q2/Q3.
+  // _imageFetchPromise = the one in-flight polling promise (or null).
+  let _imageUrls = [undefined, undefined, undefined]; // undefined = not yet resolved
+  let _imageFetchPromise = null;
+  let _imageFetchContext = null; // {initial_text, followup_answers} used for the current fetch
 
   // Called from onReset() — wipe image state so a new session fetches fresh images.
   function clearImageCache() {
-    _imageCache.clear();
-    _imageFetching.clear();
+    _imageUrls = [undefined, undefined, undefined];
+    _imageFetchPromise = null;
+    _imageFetchContext = null;
     console.log('[img] cache cleared for new session');
   }
 
-  function _makeImagePayload(questionNumber, overrideText, overrideFollowups) {
+  function _makeSessionImagePayload(overrideText, overrideFollowups) {
     return {
       initial_text: overrideText || getSessionInitialQuery(),
       followup_answers: overrideFollowups || (Array.isArray(state.followupAnswers)
         ? state.followupAnswers.map(f => String(f?.answer || "").trim()).filter(Boolean)
         : []),
-      question_number: questionNumber,
     };
   }
 
-  async function fetchDistractionImage(questionNumber, overrideText, overrideFollowups) {
-    const cacheKey = `img_q${questionNumber}`;
-    
-    // Already resolved
-    if (_imageCache.has(cacheKey)) {
-      console.log(`[img] Q${questionNumber} cache hit:`, _imageCache.get(cacheKey) ? 'has url' : 'null');
-      return _imageCache.get(cacheKey);
+  /**
+   * Fetch all 3 distraction images for this session in one shared promise.
+   * Returns a Promise<string[]> — array of 3 URLs (or nulls).
+   * All callers share the same promise; it is never started twice.
+   */
+  function _fetchAllDistractionImages(overrideText, overrideFollowups) {
+    // If already resolved, return immediately.
+    if (_imageUrls.every(u => u !== undefined)) {
+      return Promise.resolve(_imageUrls);
     }
-    
-    // Already in-flight — return same promise
-    if (_imageFetching.has(cacheKey)) {
-      console.log(`[img] Q${questionNumber} already in-flight, reusing promise`);
-      return _imageFetching.get(cacheKey);
+    // If already in-flight, reuse.
+    if (_imageFetchPromise) {
+      return _imageFetchPromise;
     }
-    
-    const payload = _makeImagePayload(questionNumber, overrideText, overrideFollowups);
-    console.log(`[img] Q${questionNumber} starting fetch — initial_text: "${payload.initial_text?.substring(0,40)}", followups: ${payload.followup_answers?.length}`);
-    
+
+    const payload = _makeSessionImagePayload(overrideText, overrideFollowups);
     if (!payload.initial_text && !payload.followup_answers.length) {
-      console.warn(`[img] Q${questionNumber} no context — skipping`);
-      _imageCache.set(cacheKey, null);
-      return null;
+      console.warn('[img] no context — skipping image fetch');
+      _imageUrls = [null, null, null];
+      return Promise.resolve(_imageUrls);
     }
-    
-    // Start polling promise
-    const promise = (async () => {
+
+    _imageFetchContext = payload;
+    console.log(`[img] starting session fetch — text: "${payload.initial_text?.substring(0,40)}", followups: ${payload.followup_answers?.length}`);
+
+    _imageFetchPromise = (async () => {
       const maxAttempts = 45;
       for (let i = 0; i < maxAttempts; i++) {
         try {
-          const data = await postJSON("/api/triggers/distraction-image", payload, { timeoutMs: 5000 });
-          console.log(`[img] Q${questionNumber} poll ${i+1}: status=${data?.status} url=${data?.image_url ? data.image_url.substring(0,60) : 'null'}`);
+          const data = await postJSON("/api/triggers/distraction-image", payload, { timeoutMs: 6000 });
+          console.log(`[img] poll ${i+1}: status=${data?.status} urls=${JSON.stringify((data?.image_urls||[]).map(u=>u?u.substring(0,50):null))}`);
           if (data?.status === "ready") {
-            const url = data?.image_url || null;
-            _imageCache.set(cacheKey, url);
-            _imageFetching.delete(cacheKey);
-            return url;
+            const urls = Array.isArray(data.image_urls) ? data.image_urls : [null, null, null];
+            _imageUrls = [urls[0] || null, urls[1] || null, urls[2] || null];
+            _imageFetchPromise = null;
+            return _imageUrls;
           }
-          if (data?.status === "pending") {
+          if (data?.status === "pending" || data?.status === "no_context") {
             await new Promise(r => setTimeout(r, 1000));
             continue;
           }
-          console.warn(`[img] Q${questionNumber} unexpected status: ${data?.status}`);
-          _imageCache.set(cacheKey, null);
-          _imageFetching.delete(cacheKey);
-          return null;
+          console.warn(`[img] unexpected status: ${data?.status}`);
+          break;
         } catch (err) {
-          console.error(`[img] Q${questionNumber} poll error:`, err.message);
-          _imageCache.set(cacheKey, null);
-          _imageFetching.delete(cacheKey);
-          return null;
+          console.error(`[img] poll error:`, err.message);
+          break;
         }
       }
-      console.warn(`[img] Q${questionNumber} timed out after ${maxAttempts}s`);
-      _imageCache.set(cacheKey, null);
-      _imageFetching.delete(cacheKey);
-      return null;
+      console.warn(`[img] timed out or errored after ${maxAttempts} polls`);
+      _imageUrls = [null, null, null];
+      _imageFetchPromise = null;
+      return _imageUrls;
     })();
-    
-    _imageFetching.set(cacheKey, promise);
-    return promise;
+
+    return _imageFetchPromise;
+  }
+
+  /**
+   * Get the image URL for a specific question (1-indexed).
+   * Returns the cached URL, or waits for the shared fetch to complete.
+   */
+  async function fetchDistractionImage(questionNumber, overrideText, overrideFollowups) {
+    const idx = questionNumber - 1;
+    if (idx < 0 || idx > 2) return null;
+
+    // Already resolved for this slot.
+    if (_imageUrls[idx] !== undefined) {
+      console.log(`[img] Q${questionNumber} cache hit:`, _imageUrls[idx] ? 'has url' : 'null');
+      return _imageUrls[idx];
+    }
+
+    // Wait for the shared fetch.
+    const urls = await _fetchAllDistractionImages(overrideText, overrideFollowups);
+    return urls[idx] || null;
   }
 
   /**
@@ -3735,7 +3753,6 @@ const StressTriggers = (() => {
       }, 8000);
       img.onload = () => {
         clearTimeout(timer);
-        // Reject suspiciously tiny images (broken placeholder served as 200)
         if (img.naturalWidth < 50 || img.naturalHeight < 50) {
           console.warn(`[img] verify rejected tiny ${img.naturalWidth}x${img.naturalHeight}: ${url.substring(0,60)}`);
           resolve(null);
@@ -3755,16 +3772,17 @@ const StressTriggers = (() => {
 
   function prefetchDistractionImage(initialText, followupAnswers) {
     console.log(`[img] prefetch starting — text: "${(initialText||'').substring(0,40)}", followups: ${(followupAnswers||[]).length}`);
-    for (let q = 1; q <= 3; q++) {
-      const cacheKey = `img_q${q}`;
-      if (_imageCache.has(cacheKey) || _imageFetching.has(cacheKey)) {
-        console.log(`[img] Q${q} already fetched/in-flight, skipping prefetch`);
-        continue;
-      }
-      // Pass the same context for all 3 questions so the backend pipeline runs
-      // once and returns 3 distinct image ids (one per question slot).
-      fetchDistractionImage(q, initialText, followupAnswers);
-    }
+    // Start the single shared fetch for all 3 questions at once.
+    _fetchAllDistractionImages(initialText, followupAnswers);
+  }
+
+  // Legacy getter used by the popup watcher — checks if any slot is resolved.
+  function getImageCacheEntry(key) {
+    // key is "img_q1", "img_q2", "img_q3"
+    const m = key.match(/img_q(\d)/);
+    if (!m) return undefined;
+    const idx = parseInt(m[1]) - 1;
+    return _imageUrls[idx]; // undefined = not yet resolved, null = resolved but no image
   }
   // ──────────────────────────────────────────────────────────────────────
 
