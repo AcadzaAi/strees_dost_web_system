@@ -2150,8 +2150,8 @@ def _build_distraction_images(initial_text: str, followup_answers: list[str]) ->
 def distraction_image():
     """Return all 3 distraction images for Q1-Q3 in one response.
 
-    Non-blocking: kicks off the OpenAI pipeline in a background thread and
-    returns {"status": "pending"} until the result is cached.
+    On first call: generates images synchronously (may take 10-20s).
+    On subsequent polls: returns cached result immediately.
     
     Response when ready: {"status": "ready", "images": [
         {"data": "base64...", "content_type": "image/jpeg"},
@@ -2162,18 +2162,23 @@ def distraction_image():
     Each image is either a dict with base64 data or null.
     This approach works on Render without persistent disk or Redis.
     """
+    logger.info("=== DISTRACTION-IMAGE ENDPOINT HIT ===")
     body = request.get_json(force=True, silent=True) or {}
+    logger.info("Request body keys: %s", list(body.keys()))
     initial_text = str(body.get("initial_text") or "").strip()[:300]
     followup_answers = [
         str(f or "").strip()[:150]
         for f in (body.get("followup_answers") or [])[:6]
         if str(f or "").strip()
     ]
+    logger.info("Parsed: initial_text=%r, followup_answers=%d", initial_text[:60], len(followup_answers))
 
     if not initial_text and not followup_answers:
+        logger.warning("No context provided, returning no_context status")
         return jsonify({"images": [None, None, None], "status": "no_context"})
 
     cache_key = f"{initial_text[:80]}|{len(followup_answers)}"
+    logger.info("Cache key: %r", cache_key)
 
     # Empty results expire so a transient web-search miss can be retried later.
     if cache_key in _distraction_image_cache and not _distraction_image_cache[cache_key]:
@@ -2185,6 +2190,7 @@ def distraction_image():
 
     # Result ready → return all 3 images as base64
     if cache_key in _distraction_image_cache:
+        logger.info("Cache HIT for key: %r", cache_key)
         img_data_list = _distraction_image_cache[cache_key]
         images = []
         for img_data in img_data_list:
@@ -2199,42 +2205,41 @@ def distraction_image():
         logger.info("distraction-image ready — returning %d images as base64", len([i for i in images if i]))
         return jsonify({"images": images, "status": "ready"})
 
-    # Kick off background fetch once per context.
-    if cache_key not in _distraction_image_pending:
-        _distraction_image_pending.add(cache_key)
-        logger.info(
-            "distraction-image starting pipeline — text=%r followups=%d",
-            initial_text[:60], len(followup_answers),
-        )
-
-        def _run():
-            try:
-                logger.info("distraction-image background task started")
-                img_data_list = _build_distraction_images_base64(initial_text, followup_answers)
-                logger.info("distraction-image background task completed: %d images", len([i for i in img_data_list if i]))
-                _distraction_image_cache[cache_key] = img_data_list
-                if not img_data_list or all(i is None for i in img_data_list):
-                    _distraction_image_empty_ts[cache_key] = time.time()
-                    logger.warning("distraction-image background task: no images generated")
-            except Exception as exc:
-                logger.error("distraction-image pipeline failed: %s", exc, exc_info=True)
-                _distraction_image_cache[cache_key] = [None, None, None]
-                _distraction_image_empty_ts[cache_key] = time.time()
-            finally:
-                _distraction_image_pending.discard(cache_key)
-                logger.info("distraction-image background task finished")
-
-        # Use eventlet.spawn for compatibility with eventlet worker
-        try:
-            import eventlet
-            logger.info("Using eventlet.spawn for background task")
-            eventlet.spawn(_run)
-        except ImportError as e:
-            # Fallback to threading for non-eventlet environments
-            logger.warning("eventlet not available (%s), falling back to threading", e)
-            import threading
-            threading.Thread(target=_run, daemon=True).start()
-    else:
-        logger.info("distraction-image pipeline already running")
-
-    return jsonify({"images": [None, None, None], "status": "pending"})
+    # Generate images synchronously on first call
+    # This is simpler and more reliable than background tasks with eventlet
+    logger.info("Cache MISS - generating images synchronously for key: %r", cache_key)
+    logger.info("distraction-image starting pipeline — text=%r followups=%d",
+                initial_text[:60], len(followup_answers))
+    
+    try:
+        logger.info("Calling _build_distraction_images_base64...")
+        img_data_list = _build_distraction_images_base64(initial_text, followup_answers)
+        logger.info("_build_distraction_images_base64 returned: %d images", len([i for i in img_data_list if i]))
+        _distraction_image_cache[cache_key] = img_data_list
+        
+        if not img_data_list or all(i is None for i in img_data_list):
+            _distraction_image_empty_ts[cache_key] = time.time()
+            logger.warning("distraction-image: no images generated")
+        else:
+            logger.info("distraction-image SUCCESS: %d images cached", len([i for i in img_data_list if i]))
+        
+        # Convert to base64 and return
+        images = []
+        for img_data in img_data_list:
+            if img_data:
+                data_b64 = base64.b64encode(img_data["data"]).decode("ascii")
+                images.append({
+                    "data": data_b64,
+                    "content_type": img_data["content_type"]
+                })
+            else:
+                images.append(None)
+        
+        logger.info("Returning ready response with %d images", len([i for i in images if i]))
+        return jsonify({"images": images, "status": "ready"})
+        
+    except Exception as exc:
+        logger.error("distraction-image pipeline failed: %s", exc, exc_info=True)
+        _distraction_image_cache[cache_key] = [None, None, None]
+        _distraction_image_empty_ts[cache_key] = time.time()
+        return jsonify({"images": [None, None, None], "status": "error", "error": str(exc)})

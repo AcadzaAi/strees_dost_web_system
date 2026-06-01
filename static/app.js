@@ -3691,7 +3691,9 @@ const StressTriggers = (() => {
       const maxAttempts = 45;
       for (let i = 0; i < maxAttempts; i++) {
         try {
-          const data = await postJSON("/api/triggers/distraction-image", payload, { timeoutMs: 6000 });
+          // First call may take 10-20s for image generation, so use longer timeout
+          const timeoutMs = i === 0 ? 30000 : 6000;
+          const data = await postJSON("/api/triggers/distraction-image", payload, { timeoutMs });
           console.log(`[img] poll ${i+1}: status=${data?.status} images=${data?.images ? data.images.length : 0}`);
           if (data?.status === "ready") {
             const images = Array.isArray(data.images) ? data.images : [null, null, null];
@@ -3700,6 +3702,7 @@ const StressTriggers = (() => {
               if (!img || !img.data) return null;
               return `data:${img.content_type || 'image/jpeg'};base64,${img.data}`;
             });
+            console.log(`[img] SUCCESS: received ${_imageUrls.filter(u => u).length} valid images`);
             _imageFetchPromise = null;
             return _imageUrls;
           }
@@ -3707,11 +3710,17 @@ const StressTriggers = (() => {
             await new Promise(r => setTimeout(r, 1000));
             continue;
           }
+          if (data?.status === "error") {
+            console.error(`[img] server error: ${data?.error || 'unknown'}`);
+            break;
+          }
           console.warn(`[img] unexpected status: ${data?.status}`);
           break;
         } catch (err) {
           console.error(`[img] poll error:`, err.message);
-          break;
+          // Only break on first attempt error, otherwise retry
+          if (i === 0) break;
+          await new Promise(r => setTimeout(r, 2000));
         }
       }
       console.warn(`[img] timed out or errored after ${maxAttempts} polls`);
