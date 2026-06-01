@@ -31,12 +31,12 @@ def proxy_image():
         return Response("Missing id", status=400)
 
     try:
-        from .trigger_routes import _image_byte_store
+        from .trigger_routes import _retrieve_image
     except Exception as exc:  # pragma: no cover
-        current_app.logger.error("proxy-image: cannot access byte store: %s", exc)
+        current_app.logger.error("proxy-image: cannot access image retrieval: %s", exc)
         return Response("Unavailable", status=503)
 
-    entry = _image_byte_store.get(img_id)
+    entry = _retrieve_image(img_id)
     if not entry:
         current_app.logger.warning("proxy-image: unknown id %s", img_id)
         return Response("Not found", status=404)

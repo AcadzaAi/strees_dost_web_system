@@ -1455,9 +1455,55 @@ _distraction_image_pending: set[str] = set()
 # When an empty result was cached, so it can expire and be retried.
 _distraction_image_empty_ts: dict[str, float] = {}
 
-# Shared in-memory store of downloaded image bytes, keyed by a short id.
-#   id -> (bytes, content_type)
+# Shared store of downloaded image bytes.
+# For local dev: in-memory dict
+# For production: disk-based cache in /tmp (shared across workers)
 _image_byte_store: dict[str, tuple[bytes, str]] = {}
+
+def _get_image_cache_dir():
+    """Get the directory for caching images (works across workers)."""
+    import tempfile
+    cache_dir = os.path.join(tempfile.gettempdir(), "stress_dost_images")
+    os.makedirs(cache_dir, exist_ok=True)
+    return cache_dir
+
+def _store_image(img_id: str, data: bytes, content_type: str):
+    """Store image bytes (in-memory + disk for multi-worker support)."""
+    # Store in memory for fast access
+    _image_byte_store[img_id] = (data, content_type)
+    # Also store on disk for cross-worker access
+    try:
+        cache_dir = _get_image_cache_dir()
+        img_path = os.path.join(cache_dir, f"{img_id}.img")
+        meta_path = os.path.join(cache_dir, f"{img_id}.meta")
+        with open(img_path, "wb") as f:
+            f.write(data)
+        with open(meta_path, "w") as f:
+            f.write(content_type)
+    except Exception as e:
+        logger.warning("Failed to cache image to disk: %s", e)
+
+def _retrieve_image(img_id: str) -> tuple[bytes, str] | None:
+    """Retrieve image bytes (from memory or disk)."""
+    # Try memory first
+    if img_id in _image_byte_store:
+        return _image_byte_store[img_id]
+    # Try disk
+    try:
+        cache_dir = _get_image_cache_dir()
+        img_path = os.path.join(cache_dir, f"{img_id}.img")
+        meta_path = os.path.join(cache_dir, f"{img_id}.meta")
+        if os.path.exists(img_path) and os.path.exists(meta_path):
+            with open(img_path, "rb") as f:
+                data = f.read()
+            with open(meta_path, "r") as f:
+                content_type = f.read().strip()
+            # Cache in memory for next time
+            _image_byte_store[img_id] = (data, content_type)
+            return (data, content_type)
+    except Exception as e:
+        logger.warning("Failed to retrieve image from disk: %s", e)
+    return None
 
 
 def _distraction_subject(initial_text: str, followup_answers: list[str]) -> str:
@@ -2039,14 +2085,15 @@ def _build_distraction_images(initial_text: str, followup_answers: list[str]) ->
     final_ids: list[str] = []
     for img_id in best_ids:
         if img_id in by_id and img_id not in final_ids:
-            _image_byte_store[img_id] = by_id[img_id]
+            data, ctype = by_id[img_id]
+            _store_image(img_id, data, ctype)
             final_ids.append(img_id)
     # Ensure we always have up to 3 distinct images by topping up from order.
     for img_id, data, ctype in downloaded:
         if len(final_ids) >= 3:
             break
         if img_id not in final_ids:
-            _image_byte_store[img_id] = (data, ctype)
+            _store_image(img_id, data, ctype)
             final_ids.append(img_id)
     logger.info("final image ids for subject=%r: %s", subject[:50], final_ids)
     return final_ids
