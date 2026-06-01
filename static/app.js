@@ -4000,8 +4000,12 @@ async function showQuestionWarningPopup(questionNumber, onComplete) {
     try {
       const cachedKey = `img_q${qNum}`;
       let rawUrl = null;
-      if (StressTriggers.getImageCache && StressTriggers.getImageCache(cachedKey) !== undefined) {
-        rawUrl = StressTriggers.getImageCache(cachedKey);
+      console.log(`[popup] Q${qNum} checking cache for key:`, cachedKey);
+      const cachedValue = StressTriggers.getImageCache ? StressTriggers.getImageCache(cachedKey) : undefined;
+      console.log(`[popup] Q${qNum} cached value:`, cachedValue, 'type:', typeof cachedValue);
+      
+      if (cachedValue !== undefined) {
+        rawUrl = cachedValue;
         console.log(`[popup] Q${qNum} using cached image:`, rawUrl ? rawUrl.substring(0,60) : 'null');
       } else {
         console.log(`[popup] Q${qNum} image not in cache, fetching now`);
@@ -4010,8 +4014,12 @@ async function showQuestionWarningPopup(questionNumber, onComplete) {
       }
       // Verify the URL actually renders before injecting into the DOM.
       if (rawUrl) {
+        console.log(`[popup] Q${qNum} verifying image URL:`, rawUrl.substring(0,60));
         imgUrl = await StressTriggers.verifyImageUrl(rawUrl);
         if (!imgUrl) console.warn(`[popup] Q${qNum} image failed verification, showing without image`);
+        else console.log(`[popup] Q${qNum} image verified OK`);
+      } else {
+        console.log(`[popup] Q${qNum} rawUrl is null/empty, no image to verify`);
       }
     } catch(imgErr) {
       console.warn(`[popup] Q${qNum} image error:`, imgErr.message);
@@ -7609,7 +7617,11 @@ async function showQuestionWarningPopup(questionNumber, onComplete) {
         if (String(state.currentQuestionId || "") !== renderedQuestionId) { clearInterval(watchId); return; }
         const elapsed = Date.now() - questionRenderedAt;
         const imgDone = _imageUrls[questionNumber - 1] !== undefined; // resolved (url or null)
+        if (elapsed % 2000 < 250) { // Log every 2 seconds
+          console.log(`[popup-watch] Q${questionNumber} elapsed=${elapsed}ms imgDone=${imgDone} imgValue=${_imageUrls[questionNumber - 1]}`);
+        }
         if (elapsed >= MIN_WAIT_MS && imgDone) {
+          console.log(`[popup-watch] Q${questionNumber} TRIGGERING popup — elapsed=${elapsed}ms imgDone=${imgDone}`);
           clearInterval(watchId);
           clearTimeout(hardCapId);
           firePopup();
