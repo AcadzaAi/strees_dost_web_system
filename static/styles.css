@@ -8417,20 +8417,24 @@ a.login-btn-wide {
   pointer-events: none;
 }
 
-/* ── Katrina Kaif question-warning override ───────────────────────────── */
+/* ── Distraction image question-warning override ─────────────────────── */
 .psyq-card--katrina {
   text-align: center;
-  padding: 24px 24px 22px;
+  padding: 20px 20px 22px;
+  width: min(380px, 92vw);
 }
 
 .psyq-katrina-image {
   display: block;
   width: 100%;
-  max-width: 320px;
-  max-height: 360px;
+  height: auto;           /* never crop vertically */
+  max-width: 100%;        /* fill the card width */
+  max-height: 70vh;       /* prevent overflow on very tall images */
   margin: 0 auto 16px;
-  border-radius: 14px;
-  object-fit: cover;
+  border-radius: 12px;
+  object-fit: contain;    /* show the full image, no cropping */
+  object-position: center;
+  background: #0f172a;    /* dark letterbox behind contain-padded images */
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
 }
 
