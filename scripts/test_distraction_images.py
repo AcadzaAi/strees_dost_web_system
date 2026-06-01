@@ -66,7 +66,7 @@ def analyze(content):
 
 
 def run_case(label, initial, followups, expect):
-    payload = {"initial_text": initial, "followup_answers": followups, "question_number": 1}
+    payload = {"initial_text": initial, "followup_answers": followups}
     status = None
     for _ in range(45):
         try:
@@ -78,22 +78,25 @@ def run_case(label, initial, followups, expect):
             break
         time.sleep(2)
 
+    # New unified endpoint returns all 3 URLs at once in image_urls array
     results = []
-    for q in (1, 2, 3):
-        p = dict(payload); p["question_number"] = q
-        try:
-            rr = requests.post(f"{BASE}/api/triggers/distraction-image", json=p, timeout=25).json()
-        except Exception as e:
-            results.append((q, None, f"req-error:{e}")); continue
-        u = rr.get("image_url")
-        if not u:
-            results.append((q, None, "NO_IMAGE")); continue
-        try:
-            ig = requests.get(f"{BASE}{u}", timeout=25)
-            w, h, fmt = analyze(ig.content)
-            results.append((q, u, f"{ig.status_code} {fmt} {w}x{h} {len(ig.content)}B"))
-        except Exception as e:
-            results.append((q, u, f"fetch-error:{e}"))
+    try:
+        rr = requests.post(f"{BASE}/api/triggers/distraction-image", json=payload, timeout=25).json()
+        urls = rr.get("image_urls", [None, None, None])
+        for q in (1, 2, 3):
+            u = urls[q - 1] if q <= len(urls) else None
+            if not u:
+                results.append((q, None, "NO_IMAGE"))
+                continue
+            try:
+                ig = requests.get(f"{BASE}{u}", timeout=25)
+                w, h, fmt = analyze(ig.content)
+                results.append((q, u, f"{ig.status_code} {fmt} {w}x{h} {len(ig.content)}B"))
+            except Exception as e:
+                results.append((q, u, f"fetch-error:{e}"))
+    except Exception as e:
+        for q in (1, 2, 3):
+            results.append((q, None, f"req-error:{e}"))
 
     urls = [u for (_, u, _) in results if u]
     distinct = len(set(urls))

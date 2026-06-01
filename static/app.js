@@ -7608,7 +7608,7 @@ async function showQuestionWarningPopup(questionNumber, onComplete) {
         if (popupFired) { clearInterval(watchId); return; }
         if (String(state.currentQuestionId || "") !== renderedQuestionId) { clearInterval(watchId); return; }
         const elapsed = Date.now() - questionRenderedAt;
-        const imgDone = _imageCache.has(`img_q${questionNumber}`); // resolved (url or null)
+        const imgDone = _imageUrls[questionNumber - 1] !== undefined; // resolved (url or null)
         if (elapsed >= MIN_WAIT_MS && imgDone) {
           clearInterval(watchId);
           clearTimeout(hardCapId);
@@ -8460,7 +8460,7 @@ async function showQuestionWarningPopup(questionNumber, onComplete) {
     prefetchDistractionImage,
     prefetchQuestionWarningCopies,
     fetchDistractionImage,
-    getImageCache: (key) => _imageCache.get(key),
+    getImageCache: getImageCacheEntry,
     clearImageCache,
     verifyImageUrl: _verifyImageUrl,
     // Q6 interception helpers
