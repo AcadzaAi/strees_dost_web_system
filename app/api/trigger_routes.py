@@ -2209,27 +2209,29 @@ def distraction_image():
 
         def _run():
             try:
-                logger.info("distraction-image background thread started")
+                logger.info("distraction-image background task started")
                 img_data_list = _build_distraction_images_base64(initial_text, followup_answers)
-                logger.info("distraction-image background thread completed: %d images", len([i for i in img_data_list if i]))
+                logger.info("distraction-image background task completed: %d images", len([i for i in img_data_list if i]))
                 _distraction_image_cache[cache_key] = img_data_list
                 if not img_data_list or all(i is None for i in img_data_list):
                     _distraction_image_empty_ts[cache_key] = time.time()
-                    logger.warning("distraction-image background thread: no images generated")
+                    logger.warning("distraction-image background task: no images generated")
             except Exception as exc:
                 logger.error("distraction-image pipeline failed: %s", exc, exc_info=True)
                 _distraction_image_cache[cache_key] = [None, None, None]
                 _distraction_image_empty_ts[cache_key] = time.time()
             finally:
                 _distraction_image_pending.discard(cache_key)
-                logger.info("distraction-image background thread finished")
+                logger.info("distraction-image background task finished")
 
         # Use eventlet.spawn for compatibility with eventlet worker
         try:
             import eventlet
+            logger.info("Using eventlet.spawn for background task")
             eventlet.spawn(_run)
-        except ImportError:
+        except ImportError as e:
             # Fallback to threading for non-eventlet environments
+            logger.warning("eventlet not available (%s), falling back to threading", e)
             import threading
             threading.Thread(target=_run, daemon=True).start()
     else:
