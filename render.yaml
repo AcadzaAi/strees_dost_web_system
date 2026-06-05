@@ -37,4 +37,8 @@ services:
         value: "7"
       - key: QUESTION_IDS_CSV
         value: /opt/render/project/src/data/question_ids.csv
+      - key: RESEND_API_KEY
+        sync: false
+      - key: FEEDBACK_TO_EMAIL
+        sync: false
 

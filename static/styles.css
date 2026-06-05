@@ -2980,9 +2980,15 @@ pre {
 
 .psyq-close--minimal {
   position: absolute;
-  top: 16px;
-  right: 16px;
+  top: 10px;
+  right: 10px;
   margin-left: 0;
+  z-index: 10;                          /* always above the image */
+  background: rgba(7, 11, 22, 0.72);   /* dark pill — readable over any image */
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
 }
 
 .psyq-close:hover {
@@ -2990,6 +2996,13 @@ pre {
   color: rgba(15, 23, 42, 0.92);
   border-color: rgba(15, 23, 42, 0.18);
   transform: scale(1.04);
+}
+
+/* When the close button is over an image (dark bg variant) */
+.psyq-card--katrina .psyq-close--minimal:hover {
+  background: rgba(7, 11, 22, 0.9);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.3);
 }
 
 /* The "you said…" reflection sentence */
@@ -8417,20 +8430,24 @@ a.login-btn-wide {
   pointer-events: none;
 }
 
-/* ── Katrina Kaif question-warning override ───────────────────────────── */
+/* ── Distraction image question-warning override ─────────────────────── */
 .psyq-card--katrina {
   text-align: center;
-  padding: 24px 24px 22px;
+  padding: 52px 20px 22px;  /* top padding clears the absolute close button */
+  width: min(380px, 92vw);
 }
 
 .psyq-katrina-image {
   display: block;
   width: 100%;
-  max-width: 320px;
-  max-height: 360px;
+  height: auto;           /* never crop vertically */
+  max-width: 100%;        /* fill the card width */
+  max-height: 70vh;       /* prevent overflow on very tall images */
   margin: 0 auto 16px;
-  border-radius: 14px;
-  object-fit: cover;
+  border-radius: 12px;
+  object-fit: contain;    /* show the full image, no cropping */
+  object-position: center;
+  background: #0f172a;    /* dark letterbox behind contain-padded images */
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
 }
 
