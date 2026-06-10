@@ -77,7 +77,6 @@ const btnBackspace = $("btnBackspace");
 const scoreMeta = $("scoreMeta");
 const testHint = $("testHint");
 const btnPrevQuestion = $("btnPrevQuestion");
-const btnNextQuestion = $("btnNextQuestion");
 const btnReloadQuestions = $("btnReloadQuestions");
 const btnSubmitQuestion = $("btnSubmitQuestion");
 const btnFinishTest = $("btnFinishTest");
@@ -113,6 +112,8 @@ let recordedAudioBlob = null;
 let recordingMimeType = "audio/webm";
 let testQuestions = [];
 let testQuestionIndex = 0;
+let submitInFlight = false;
+let nextInFlight = false;
 let selectedOptions = {};
 let answeredMap = {};
 let pendingTriggerTimeouts = []; // Store pending trigger timeouts to cancel when switching questions
@@ -380,6 +381,7 @@ async function openDevFallbackQuestionsDirect() {
     }));
     testQuestions = cloned;
     testQuestionIndex = 0;
+    resetSubmitNavigationGuard();
     selectedOptions = {};
     answeredMap = {};
     
@@ -737,6 +739,7 @@ function setQuestionUI(data) {
 
 function resetFlow() {
   StressTriggers.onReset();
+  resetSubmitNavigationGuard();
   // Reset academic topics (raw, autoPickedSubject, autoPickedTopics → null)
   if (sessionId) window.academicTopics?.resetAcademicTopics?.(sessionId);
   sessionId = null;
@@ -2276,7 +2279,7 @@ const StressTriggers = (() => {
           challenge.failOverlay?.remove();
           challenge.failOverlay = null;
           clearHardQuestionChallenge();
-          advanceAfterSubmit();
+          afterQuestionSubmittedFeedback(false);
         }, 3200);
       }, 120);
     }, 2100);
@@ -3954,7 +3957,7 @@ const StressTriggers = (() => {
     const initialText = getSessionInitialQuery();
     if (!initialText) return [];
     const jobs = [];
-    for (let qNum = 1; qNum <= 7; qNum += 1) {
+    for (let qNum = 1; qNum <= 2; qNum += 1) {
       jobs.push(fetchQuestionWarningCopy(qNum));
     }
     return Promise.allSettled(jobs);
@@ -4264,6 +4267,30 @@ async function showQuestionWarningPopup(questionNumber, onComplete) {
     }, 100);
   }
 
+  function activateQ2TorchSpotlight(questionNumber) {
+    if (testQuestionIndex + 1 !== questionNumber) return;
+    const q2 = buildQ2PopupCopy();
+    const subj = q2.subjectLine || "distractions";
+    activateTrigger("torchlightSpotlight", {
+      userState: currentUserState(),
+      force: true,
+      reason: `question_trigger:Q${questionNumber}:torchlight_after_popup`,
+      intensity: "medium",
+      questionNumber,
+      caption: `Can't see the full question? Good. Chase the beam.`,
+      spotlightTitle: "Narrow beam",
+      spotlightLead: `${subj} won't solve itself in the dark.`,
+      spotlightChallenge: "Track the light. Pick an answer anyway.",
+      spotlightTaunt: "One patch lit. Rest hidden. Stop sulking.",
+      taunts: [
+        "Light moves. Your focus should too.",
+        "Half-blind read — that's the point.",
+        "Still scrolling in your head? Pathetic.",
+        "Beam's on the stem. Eyes up.",
+      ],
+    });
+  }
+
   function runQ2PopupFlow(questionNumber) {
     let flowStarted = false;
     const startFlow = () => {
@@ -4272,27 +4299,7 @@ async function showQuestionWarningPopup(questionNumber, onComplete) {
       flowStarted = true;
       window.removeEventListener("scroll", onScroll);
       showPersonalizedQuiz(() => {
-        if (testQuestionIndex + 1 !== questionNumber) return;
-        const q2 = buildQ2PopupCopy();
-        const subj = q2.subjectLine || "distractions";
-        activateTrigger("torchlightSpotlight", {
-          userState: currentUserState(),
-          force: true,
-          reason: `question_trigger:Q${questionNumber}:torchlight_after_popup`,
-          intensity: "medium",
-          questionNumber,
-          caption: `Can't see the full question? Good. Chase the beam.`,
-          spotlightTitle: "Narrow beam",
-          spotlightLead: `${subj} won't solve itself in the dark.`,
-          spotlightChallenge: "Track the light. Pick an answer anyway.",
-          spotlightTaunt: "One patch lit. Rest hidden. Stop sulking.",
-          taunts: [
-            "Light moves. Your focus should too.",
-            "Half-blind read — that's the point.",
-            "Still scrolling in your head? Pathetic.",
-            "Beam's on the stem. Eyes up.",
-          ],
-        });
+        activateQ2TorchSpotlight(questionNumber);
       }, { mode: "q2" });
     };
     const onScroll = () => startFlow();
@@ -7600,16 +7607,12 @@ async function showQuestionWarningPopup(questionNumber, onComplete) {
     console.log('[onQuestionRendered] Question ID:', question?.question_id);
     console.log('[onQuestionRendered] Question difficulty:', question?.difficulty);
 
-    if (questionNumber >= 1 && questionNumber <= 3) {
+    // Q1 & Q2: image warning popup only (no stress triggers like torch/fog)
+    if (questionNumber >= 1 && questionNumber <= 2) {
       const renderedQuestionId = String(question?.question_id || "");
       void fetchQuestionWarningCopy(questionNumber);
-      // Start image fetch — returns same promise if already in-flight
-      const imageFetchPromise = fetchDistractionImage(questionNumber);
+      fetchDistractionImage(questionNumber);
 
-      // Fire popup as soon as BOTH conditions are met:
-      //   1. At least 5 seconds have elapsed since the question rendered
-      //   2. The image fetch has resolved (ready or failed)
-      // Hard cap: 45 seconds — show popup regardless after that.
       const questionRenderedAt = Date.now();
       const MIN_WAIT_MS = 5000;
       const HARD_CAP_MS = 45000;
@@ -7624,47 +7627,25 @@ async function showQuestionWarningPopup(questionNumber, onComplete) {
         showQuestionWarningPopup(questionNumber, () => {});
       };
 
-      // Watch for image ready + minimum wait elapsed.
       const watchId = setInterval(() => {
         if (popupFired) { clearInterval(watchId); return; }
         if (String(state.currentQuestionId || "") !== renderedQuestionId) { clearInterval(watchId); return; }
         const elapsed = Date.now() - questionRenderedAt;
-        const imgDone = _imageUrls[questionNumber - 1] !== undefined; // resolved (url or null)
-        if (elapsed % 2000 < 250) { // Log every 2 seconds
-          console.log(`[popup-watch] Q${questionNumber} elapsed=${elapsed}ms imgDone=${imgDone} imgValue=${_imageUrls[questionNumber - 1]}`);
-        }
+        const imgDone = _imageUrls[questionNumber - 1] !== undefined;
         if (elapsed >= MIN_WAIT_MS && imgDone) {
-          console.log(`[popup-watch] Q${questionNumber} TRIGGERING popup — elapsed=${elapsed}ms imgDone=${imgDone}`);
           clearInterval(watchId);
           clearTimeout(hardCapId);
           firePopup();
         }
       }, 250);
 
-      // Hard cap — never wait more than 45s
       const hardCapId = setTimeout(() => {
         clearInterval(watchId);
         firePopup();
       }, HARD_CAP_MS);
 
       pendingTriggerTimeouts.push(hardCapId);
-      // Store watchId so cancelPendingTriggers can clear it too
-      // (setInterval ids are numbers just like setTimeout ids)
       pendingTriggerTimeouts.push(watchId);
-      return;
-    }
-
-    if (questionNumber > 3 && questionNumber <= 7) {
-      const renderedQuestionId = String(question?.question_id || "");
-      void fetchQuestionWarningCopy(questionNumber);
-      const timeoutId = setTimeout(() => {
-        if (String(state.currentQuestionId || "") !== renderedQuestionId) return;
-        console.log(`[onQuestionRendered] Showing popup-card sequence for Q${questionNumber}`);
-        showQuestionWarningPopup(questionNumber, () => {
-          console.log(`[onQuestionRendered] Warning popup dismissed for Q${questionNumber}`);
-        });
-      }, 5000);
-      pendingTriggerTimeouts.push(timeoutId);
       return;
     }
     
@@ -7679,18 +7660,8 @@ async function showQuestionWarningPopup(questionNumber, onComplete) {
       if (questionNumber >= 1 && questionNumber <= 7) {
         let delayMs = 5000;
         
-        // Q1 → short aggressive warning card; user must dismiss
-        if (questionNumber === 1) {
-          scheduleQ1SessionPopup();
-        }
-        
-        // Q2 → short popup, then torch beam (not hard-fog)
-        else if (questionNumber === 2) {
-          runQ2PopupFlow(2);
-        }
-        
         // Q3 → screen flip only
-        else if (questionNumber === 3) {
+        if (questionNumber === 3) {
           delayMs = 5000;
           const timeoutId = setTimeout(() => {
             if (testQuestionIndex + 1 !== 3) return;
@@ -7924,12 +7895,6 @@ async function showQuestionWarningPopup(questionNumber, onComplete) {
       }
     } else if (!hasCustomTriggerSequence) {
       console.log('[onQuestionRendered] Hard question detected - using hardQuestionChallenge only');
-    }
-    
-    // Ensure Q1 personalized popup appears every session even without trigger plan.
-    // Also suppress AI auto-triggers on Q1 so only this emotional popup is shown.
-    if (scheduleQ1SessionPopup()) {
-      return;
     }
 
     // Only call AI trigger system if no question-level trigger was activated
@@ -8760,16 +8725,82 @@ async function preloadQuestionAssets(questions) {
   await Promise.all([...uniqueUrls].map((url) => preloadImage(url)));
 }
 
-function updateTestSubmitButtonState() {
-  if (!btnSubmitQuestion) return;
+function isCurrentQuestionAnswered() {
   const q = testQuestions[testQuestionIndex];
-  if (!q) {
-    btnSubmitQuestion.disabled = true;
-    return;
+  if (!q) return false;
+  return Boolean(answeredMap[q.question_id]);
+}
+
+function lockQuestionInputsForAnswered(q) {
+  if (!q || !answeredMap[q.question_id]) return;
+  if (questionOptions) {
+    questionOptions.classList.add("is-locked");
+    questionOptions.querySelectorAll("input[type=radio]").forEach((input) => {
+      input.disabled = true;
+    });
   }
-  const picked = selectedOptions[q.question_id];
-  const hasValue = Boolean(String(picked || "").trim());
-  btnSubmitQuestion.disabled = !hasValue;
+  if (integerInput) {
+    integerInput.readOnly = true;
+    integerInput.disabled = true;
+  }
+  if (integerPanel) {
+    integerPanel.classList.add("is-locked");
+    integerPanel.querySelectorAll("button").forEach((btn) => {
+      btn.disabled = true;
+    });
+  }
+}
+
+function updateTestNavigationState() {
+  const q = testQuestions[testQuestionIndex];
+  const answered = isCurrentQuestionAnswered();
+  const atLastQuestion = testQuestions.length > 0 && testQuestionIndex >= testQuestions.length - 1;
+
+  if (btnSubmitQuestion) {
+    if (!q) {
+      btnSubmitQuestion.disabled = true;
+      btnSubmitQuestion.textContent = "Submit Answer";
+    } else if (answered) {
+      if (atLastQuestion) {
+        btnSubmitQuestion.disabled = true;
+        btnSubmitQuestion.textContent = "Submitted";
+      } else {
+        btnSubmitQuestion.disabled = submitInFlight || nextInFlight;
+        btnSubmitQuestion.textContent = "Next";
+      }
+    } else {
+      const picked = selectedOptions[q.question_id];
+      const hasValue = Boolean(String(picked || "").trim());
+      btnSubmitQuestion.disabled = submitInFlight || !hasValue;
+      btnSubmitQuestion.textContent = "Submit Answer";
+    }
+  }
+
+  if (btnPrevQuestion) {
+    btnPrevQuestion.disabled = submitInFlight || testQuestionIndex === 0;
+  }
+
+  lockQuestionInputsForAnswered(q);
+}
+
+function updateTestSubmitButtonState() {
+  updateTestNavigationState();
+}
+
+function afterQuestionSubmittedFeedback(correct) {
+  const atLastQuestion = testQuestions.length > 0 && testQuestionIndex >= testQuestions.length - 1;
+  if (atLastQuestion) {
+    setTestHint("Answer saved. You can finish the test when ready.");
+  } else {
+    setTestHint(
+      correct === undefined
+        ? "Answer saved. Tap Next to continue."
+        : correct
+          ? "Correct answer. Tap Next to continue."
+          : "Wrong answer. Tap Next to continue."
+    );
+  }
+  updateTestNavigationState();
 }
 
 function updateSolutionButtonState() {
@@ -8801,6 +8832,11 @@ function updateTestHintForQuestion(q) {
     return;
   }
   setTestHint(row.correct ? "Correct answer." : "Wrong answer.");
+}
+
+function resetSubmitNavigationGuard() {
+  submitInFlight = false;
+  nextInFlight = false;
 }
 
 function advanceAfterSubmit() {
@@ -8926,7 +8962,6 @@ function renderTestQuestion() {
     if (questionProgress) questionProgress.style.width = "0%";
     if (mutateBadge) mutateBadge.style.display = "none";
     if (btnPrevQuestion) btnPrevQuestion.disabled = true;
-    if (btnNextQuestion) btnNextQuestion.disabled = true;
     updateSolutionButtonState();
     return;
   }
@@ -8964,11 +8999,23 @@ function renderTestQuestion() {
     if (integerPanel) {
       integerPanel.style.display = "flex";
       const existing = selectedOptions[q.question_id] || "";
-      if (integerInput) integerInput.value = existing;
+      const answered = Boolean(answeredMap[q.question_id]);
+      integerPanel.classList.toggle("is-locked", answered);
+      integerPanel.querySelectorAll("button").forEach((btn) => {
+        btn.disabled = answered;
+      });
+      if (integerInput) {
+        integerInput.value = existing;
+        integerInput.readOnly = answered;
+        integerInput.disabled = answered;
+      }
       attachKeypadListeners();
     }
   } else {
-    if (questionOptions) questionOptions.style.display = "grid";
+    if (questionOptions) {
+      questionOptions.style.display = "grid";
+      questionOptions.classList.toggle("is-locked", Boolean(answeredMap[q.question_id]));
+    }
     if (integerPanel) integerPanel.style.display = "none";
   }
   updateSolutionButtonState();
@@ -8994,7 +9041,9 @@ function renderTestQuestion() {
       input.name = `option-${q.question_id}`;
       input.value = opt.label;
       input.checked = selectedOptions[q.question_id] === opt.label;
+      input.disabled = Boolean(answeredMap[q.question_id]);
       input.addEventListener("change", () => {
+        if (answeredMap[q.question_id]) return;
         const prev = selectedOptions[q.question_id] || "";
         selectedOptions[q.question_id] = opt.label;
         StressTriggers.onOptionChange(q.question_id, prev, opt.label);
@@ -9040,9 +9089,7 @@ function renderTestQuestion() {
     });
   }
 
-  if (btnPrevQuestion) btnPrevQuestion.disabled = testQuestionIndex === 0;
-  if (btnNextQuestion) btnNextQuestion.disabled = testQuestionIndex >= testQuestions.length - 1;
-  updateTestSubmitButtonState();
+  updateTestNavigationState();
   updateScoreMeta();
   updateLifelineState();
   renderResultStateForCurrentQuestion();
@@ -9113,6 +9160,7 @@ async function loadTestQuestions() {
 
     testQuestions = data.questions || [];
     testQuestionIndex = 0;
+    resetSubmitNavigationGuard();
     if (!testQuestions.length) {
       setTestHint("No questions returned. Add IDs to data/question_ids.csv.");
       questionCounter.textContent = "Questions unavailable";
@@ -9133,6 +9181,7 @@ async function loadTestQuestions() {
     console.error("[loadTestQuestions] FAILED:", err, err?.stack);
     testQuestions = cloneClientFallbackQuestions();
     testQuestionIndex = 0;
+    resetSubmitNavigationGuard();
     selectedOptions = {};
     answeredMap = {};
     setTestBankLoading(true, "Caching fallback assets...");
@@ -9169,57 +9218,12 @@ function buildLocalNewUserTriggerPlan() {
 }
 
 function ensureQuestionTriggerPlan() {
-  if (questionTriggerPlan?.sequence?.length === 7) return;
   questionTriggerPlan = buildLocalNewUserTriggerPlan();
-  console.log("[ensureQuestionTriggerPlan] Using local new-user sequence");
 }
 
 async function fetchQuestionTriggerPlan() {
-  try {
-    // Get user from auth system
-    const user = window.StressDostAuth?.getUser?.();
-    
-    // Get previous triggers from localStorage
-    const previousTriggers = JSON.parse(localStorage.getItem('previousTriggers') || '[]');
-    
-    const userProfile = {
-      name: user?.display_name || '',
-      test_count: user?.completed_sessions || 0,
-      completed_sessions: user?.completed_sessions || 0,  // Send both fields for backend compatibility
-      previous_triggers: previousTriggers,
-      force_new_user: true,
-    };
-    
-    // Extract question difficulties from loaded questions
-    const questionDifficulties = testQuestions.map(q => (q.level || 'MEDIUM').toUpperCase());
-    
-    console.log('[fetchQuestionTriggerPlan] Fetching trigger plan for user:', userProfile);
-    console.log('[fetchQuestionTriggerPlan] Question difficulties:', questionDifficulties);
-    
-    const response = await postJSON('/api/questions/trigger-plan', {
-      user_profile: userProfile,
-      question_difficulties: questionDifficulties
-    });
-    
-    questionTriggerPlan = response;
-    if (!questionTriggerPlan?.sequence?.length) {
-      questionTriggerPlan = buildLocalNewUserTriggerPlan();
-    }
-    console.log('[fetchQuestionTriggerPlan] Trigger plan received:', questionTriggerPlan);
-    console.log('[fetchQuestionTriggerPlan] Sequence:', questionTriggerPlan?.sequence);
-    console.log('[fetchQuestionTriggerPlan] User type:', questionTriggerPlan?.user_type);
-    console.log('[fetchQuestionTriggerPlan] Is new user:', questionTriggerPlan?.is_new_user);
-    
-    // Store for next test
-    if (response.sequence && Array.isArray(response.sequence)) {
-      const triggerNames = response.sequence.map(t => t.trigger_name);
-      localStorage.setItem('previousTriggers', JSON.stringify(triggerNames));
-    }
-  } catch (err) {
-    console.error('[fetchQuestionTriggerPlan] Failed to fetch trigger plan:', err);
-    console.error('[fetchQuestionTriggerPlan] Error details:', err.message, err.stack);
-    questionTriggerPlan = buildLocalNewUserTriggerPlan();
-  }
+  questionTriggerPlan = buildLocalNewUserTriggerPlan();
+  console.log("[fetchQuestionTriggerPlan] Using fixed trigger sequence for all sessions");
 }
 
 function getQuestionTrigger(questionNumber) {
@@ -9341,26 +9345,69 @@ async function mutateQuestionAt(index) {
   }
 }
 
+function goToNextQuestionFromSubmit() {
+  if (nextInFlight) return;
+  const q = testQuestions[testQuestionIndex];
+  if (!q) return;
+  if (!answeredMap[q.question_id]) {
+    setTestHint("Submit your answer first.");
+    return;
+  }
+  if (testQuestionIndex >= testQuestions.length - 1) {
+    setTestHint("This is the last question. Tap Finish Test when ready.");
+    return;
+  }
+  nextInFlight = true;
+  try {
+    advanceAfterSubmit();
+  } finally {
+    nextInFlight = false;
+    updateTestNavigationState();
+  }
+}
+
 async function submitCurrentQuestion() {
   console.log('[submitCurrentQuestion] Called');
+
+  if (submitInFlight) {
+    console.log('[submitCurrentQuestion] Ignoring duplicate submit while in flight');
+    return;
+  }
   
   if (!testQuestions.length) {
     setTestHint("Load questions first.");
     return;
   }
-  
+
+  const q = testQuestions[testQuestionIndex];
+  if (!q) return;
+
+  if (answeredMap[q.question_id]) {
+    goToNextQuestionFromSubmit();
+    return;
+  }
+
+  const picked = selectedOptions[q.question_id];
+  const qType = (q.question_type || "").toLowerCase();
+
+  if (qType === "integer") {
+    const value = (picked || "").trim();
+    if (!value) {
+      setTestHint("Enter an integer answer first.");
+      return;
+    }
+  } else if (!picked) {
+    setTestHint("Select an option before submitting.");
+    return;
+  }
+
+  submitInFlight = true;
+  if (btnSubmitQuestion) btnSubmitQuestion.disabled = true;
+
   await StressTriggers.beforeSubmitDelay();
   try {
-    const q = testQuestions[testQuestionIndex];
-    const picked = selectedOptions[q.question_id];
-    const qType = (q.question_type || "").toLowerCase();
-
     if (qType === "integer") {
       const value = (picked || "").trim();
-      if (!value) {
-        setTestHint("Enter an integer answer first.");
-        return;
-      }
       const correctVal = q.integer_answer;
       let correct = false;
       const hasAnswerKey = correctVal !== undefined && correctVal !== null;
@@ -9380,44 +9427,31 @@ async function submitCurrentQuestion() {
       if (!correct && _lifelines > 0) _lifelines -= 1;
       console.log('[submitCurrentQuestion] Lifelines:', lifelinesBeforeDecrement, '→', _lifelines, 'Correct:', correct);
       updateLifelineState();
-      
-      // Check if test should end due to lifeline loss
+
       if (_lifelines <= 0) {
         console.log('[submitCurrentQuestion] All lifelines lost! Showing end screen');
-        
-        // Capture the time used at this moment
         const timeUsedAtEnd = StressTriggers.timeUsedMs();
         console.log('[submitCurrentQuestion] timeUsedAtEnd:', timeUsedAtEnd);
-        
-        // Cancel all pending triggers
         cancelPendingTriggers();
-        
-        // Deactivate all active triggers immediately
         if (typeof StressTriggers !== 'undefined' && StressTriggers.deactivateAllTriggers) {
           StressTriggers.deactivateAllTriggers();
           console.log('[submitCurrentQuestion] Deactivated all triggers');
         }
-        
         showLifelineLostBanner();
         setTimeout(() => {
           showTestEndScreen(timeUsedAtEnd);
         }, 2000);
-        return; // Don't advance to next question
+        return;
       }
-      
+
       StressTriggers.noteAnswerOutcome(correct, hasAnswerKey);
-      setTestHint("Answer saved.");
       const extraDelayMs = StressTriggers.consumePostSubmitDelayMs?.() || 0;
       if (extraDelayMs > 0) await sleep(extraDelayMs);
       await sleep(SOLUTION_GRACE_MS);
-      advanceAfterSubmit();
+      afterQuestionSubmittedFeedback(correct);
       return;
     }
 
-    if (!picked) {
-      setTestHint("Select an option before submitting.");
-      return;
-    }
     const correctAnswer = q.correct_answer || q.correct_answers;
     const hasAnswerKey =
       (Array.isArray(correctAnswer) && correctAnswer.length > 0) ||
@@ -9465,12 +9499,13 @@ async function submitCurrentQuestion() {
     
     renderResultStateForCurrentQuestion();
     StressTriggers.noteAnswerOutcome(correct, hasAnswerKey);
-    setTestHint(correct ? "Correct answer." : "Wrong answer.");
     const extraDelayMs = StressTriggers.consumePostSubmitDelayMs?.() || 0;
     await sleep(900 + extraDelayMs + SOLUTION_GRACE_MS);
-    advanceAfterSubmit();
+    afterQuestionSubmittedFeedback(correct);
   } finally {
+    submitInFlight = false;
     StressTriggers.afterSubmit();
+    updateTestNavigationState();
   }
 }
 
@@ -9877,7 +9912,6 @@ btnLogout?.addEventListener("click", () => {
   }
 });
 btnPrevQuestion?.addEventListener("click", () => gotoQuestion(-1));
-btnNextQuestion?.addEventListener("click", () => gotoQuestion(1));
 btnReloadQuestions?.addEventListener("click", () => loadTestQuestions());
 
 // Fullscreen Management
@@ -10517,7 +10551,7 @@ function closeSolutionModal() {
   solutionModalOpen = false;
   if (pendingAdvanceAfterSubmit) {
     pendingAdvanceAfterSubmit = false;
-    advanceAfterSubmit();
+    updateTestNavigationState();
   }
 }
 
@@ -10572,7 +10606,10 @@ solutionModal?.addEventListener("click", (evt) => {
   if (evt.target === solutionModal) closeSolutionModal();
 });
 
-btnSubmitQuestion?.addEventListener("click", submitCurrentQuestion);
+btnSubmitQuestion?.addEventListener("click", (evt) => {
+  evt.preventDefault();
+  void submitCurrentQuestion();
+});
 btnFinishTest?.addEventListener("click", () => finishTestWithConfirm());
 btnReportError?.addEventListener("click", () => {
   setTestHint("Thanks - the report was captured.");
@@ -10826,6 +10863,7 @@ function attachKeypadListeners() {
       if (!key) return;
       const q = testQuestions[testQuestionIndex];
       if (!q || (q.question_type || "").toLowerCase() !== "integer") return;
+      if (answeredMap[q.question_id]) return;
       const current = selectedOptions[q.question_id] || "";
       const next = current + key;
       selectedOptions[q.question_id] = next;
@@ -10835,14 +10873,14 @@ function attachKeypadListeners() {
   }
   btnClearInteger?.addEventListener("click", () => {
     const q = testQuestions[testQuestionIndex];
-    if (!q) return;
+    if (!q || answeredMap[q.question_id]) return;
     selectedOptions[q.question_id] = "";
     if (integerInput) integerInput.value = "";
     updateTestSubmitButtonState();
   });
   btnBackspace?.addEventListener("click", () => {
     const q = testQuestions[testQuestionIndex];
-    if (!q) return;
+    if (!q || answeredMap[q.question_id]) return;
     const current = selectedOptions[q.question_id] || "";
     const next = current.slice(0, -1);
     selectedOptions[q.question_id] = next;
@@ -10851,7 +10889,7 @@ function attachKeypadListeners() {
   });
   integerInput?.addEventListener("input", (evt) => {
     const q = testQuestions[testQuestionIndex];
-    if (!q) return;
+    if (!q || answeredMap[q.question_id]) return;
     selectedOptions[q.question_id] = evt.target.value;
     updateTestSubmitButtonState();
   });

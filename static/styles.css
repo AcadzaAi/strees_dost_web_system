@@ -1,4 +1,4 @@
-﻿@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap");
 
 :root {
   --bg: #f6f8ff;
@@ -781,8 +781,23 @@ textarea:focus {
   box-shadow: 0 10px 22px rgba(78, 121, 217, 0.24);
 }
 
-.test-card .row {
-  display: none;
+.test-nav {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.test-nav .btn {
+  flex: 1;
+  min-height: 48px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.test-nav #btnPrevQuestion {
+  width: 100%;
+  max-width: 200px;
 }
 
 .sr-only {
@@ -2301,6 +2316,15 @@ textarea:focus {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
+}
+
+.options-grid.is-locked .option {
+  cursor: default;
+}
+
+.integer-panel.is-locked {
+  opacity: 0.92;
+  pointer-events: none;
 }
 
 .option {
@@ -7715,14 +7739,6 @@ a.login-btn-wide {
     padding: 12px 14px 16px;
   }
   
-  .options-grid {
-    gap: 8px;
-  }
-  
-  .option {
-    padding: 12px 10px;
-  }
-  
   .stress-spotlight-overlay {
     background: radial-gradient(
       circle 100px at var(--mouse-x, 50%) var(--mouse-y, 50%),
@@ -8177,6 +8193,56 @@ a.login-btn-wide {
     height: 100dvh;
     min-height: 100dvh;
     overflow: auto;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .viewport:has(#stagePopups.active) {
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #stagePopups {
+    overflow: visible;
+    min-height: auto;
+    align-items: stretch;
+  }
+
+  .pop-card {
+    height: auto;
+    min-height: calc(100dvh - 72px);
+    max-height: none;
+    padding: 8px 10px 12px;
+  }
+
+  .test-card {
+    height: auto;
+    min-height: 0;
+    max-height: none;
+    overflow: visible;
+    grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
+  }
+
+  .question-body {
+    overflow: visible;
+    min-height: 0;
+  }
+
+  .question-panel {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .test-nav {
+    margin-top: 8px;
+  }
+
+  .test-nav #btnPrevQuestion {
+    max-width: none;
+  }
+
+  .test-submit .btn.primary {
+    min-height: 52px;
+    font-size: 17px;
   }
 
   .top-bar {
@@ -8295,8 +8361,34 @@ a.login-btn-wide {
   .question-zoom { width: 30px; height: 30px; font-size: 14px; }
 
   .options-grid {
-    grid-template-columns: 1fr !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
     gap: 10px;
+  }
+
+  .option {
+    min-height: 56px;
+    justify-content: center;
+    align-items: center;
+    padding: 14px 10px;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .option > div {
+    justify-items: center;
+    text-align: center;
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .option .option-label {
+    font-size: 20px;
+    line-height: 1.2;
+  }
+
+  .option .option-mark {
+    margin-left: 0;
+    margin-top: 2px;
   }
 
   .integer-panel { gap: 10px; }
@@ -8351,6 +8443,20 @@ a.login-btn-wide {
 @media (max-width: 480px) {
   html, body { font-size: 14px; }
 
+  .options-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px;
+  }
+
+  .option {
+    min-height: 52px;
+    padding: 12px 8px;
+  }
+
+  .option .option-label {
+    font-size: 18px;
+  }
+
   .top-bar { padding: 6px 10px; min-height: 52px; }
   .brand-mark { width: 26px; height: 26px; font-size: 14px; }
   .top-bar h1 { font-size: 11px; letter-spacing: 0.12em; }
@@ -8379,6 +8485,20 @@ a.login-btn-wide {
 /* Touch devices: trigger overlays sit above scrollable content; ensure they never block legit input on the test card. */
 @media (pointer: coarse) {
   .trigger-fog-overlay { pointer-events: none; }
+
+  .option,
+  .test-submit .btn,
+  .test-nav .btn,
+  .keypad button,
+  .question-pill {
+    min-height: 48px;
+  }
+
+  .test-close {
+    width: 40px;
+    height: 40px;
+    font-size: 22px;
+  }
 }
 
 
