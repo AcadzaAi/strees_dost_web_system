@@ -44,40 +44,7 @@
     </header>
 
     <main class="viewport">
-      <section class="stage active" id="stageIntro">
-        <div class="intro-card story-card focus-screen">
-          <div class="focus-shell" id="focusShell">
-            <div class="focus-hero-card">
-              <div class="story-card-head">
-                <h2 id="storyPrompt">Hey there! 👋</h2>
-                <p>Let's find your focus</p>
-              </div>
-              <div class="focus-divider"></div>
-              <h3>What's pulling you away?</h3>
-              <p class="focus-copy">Tell me what's breaking your focus today. Phone, noise, thoughts, tiredness — name it, and we'll train around it.</p>
-            </div>
-
-            <div class="focus-content">
-              <div class="focus-composer">
-                <div class="focus-input">
-                  <div class="inline-suggest-shell">
-                    <textarea id="initialText" rows="4" placeholder="Phone, noise, sleepy, wandering thoughts..." autocomplete="off"></textarea>
-                    <div id="inlineSuggestGhost" class="inline-suggest-ghost" aria-hidden="true"></div>
-                    <span id="inlineSuggestHint" class="inline-suggest-hint" aria-hidden="true"></span>
-                  </div>
-                  <button id="btnRecord" class="mic-btn" type="button" aria-label="Record voice">🎙</button>
-                </div>
-                <div class="story-actions">
-                  <button id="btnStart" class="btn primary" type="button">Start Focus Session</button>
-                </div>
-                <div class="stage-hint" id="introHint"></div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="stage" id="stageLoading">
+      <section class="stage active" id="stageLoading">
         <div class="loading-screen">
           <div class="loading-header">
             <div class="loading-brand">
@@ -293,6 +260,7 @@
           <button id="btnAcceptChallenge" class="btn primary devil-cta" type="button">
             I'm Ready
           </button>
+          <p class="devil-cta-hint">You need to answer all 5 questions perfectly — 100% correct, no mistakes.</p>
           <p class="devil-cta-hint">Accept the challenge and pick your subject.</p>
           <div class="stage-hint" id="devilHint"></div>
 

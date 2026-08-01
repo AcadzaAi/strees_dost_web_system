@@ -8554,7 +8554,7 @@ a.login-btn-wide {
 .psyq-card--katrina {
   text-align: center;
   padding: 52px 20px 22px;  /* top padding clears the absolute close button */
-  width: min(380px, 92vw);
+  width: min(680px, 95vw);  /* Increased from 380px to 680px for larger display */
 }
 
 .psyq-katrina-image {
@@ -8562,7 +8562,7 @@ a.login-btn-wide {
   width: 100%;
   height: auto;           /* never crop vertically */
   max-width: 100%;        /* fill the card width */
-  max-height: 70vh;       /* prevent overflow on very tall images */
+  max-height: 80vh;       /* Increased from 70vh to 80vh for larger display */
   margin: 0 auto 16px;
   border-radius: 12px;
   object-fit: contain;    /* show the full image, no cropping */

@@ -1,8 +1,11 @@
+// Global cache for focus selection data (survives sessionStorage clearing)
+// This needs to be global so it's accessible from anywhere
+window.__focusSelectionCache = null;
+
 // DOM helpers --------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
 const stageEls = {
   name: $("stageName"),
-  intro: $("stageIntro"),
   loading: $("stageLoading"),
   qa: $("stageQA"),
   subjectSelection: $("stageSubjectSelection"),
@@ -580,12 +583,8 @@ function setHint(text) {
 }
 
 function setIntroHint(text) {
-  if (!introHintEl) return;
-  introHintEl.textContent = text || "";
-  if (text) {
-    stageEls.intro?.classList.add("shake");
-    setTimeout(() => stageEls.intro?.classList.remove("shake"), 400);
-  }
+  // Intro screen removed - this is now a no-op
+  // Kept for backwards compatibility with recording code
 }
 
 function setNameHint(text) {
@@ -740,6 +739,17 @@ function setQuestionUI(data) {
 function resetFlow() {
   StressTriggers.onReset();
   resetSubmitNavigationGuard();
+  
+  // Clear session started flag so user can start fresh
+  sessionStorage.removeItem('sessionStarted');
+  sessionStorage.removeItem('focusSelection');
+  sessionStorage.removeItem('initialText');
+  
+  // Clear global focus selection cache
+  window.__focusSelectionCache = null;
+  
+  console.log('[resetFlow] Cleared all session flags and caches');
+  
   // Reset academic topics (raw, autoPickedSubject, autoPickedTopics → null)
   if (sessionId) window.academicTopics?.resetAcademicTopics?.(sessionId);
   sessionId = null;
@@ -800,7 +810,8 @@ function resetFlow() {
   if (popupOverlay) popupOverlay.innerHTML = "";
   log("reset_flow");
   setSessionUI(null, null);
-  showStage("intro");
+  // Redirect to focus selection instead of showing intro
+  window.location.href = '/focus_selection.html';
 }
 
 function summarizeFollowupThemes(followups) {
@@ -860,10 +871,23 @@ async function buildDevilBriefPage(passedInitialText, passedHistory) {
   }
 
   const devilName = brief?.devil_name || "The Focus Breaker";
-  const coreIssue = brief?.core_issue || "Unclear focus patterns need measurement";
+  
+  // Create better fallback text based on initialText
+  let coreIssueFallback = "Unclear focus patterns need measurement";
+  let problemPointsFallback = ["Your attention baseline needs to be established", "Focus endurance under pressure is unknown"];
+  
+  if (initialText && initialText.trim()) {
+    coreIssueFallback = `${initialText.substring(0, 80)}${initialText.length > 80 ? '...' : ''}`;
+    problemPointsFallback = [
+      "These patterns affect your concentration during study",
+      "Let's measure how they impact your performance"
+    ];
+  }
+  
+  const coreIssue = brief?.core_issue || coreIssueFallback;
   const problemPoints = Array.isArray(brief?.problem_points) && brief.problem_points.length
     ? brief.problem_points
-    : ["Your attention baseline needs to be established", "Focus endurance under pressure is unknown"];
+    : problemPointsFallback;
   const challengeLine = brief?.challenge_line || "Let's see what breaks your concentration first.";
 
   // Fill HTML
@@ -953,8 +977,19 @@ function getAudioExtension() {
 }
 
 async function resolveInitialText() {
-  const typed = $("initialText").value.trim();
-  if (typed) return typed;
+  // Check for stored initial text from focus selection first
+  const storedInitialText = sessionStorage.getItem('initialText');
+  if (storedInitialText) {
+    return storedInitialText.trim();
+  }
+  
+  // Check if initialText element exists (old flow)
+  const initialTextEl = $("initialText");
+  if (initialTextEl) {
+    const typed = initialTextEl.value.trim();
+    if (typed) return typed;
+  }
+  
   if (!recordedAudioBlob) return "";
 
   setLoadingMessage("Transcribing your recording...");
@@ -962,8 +997,8 @@ async function resolveInitialText() {
   formData.append("audio", recordedAudioBlob, `recording.${getAudioExtension()}`);
   const data = await postFormData("/session/transcribe", formData);
   const text = (data.text || "").trim();
-  if (text) {
-    $("initialText").value = text;
+  if (text && initialTextEl) {
+    initialTextEl.value = text;
   }
   return text;
 }
@@ -3554,7 +3589,7 @@ const StressTriggers = (() => {
           .map((item) => String(item?.answer || "").trim())
           .filter(Boolean)
       : [];
-    const contextParts = questionNumber <= 2
+    const contextParts = questionNumber <= 3
       ? [initialText]
       : [initialText, ...followupAnswers];
     return {
@@ -3647,22 +3682,73 @@ const StressTriggers = (() => {
   let _imageUrls = [undefined, undefined, undefined]; // undefined = not yet resolved
   let _imageFetchPromise = null;
   let _imageFetchContext = null; // {initial_text, followup_answers} used for the current fetch
+  let _cachedFocusSelection = null; // Cache focus_selection data before sessionStorage clears it
 
   // Called from onReset() — wipe image state so a new session fetches fresh images.
   function clearImageCache() {
     _imageUrls = [undefined, undefined, undefined];
     _imageFetchPromise = null;
     _imageFetchContext = null;
+    _cachedFocusSelection = null; // Clear cached focus data too
+    window.__focusSelectionCache = null; // Clear global cache too
     console.log('[img] cache cleared for new session');
   }
 
   function _makeSessionImagePayload(overrideText, overrideFollowups) {
-    return {
+    console.log('[img payload] ========== BUILDING IMAGE PAYLOAD ==========');
+    
+    const payload = {
       initial_text: overrideText || getSessionInitialQuery(),
       followup_answers: overrideFollowups || (Array.isArray(state.followupAnswers)
         ? state.followupAnswers.map(f => String(f?.answer || "").trim()).filter(Boolean)
         : []),
     };
+    
+    console.log('[img payload] Base payload - text:', payload.initial_text?.substring(0, 50));
+    console.log('[img payload] Base payload - followups:', payload.followup_answers.length);
+    
+    // PRIORITY 1: Check global cache (most reliable)
+    if (window.__focusSelectionCache) {
+      payload.focus_selection = window.__focusSelectionCache;
+      console.log('[img payload] ✓✓✓ Using GLOBAL CACHE:', window.__focusSelectionCache);
+      console.log('[img payload] Challenges:', window.__focusSelectionCache.challenges);
+      return payload;
+    }
+    
+    // PRIORITY 2: Check local cache
+    if (_cachedFocusSelection) {
+      payload.focus_selection = _cachedFocusSelection;
+      console.log('[img payload] ✓ Using local cache:', _cachedFocusSelection);
+      return payload;
+    }
+    
+    // PRIORITY 3: Try sessionStorage (might be cleared)
+    const focusData = sessionStorage.getItem('focusSelection');
+    if (focusData) {
+      try {
+        const parsed = JSON.parse(focusData);
+        payload.focus_selection = parsed;
+        // Cache it everywhere for future use
+        _cachedFocusSelection = parsed;
+        window.__focusSelectionCache = parsed;
+        console.log('[img payload] Found in sessionStorage, cached globally:', parsed);
+      } catch (e) {
+        console.error('[img payload] Failed to parse focus_selection:', e);
+      }
+    } else {
+      console.warn('[img payload] ⚠️⚠️⚠️ NO FOCUS DATA AVAILABLE ANYWHERE! ⚠️⚠️⚠️');
+      console.warn('[img payload] Global cache:', window.__focusSelectionCache);
+      console.warn('[img payload] Local cache:', _cachedFocusSelection);
+      console.warn('[img payload] SessionStorage:', focusData);
+    }
+    
+    console.log('[img payload] ========== FINAL PAYLOAD ==========');
+    console.log('[img payload] Has focus_selection:', !!payload.focus_selection);
+    if (payload.focus_selection) {
+      console.log('[img payload] Challenges:', payload.focus_selection.challenges);
+    }
+    
+    return payload;
   }
 
   /**
@@ -3673,60 +3759,101 @@ const StressTriggers = (() => {
   function _fetchAllDistractionImages(overrideText, overrideFollowups) {
     // If already resolved, return immediately.
     if (_imageUrls.every(u => u !== undefined)) {
+      console.log('[img] All images already resolved:', _imageUrls.map(u => u ? 'ready' : 'null'));
       return Promise.resolve(_imageUrls);
     }
     // If already in-flight, reuse.
     if (_imageFetchPromise) {
+      console.log('[img] Fetch already in progress, reusing promise');
       return _imageFetchPromise;
     }
 
     const payload = _makeSessionImagePayload(overrideText, overrideFollowups);
-    if (!payload.initial_text && !payload.followup_answers.length) {
-      console.warn('[img] no context — skipping image fetch');
+    if (!payload.initial_text && !payload.followup_answers.length && !payload.focus_selection) {
+      console.warn('[img] No context (no text, no followups, no focus_selection) — skipping image fetch');
       _imageUrls = [null, null, null];
       return Promise.resolve(_imageUrls);
     }
 
     _imageFetchContext = payload;
-    console.log(`[img] starting session fetch — text: "${payload.initial_text?.substring(0,40)}", followups: ${payload.followup_answers?.length}`);
+    console.log(`[img] Starting session fetch — text: "${payload.initial_text?.substring(0,40)}", followups: ${payload.followup_answers?.length}, has_focus: ${!!payload.focus_selection}`);
 
     _imageFetchPromise = (async () => {
       const maxAttempts = 45;
       for (let i = 0; i < maxAttempts; i++) {
         try {
           // First call may take 10-20s for image generation, so use longer timeout
-          const timeoutMs = i === 0 ? 30000 : 6000;
+          const timeoutMs = i === 0 ? 35000 : 8000;
+          console.log(`[img] Poll ${i+1}/${maxAttempts} - timeout: ${timeoutMs}ms`);
+          
           const data = await postJSON("/api/triggers/distraction-image", payload, { timeoutMs });
-          console.log(`[img] poll ${i+1}: status=${data?.status} images=${data?.images ? data.images.length : 0}`);
+          console.log(`[img] Poll ${i+1}: status=${data?.status}, images=${data?.images ? data.images.length : 0}`);
+          
           if (data?.status === "ready") {
             const images = Array.isArray(data.images) ? data.images : [null, null, null];
-            // Convert base64 images to data URLs
-            _imageUrls = images.map(img => {
-              if (!img || !img.data) return null;
-              return `data:${img.content_type || 'image/jpeg'};base64,${img.data}`;
+            // Convert images to URLs
+            _imageUrls = images.map((img, idx) => {
+              if (!img) {
+                console.log(`[img] Q${idx+1}: No image returned`);
+                return null;
+              }
+              
+              // Check if this is a local file (category image)
+              if (img.is_local && img.url) {
+                console.log(`[img] Q${idx+1}: Using LOCAL category image: ${img.url}`);
+                return img.url;
+              }
+              
+              // Otherwise it's a base64 encoded image
+              if (img.data) {
+                const dataUrl = `data:${img.content_type || 'image/jpeg'};base64,${img.data}`;
+                console.log(`[img] Q${idx+1}: Using BASE64 image (${img.data.length} chars)`);
+                return dataUrl;
+              }
+              
+              console.warn(`[img] Q${idx+1}: Image object has no url or data:`, Object.keys(img));
+              return null;
             });
-            console.log(`[img] SUCCESS: received ${_imageUrls.filter(u => u).length} valid images`);
+            
+            const validCount = _imageUrls.filter(u => u).length;
+            console.log(`[img] SUCCESS: Received ${validCount}/3 valid images`);
+            console.log(`[img] Image types:`, _imageUrls.map((u, i) => {
+              if (!u) return `Q${i+1}: null`;
+              if (u.startsWith('/')) return `Q${i+1}: local`;
+              if (u.startsWith('data:')) return `Q${i+1}: base64`;
+              return `Q${i+1}: unknown`;
+            }));
+            
             _imageFetchPromise = null;
             return _imageUrls;
           }
+          
           if (data?.status === "pending" || data?.status === "no_context") {
+            console.log(`[img] Poll ${i+1}: Status ${data.status}, waiting 1s...`);
             await new Promise(r => setTimeout(r, 1000));
             continue;
           }
+          
           if (data?.status === "error") {
-            console.error(`[img] server error: ${data?.error || 'unknown'}`);
+            console.error(`[img] Server error: ${data?.error || 'unknown'}`);
             break;
           }
-          console.warn(`[img] unexpected status: ${data?.status}`);
+          
+          console.warn(`[img] Unexpected status: ${data?.status}`);
           break;
+          
         } catch (err) {
-          console.error(`[img] poll error:`, err.message);
-          // Only break on first attempt error, otherwise retry
-          if (i === 0) break;
-          await new Promise(r => setTimeout(r, 2000));
+          console.error(`[img] Poll ${i+1} error:`, err.message);
+          // Retry on network errors, but with longer delay
+          if (i < maxAttempts - 1) {
+            await new Promise(r => setTimeout(r, 2000));
+            continue;
+          }
+          break;
         }
       }
-      console.warn(`[img] timed out or errored after ${maxAttempts} polls`);
+      
+      console.warn(`[img] Failed after ${maxAttempts} attempts - using nulls`);
       _imageUrls = [null, null, null];
       _imageFetchPromise = null;
       return _imageUrls;
@@ -3757,33 +3884,105 @@ const StressTriggers = (() => {
   /**
    * Preload an image URL and verify it actually renders.
    * Returns the URL if it loads successfully, null if broken.
+   * For failed images, attempts to fetch a fallback local category image.
    */
   async function _verifyImageUrl(url) {
-    if (!url) return null;
+    if (!url) {
+      console.log('[img verify] No URL provided');
+      return null;
+    }
+    
+    // For base64 data URLs, skip verification (they're inline, always work)
+    if (url.startsWith('data:')) {
+      console.log('[img verify] Base64 data URL, skipping verification');
+      return url;
+    }
+    
+    console.log('[img verify] Testing URL:', url.substring(0, 80));
+    
     return new Promise((resolve) => {
       const img = new Image();
       const timer = setTimeout(() => {
         img.onload = img.onerror = null;
-        console.warn(`[img] verify timeout for ${url.substring(0,60)}`);
-        resolve(null);
-      }, 8000);
+        console.warn(`[img verify] TIMEOUT after 10s: ${url.substring(0,60)}`);
+        console.log('[img verify] Attempting fallback to local category image...');
+        _getFallbackCategoryImage().then(resolve);
+      }, 10000);
+      
       img.onload = () => {
         clearTimeout(timer);
         if (img.naturalWidth < 50 || img.naturalHeight < 50) {
-          console.warn(`[img] verify rejected tiny ${img.naturalWidth}x${img.naturalHeight}: ${url.substring(0,60)}`);
-          resolve(null);
+          console.warn(`[img verify] REJECTED tiny image ${img.naturalWidth}x${img.naturalHeight}: ${url.substring(0,60)}`);
+          console.log('[img verify] Attempting fallback to local category image...');
+          _getFallbackCategoryImage().then(resolve);
         } else {
-          console.log(`[img] verify OK ${img.naturalWidth}x${img.naturalHeight}: ${url.substring(0,60)}`);
+          console.log(`[img verify] SUCCESS ${img.naturalWidth}x${img.naturalHeight}: ${url.substring(0,60)}`);
           resolve(url);
         }
       };
-      img.onerror = () => {
+      
+      img.onerror = (e) => {
         clearTimeout(timer);
-        console.warn(`[img] verify failed (load error): ${url.substring(0,60)}`);
-        resolve(null);
+        console.warn(`[img verify] LOAD ERROR:`, e, url.substring(0,60));
+        console.log('[img verify] Attempting fallback to local category image...');
+        _getFallbackCategoryImage().then(resolve);
       };
+      
       img.src = url;
     });
+  }
+
+  /**
+   * Get a random local category image as fallback when API images fail
+   */
+  async function _getFallbackCategoryImage() {
+    console.log('[img fallback] Fetching random local category image...');
+    
+    // Check if we have cached focus selection with challenges
+    const focusCache = window.__focusSelectionCache;
+    if (focusCache && focusCache.challenges && focusCache.challenges.length > 0) {
+      // Use the first challenge category
+      const challenge = focusCache.challenges[0];
+      const categoryName = challenge.text;
+      console.log('[img fallback] Using category from focus selection:', categoryName);
+      
+      // Get the category slug
+      const categorySlugMap = {
+        "Phone Addiction": "phone_addiction",
+        "Social Media Addiction": "social_media",
+        "Entertainment Distraction": "entertainment",
+        "Sports & Gaming Distraction": "gaming",
+        "Exam Stress & Anxiety": "exam_stress",
+        "Overthinking": "overthinking",
+        "Low Motivation": "low_motivation",
+        "Lack of Consistency": "lack_consistency",
+        "Poor Time Management": "time_management",
+        "Sleep Issues": "sleep_issues",
+        "Difficulty Understanding Concepts": "understanding",
+        "Low Confidence & Self-Doubt": "self_doubt",
+        "Family Pressure": "family_pressure",
+        "Study Burnout": "burnout",
+        "Poor Concentration": "concentration"
+      };
+      
+      const slug = categorySlugMap[categoryName];
+      if (slug) {
+        // Pick a random image (1-5)
+        const randomNum = Math.floor(Math.random() * 5) + 1;
+        const fallbackUrl = `/category_images/${slug}_${randomNum}.jpg`;
+        console.log('[img fallback] Selected fallback image:', fallbackUrl);
+        return fallbackUrl;
+      }
+    }
+    
+    // Default fallback if no focus selection
+    console.log('[img fallback] No focus selection, using default fallback');
+    const defaultCategories = ['phone_addiction', 'concentration', 'burnout'];
+    const randomCategory = defaultCategories[Math.floor(Math.random() * defaultCategories.length)];
+    const randomNum = Math.floor(Math.random() * 5) + 1;
+    const fallbackUrl = `/category_images/${randomCategory}_${randomNum}.jpg`;
+    console.log('[img fallback] Selected default fallback:', fallbackUrl);
+    return fallbackUrl;
   }
 
   function prefetchDistractionImage(initialText, followupAnswers) {
@@ -3807,8 +4006,8 @@ const StressTriggers = (() => {
     const baseSource = contextParts.join(" | ") || initialText || "your distraction";
     const fallbackTopic = summarizeDistractionTopic(baseSource, initialText || "your distraction");
     const literalTopic = extractLiteralPopupTopic(
-      questionNumber <= 2 ? initialText : contextParts.join(", "),
-      questionNumber <= 2 ? "" : followupAnswers.join(", "),
+      questionNumber <= 3 ? initialText : contextParts.join(", "),
+      questionNumber <= 3 ? "" : followupAnswers.join(", "),
       fallbackTopic
     );
     const topicLead = literalTopic ? `"${literalTopic}"` : fallbackTopic;
@@ -3849,11 +4048,11 @@ const StressTriggers = (() => {
         },
       };
 
-      if (mediaCue === "reels" && questionNumber <= 2) {
+      if (mediaCue === "reels" && questionNumber <= 3) {
         personCopyMap[1].headline = `${personName} is building a career while you sit here feeding reels and calling it harmless.`;
         personCopyMap[2].headline = `${personName} does not know you exist. The reels still get your time, and your own work gets whatever is left.`;
       }
-      if (mediaCue === "movies" && questionNumber <= 2) {
+      if (mediaCue === "movies" && questionNumber <= 3) {
         personCopyMap[1].headline = `${personName} keeps moving forward. You keep sitting still and calling it entertainment.`;
         personCopyMap[2].headline = `${personName} is not ruining your focus. You're the one choosing fantasy over your own work again.`;
       }
@@ -3957,7 +4156,7 @@ const StressTriggers = (() => {
     const initialText = getSessionInitialQuery();
     if (!initialText) return [];
     const jobs = [];
-    for (let qNum = 1; qNum <= 2; qNum += 1) {
+    for (let qNum = 1; qNum <= 3; qNum += 1) {
       jobs.push(fetchQuestionWarningCopy(qNum));
     }
     return Promise.allSettled(jobs);
@@ -7607,8 +7806,8 @@ async function showQuestionWarningPopup(questionNumber, onComplete) {
     console.log('[onQuestionRendered] Question ID:', question?.question_id);
     console.log('[onQuestionRendered] Question difficulty:', question?.difficulty);
 
-    // Q1 & Q2: image warning popup only (no stress triggers like torch/fog)
-    if (questionNumber >= 1 && questionNumber <= 2) {
+    // Q1, Q2 & Q3: image warning popup only (no stress triggers like torch/fog)
+    if (questionNumber >= 1 && questionNumber <= 3) {
       const renderedQuestionId = String(question?.question_id || "");
       void fetchQuestionWarningCopy(questionNumber);
       fetchDistractionImage(questionNumber);
@@ -8453,6 +8652,12 @@ async function showQuestionWarningPopup(questionNumber, onComplete) {
     getImageCache: getImageCacheEntry,
     clearImageCache,
     verifyImageUrl: _verifyImageUrl,
+    // Focus selection cache for images (survives sessionStorage clearing)
+    getCachedFocusSelection: () => _cachedFocusSelection,
+    setCachedFocusSelection: (value) => { 
+      _cachedFocusSelection = value; 
+      console.log('[StressTriggers] Set cached focus selection:', value);
+    },
     // Q6 interception helpers
     isOptionFeedbackInterceptionEnabled: () => state.optionFeedbackInterceptionEnabled,
     getOptionFeedbackInterceptionCount: () => state.optionFeedbackInterceptionCount,
@@ -9169,6 +9374,12 @@ async function loadTestQuestions() {
     selectedOptions = {};
     answeredMap = {};
     
+    // Clear focus selection data after test questions load successfully
+    // This prevents re-starting the session on page refresh
+    console.log('[loadTestQuestions] Clearing focus selection data from sessionStorage');
+    sessionStorage.removeItem('focusSelection');
+    sessionStorage.removeItem('initialText');
+    
     // Fetch trigger plan for Focus Zones test
     await fetchQuestionTriggerPlan();
     
@@ -9511,18 +9722,63 @@ async function submitCurrentQuestion() {
 
 // Flow ---------------------------------------------------------------------
 async function startSessionFlow() {
+  console.log('[startSessionFlow] Starting...');
+  console.log('[startSessionFlow] Focus data:', sessionStorage.getItem('focusSelection'));
+  console.log('[startSessionFlow] Initial text:', sessionStorage.getItem('initialText'));
+  
   try {
     if (mediaRecorder && mediaRecorder.state === "recording") {
       setIntroHint("Stop the recording first.");
       return;
     }
 
-    btnStart.disabled = true;
+    if (btnStart) btnStart.disabled = true;
     showStage("loading", recordedAudioBlob ? "Transcribing your recording..." : "Absorbing your story...");
+    
+    // Check for focus selection data from new flow
+    const focusData = sessionStorage.getItem('focusSelection');
+    const storedInitialText = sessionStorage.getItem('initialText');
+    
+    if (focusData && storedInitialText) {
+      // Set lastAnswerEcho with limited length for loading screen display
+      const limitedText = storedInitialText.length > 80 
+        ? storedInitialText.substring(0, 77) + '...' 
+        : storedInitialText;
+      lastAnswerEcho = limitedText;
+      console.log('[Focus Selection] ========================================');
+      console.log('[Focus Selection] CACHING FOCUS DATA');
+      console.log('[Focus Selection] Raw data:', focusData);
+      console.log('[Focus Selection] Initial text:', storedInitialText);
+      
+      // Cache focus selection data GLOBALLY so it survives everything
+      try {
+        const parsedFocusData = JSON.parse(focusData);
+        console.log('[Focus Selection] Parsed:', parsedFocusData);
+        console.log('[Focus Selection] Challenges:', parsedFocusData.challenges);
+        console.log('[Focus Selection] Details:', parsedFocusData.details);
+        
+        // Store in GLOBAL variable - most reliable
+        window.__focusSelectionCache = parsedFocusData;
+        console.log('[Focus Selection] ✓✓✓ STORED IN GLOBAL CACHE');
+        
+        // Also store in StressTriggers for redundancy
+        if (typeof StressTriggers !== 'undefined' && StressTriggers.setCachedFocusSelection) {
+          StressTriggers.setCachedFocusSelection(parsedFocusData);
+          console.log('[Focus Selection] ✓ Also stored in StressTriggers');
+        }
+        
+        // Verify it's accessible
+        console.log('[Focus Selection] Verification - window.__focusSelectionCache:', window.__focusSelectionCache);
+        console.log('[Focus Selection] ========================================');
+      } catch (e) {
+        console.error('[Focus Selection] ❌ FAILED TO CACHE:', e);
+      }
+    }
+    
     const text = await resolveInitialText();
     if (!text) {
-      setIntroHint("Please share a few thoughts first.");
-      showStage("intro");
+      // No text - redirect to focus selection
+      window.location.href = '/focus_selection.html';
       return;
     }
 
@@ -9537,6 +9793,99 @@ async function startSessionFlow() {
     const startBody = { text };
     const clientUser = clientUserPayload();
     if (clientUser) startBody.client_user = clientUser;
+    
+    // Include focus selection data if available
+    if (focusData) {
+      try {
+        const parsedFocusData = JSON.parse(focusData);
+        startBody.focus_selection = parsedFocusData;
+        
+        // If we have focus selection data, skip Q&A and go straight to devil screen
+        console.log('[Focus Flow] Skipping Q&A, going to devil screen');
+        console.log('[Focus Flow] Start body:', startBody);
+        
+        const data = await postJSON("/session/start", startBody);
+        log("start_session", data);
+        console.log('[Focus Flow] Session started:', data);
+        console.log('[Focus Flow] extracted_subject:', data.extracted_subject);
+        console.log('[Focus Flow] extracted_topics:', data.extracted_topics);
+
+        setSessionUI(data.session_id, data.active_domains);
+        joinSessionRoom(data.session_id);
+        clearGhost();
+        
+        // Set academic decision from extracted data
+        if (data.extracted_subject) {
+          window.__academicDecision = {
+            autoPickedSubject: data.extracted_subject,
+            autoPickedTopics: data.extracted_topics || null
+          };
+          console.log('[Focus Flow] Set academic decision:', window.__academicDecision);
+        } else {
+          window.__academicDecision = null;
+          console.log('[Focus Flow] No subject extracted from backend');
+        }
+        
+        // Build followup-like history from focus data for devil screen
+        const followupHistory = parsedFocusData.challenges.map((challenge, idx) => ({
+          answer: `${challenge.text}${idx === parsedFocusData.challenges.length - 1 && parsedFocusData.details ? '. ' + parsedFocusData.details : ''}`,
+          domain: 'focus_challenge',
+          slot: challenge.value
+        }));
+        
+        // Store for StressTriggers
+        if (typeof StressTriggers !== 'undefined' && StressTriggers.recordFollowupAnswer) {
+          followupHistory.forEach(f => {
+            StressTriggers.recordFollowupAnswer(f.answer, f.domain, f.slot, '');
+          });
+        }
+        
+        // Create a full text version that includes details for AI analysis
+        const fullText = parsedFocusData.challenges.map(c => c.text).join(', ') + 
+                        (parsedFocusData.details ? '. ' + parsedFocusData.details : '');
+        
+        // Also create a short version for display (just challenge names)
+        const shortText = parsedFocusData.challenges.map(c => c.text).join(', ');
+        
+        console.log('[Focus Flow] Full text for AI:', fullText);
+        console.log('[Focus Flow] Short text for display:', shortText);
+        console.log('[Focus Flow] Followup history:', followupHistory);
+        
+        // Go to devil screen with full text for AI analysis
+        console.log('[Focus Flow] Building devil brief page...');
+        await buildDevilBriefPage(fullText, followupHistory);
+        console.log('[Focus Flow] Devil brief page built, showing devil stage...');
+        
+        // Prefetch distraction images NOW so they're ready by Q1-Q3
+        console.log('[Focus Flow] Prefetching distraction images...');
+        try {
+          if (typeof StressTriggers !== 'undefined' && StressTriggers.prefetchDistractionImage) {
+            // Extract followup texts for image relevance
+            const followupTexts = followupHistory.map(f => String(f.answer || "").trim()).filter(Boolean);
+            StressTriggers.prefetchDistractionImage(fullText, followupTexts);
+            console.log('[Focus Flow] Image prefetch started with', followupTexts.length, 'followups');
+          }
+        } catch (err) {
+          console.warn('[Focus Flow] Image prefetch failed:', err);
+        }
+        
+        showStage("devil");
+        
+        // DON'T clear sessionStorage yet - keep it for image prefetch
+        // It will be cleared after images are loaded or when test starts
+        // sessionStorage.removeItem('focusSelection');
+        // sessionStorage.removeItem('initialText');
+        
+        if (btnStart) btnStart.disabled = false;
+        return;
+      } catch (e) {
+        console.error('[Focus Selection] Error in focus flow:', e);
+        alert('Error starting session: ' + e.message);
+        // Fall through to normal flow
+      }
+    }
+    
+    // Normal flow without focus selection
     const data = await postJSON("/session/start", startBody);
     log("start_session", data);
 
@@ -9547,10 +9896,11 @@ async function startSessionFlow() {
     await fetchNextQuestion("Finding the first question…");
   } catch (err) {
     log("start_error", err.message);
-    setIntroHint(err.message);
-    showStage("intro");
+    alert(err.message || 'Failed to start session. Please try again.');
+    // Redirect to focus selection on error
+    window.location.href = '/focus_selection.html';
   } finally {
-    btnStart.disabled = false;
+    if (btnStart) btnStart.disabled = false;
   }
 }
 
@@ -9865,6 +10215,7 @@ async function acceptDevilChallenge() {
 
   // If no subject, go to subject selection
   console.log("[acceptDevilChallenge] no subject → subject screen");
+  console.log("[acceptDevilChallenge] sessionId:", sessionId);
   showStage("subjectSelection");
   await window.academicTopics?.initializeSubjectSelection?.(sessionId, null);
 }
@@ -9900,14 +10251,26 @@ btnReset?.addEventListener("click", resetFlow);
 btnAcceptChallenge?.addEventListener("click", acceptDevilChallenge);
 btnLogout?.addEventListener("click", () => {
   if (confirm('Are you sure you want to logout?')) {
+    // Clear all user data
     window.StressDostAuth?.clearUser?.();
+    
     // Clear localStorage
     try {
       localStorage.removeItem('sd_user');
       localStorage.removeItem('sd_mood');
+      localStorage.removeItem('stress_dost_user_v1');
     } catch (e) {
       console.error('Failed to clear localStorage:', e);
     }
+    
+    // Clear sessionStorage (focus selection data)
+    try {
+      sessionStorage.clear();
+    } catch (e) {
+      console.error('Failed to clear sessionStorage:', e);
+    }
+    
+    // Redirect to login
     window.location.href = "/login";
   }
 });
@@ -10237,6 +10600,16 @@ async function showTestEndScreen(timeUsedMs) {
   isTestActive = false;
   _proceedingToTest = false;
   hideFullscreenWarning();
+  
+  // Clear session started flag so user can start fresh next time
+  sessionStorage.removeItem('sessionStarted');
+  sessionStorage.removeItem('focusSelection');
+  sessionStorage.removeItem('initialText');
+  
+  // Clear global focus selection cache
+  window.__focusSelectionCache = null;
+  
+  console.log('[showTestEndScreen] Cleared all session flags and caches - user can start fresh');
   
   // Kill all triggers completely
   if (StressTriggers) {
@@ -10910,6 +11283,30 @@ function updateAnswerButtonState() {
   btnAnswer.hidden = !hasText;
 }
 
+// Expose API for academic_topics.js and console debugging
+window.__stressApp = {
+  resetFlow,
+  fetchNextQuestion,
+  submitAnswer,
+  loadTestQuestions,
+  startQuestionPrefetch,
+  submitCurrentQuestion,
+  evaluateUserState: StressTriggers.evaluateUserState,
+  activateTrigger: (name, context = {}) =>
+    StressTriggers.activateTrigger(name, { force: true, manual: true, ...context }),
+  activateTriggerManual: (name) =>
+    StressTriggers.activateTrigger(name, { force: true, manual: true }),
+  activateNarrativeTriggerManual: (name) =>
+    StressTriggers.activateManualShowcaseTrigger(name, { force: true, manual: true }),
+  deactivateTrigger: StressTriggers.deactivateTrigger,
+  getUserId: () => window.StressDostAuth?.getUserId?.() ?? null,
+  buildDevilBriefPage,
+  showStage,
+  setPendingTestStart: (params) => {
+    pendingTestStart = params;
+  },
+};
+
 // Init ---------------------------------------------------------------------
 if (!window.StressDostAuth?.getUser?.()) {
   if (window.StressDostAuth?.redirectToLogin) {
@@ -10919,6 +11316,37 @@ if (!window.StressDostAuth?.getUser?.()) {
   }
 } else {
   syncUserUI();
+  
+  // Check for focus selection data from new flow
+  const focusData = sessionStorage.getItem('focusSelection');
+  const storedInitialText = sessionStorage.getItem('initialText');
+  const sessionStarted = sessionStorage.getItem('sessionStarted'); // Flag to prevent re-start on refresh
+  
+  // If session was already started (on refresh), don't restart - just redirect to focus selection
+  if (sessionStarted === 'true') {
+    console.log('[Init] Session already started (page refresh) - clearing focus data and staying on page');
+    // Clear focus data so it doesn't trigger again
+    sessionStorage.removeItem('focusSelection');
+    sessionStorage.removeItem('initialText');
+    // Don't redirect - user is in the middle of a test or session
+    // The page will show whatever stage is appropriate (test, results, etc.)
+  } else if (focusData && storedInitialText) {
+    // Fresh start - user came from focus selection
+    console.log('[Init] Found focus selection data, starting session immediately');
+    console.log('[Init] Focus data:', focusData);
+    console.log('[Init] Initial text:', storedInitialText);
+    
+    // Mark that we're starting a session to prevent re-start on refresh
+    sessionStorage.setItem('sessionStarted', 'true');
+    
+    // Start session immediately - no delay, no intro screen
+    console.log('[Init] Starting session flow...');
+    startSessionFlow();
+  } else {
+    console.log('[Init] No focus data found, redirecting to focus selection');
+    // No focus data - redirect to focus selection
+    window.location.href = '/focus_selection.html';
+  }
   
   // Show logout button, user name, and session counter if logged in
   const user = window.StressDostAuth?.getUser?.();
@@ -10951,31 +11379,16 @@ if (!window.StressDostAuth?.getUser?.()) {
   
   StressTriggers.attachGlobalListeners();
   // Dev panel removed for production
-  resetFlow();
+  
+  // Only reset flow if NOT starting from focus selection
+  // (resetFlow clears the global cache which we need for images)
+  if (!sessionStorage.getItem('sessionStarted')) {
+    console.log('[Init] Calling resetFlow (no active session)');
+    resetFlow();
+  } else {
+    console.log('[Init] Skipping resetFlow (session in progress)');
+  }
+  
   initSocket();
   setRecordButtonState();
 }
-
-// expose for console debugging
-window.__stressApp = {
-  resetFlow,
-  fetchNextQuestion,
-  submitAnswer,
-  loadTestQuestions,
-  startQuestionPrefetch,
-  submitCurrentQuestion,
-  evaluateUserState: StressTriggers.evaluateUserState,
-  activateTrigger: (name, context = {}) =>
-    StressTriggers.activateTrigger(name, { force: true, manual: true, ...context }),
-  activateTriggerManual: (name) =>
-    StressTriggers.activateTrigger(name, { force: true, manual: true }),
-  activateNarrativeTriggerManual: (name) =>
-    StressTriggers.activateManualShowcaseTrigger(name, { force: true, manual: true }),
-  deactivateTrigger: StressTriggers.deactivateTrigger,
-  getUserId: () => window.StressDostAuth?.getUserId?.() ?? null,
-  buildDevilBriefPage,
-  showStage,
-  setPendingTestStart: (params) => {
-    pendingTestStart = params;
-  },
-};

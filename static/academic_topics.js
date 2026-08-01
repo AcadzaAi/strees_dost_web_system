@@ -208,7 +208,17 @@
 
       if (btn) {
         btn.disabled = !selectedSubject;
-        btn.onclick = () => { if (selectedSubject) goChapters(sessionId); };
+        btn.onclick = () => {
+          console.log("[academic] Continue button clicked. selectedSubject:", selectedSubject, "sessionId:", sessionId);
+          if (selectedSubject) {
+            console.log("[academic] Calling goChapters...");
+            goChapters(sessionId);
+          } else {
+            console.warn("[academic] No subject selected, button should be disabled");
+          }
+        };
+      } else {
+        console.warn("[academic] btnSubjectNext not found!");
       }
 
       console.log("[academic] Subject selection initialized. selectedSubject:", selectedSubject);
@@ -219,9 +229,16 @@
 
   /* ── STAGE 2 : chapter selection ───────────────────────────────────────── */
   async function goChapters(sessionId) {
+    console.log("[academic] goChapters called with sessionId:", sessionId);
     try {
       const show = window.__stressApp?.showStage;
-      if (show) show("topicSelection");
+      console.log("[academic] showStage function:", typeof show);
+      if (show) {
+        console.log("[academic] Showing topicSelection stage...");
+        show("topicSelection");
+      } else {
+        console.error("[academic] showStage not available!");
+      }
 
       const h2   = document.querySelector("#stageTopicSelection h2");
       const eye  = document.querySelector("#stageTopicSelection .eyebrow");

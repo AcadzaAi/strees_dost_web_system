@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from flask import Blueprint, current_app, send_from_directory
 
 bp = Blueprint("ui", __name__)
@@ -13,6 +15,27 @@ def index():
 @bp.get("/login")
 def login():
     return send_from_directory(current_app.static_folder, "login.html")
+
+
+@bp.get("/focus_selection.html")
+def focus_selection():
+    return send_from_directory(current_app.static_folder, "focus_selection.html")
+
+
+@bp.get("/focus_details.html")
+def focus_details():
+    return send_from_directory(current_app.static_folder, "focus_details.html")
+
+
+@bp.get("/app.js")
+def app_js():
+    """Serve app.js with cache busting."""
+    response = send_from_directory(current_app.static_folder, "app.js")
+    # Disable caching for app.js during development
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 
 @bp.get("/proxy-image")

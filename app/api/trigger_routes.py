@@ -5,6 +5,7 @@ import base64
 import json
 import logging
 import os
+import random
 import re
 import time
 import uuid
@@ -16,6 +17,7 @@ from flask import Blueprint, jsonify, request
 
 from ..db.repo import get_session
 from ..services.openai_client import chat_json, chat_json_no_retry, client as _openai_client
+from ..services.category_images import get_local_image_paths, should_use_category_images
 
 logger = logging.getLogger(__name__)
 
@@ -2146,6 +2148,82 @@ def _build_distraction_images(initial_text: str, followup_answers: list[str]) ->
     return ids
 
 
+def _build_category_images(selected_challenges: list[dict]) -> list[dict[str, Any] | None]:
+    """Load pre-stored local images for Q1, Q2, and Q3 based on selected challenge categories.
+    
+    Images are already downloaded and stored in static/category_images/
+    This function simply returns the paths to serve them.
+    
+    Args:
+        selected_challenges: List of challenge dicts with 'text' and 'value' keys
+    
+    Returns:
+        List of 3 image paths (for Q1, Q2, and Q3)
+    """
+    logger.info("Loading category-based images for %d challenges", len(selected_challenges))
+    logger.info("=" * 80)
+    logger.info("_build_category_images - Building 3 UNIQUE images")
+    logger.info("Input challenges: %s", [c.get("text") for c in selected_challenges])
+    
+    # We need images for Q1, Q2, and Q3
+    results = []
+    used_images = set()  # Track used images to ensure uniqueness
+    
+    # Use up to 3 challenges, or repeat if less than 3
+    challenges_to_use = selected_challenges[:3] if len(selected_challenges) >= 3 else selected_challenges
+    logger.info("Challenges to use (max 3): %s", [c.get("text") for c in challenges_to_use])
+    
+    for idx in range(3):
+        # If we have fewer than 3 challenges, cycle through them
+        challenge_idx = idx % len(challenges_to_use) if challenges_to_use else 0
+        
+        if not challenges_to_use:
+            logger.warning("Q%d: No challenges provided", idx + 1)
+            results.append(None)
+            continue
+            
+        challenge = challenges_to_use[challenge_idx]
+        challenge_text = challenge.get("text", "")
+        logger.info("Q%d: Using challenge '%s' (index %d)", idx + 1, challenge_text, challenge_idx)
+        
+        # Get ALL available images for this category (5 images per category)
+        all_image_paths = get_local_image_paths(challenge_text, count=5)
+        logger.info("Q%d: Available images for '%s': %s", idx + 1, challenge_text, all_image_paths)
+        
+        if not all_image_paths:
+            logger.warning("Q%d: No local images found for category: %s", idx + 1, challenge_text)
+            results.append(None)
+            continue
+        
+        # Filter out already used images to ensure uniqueness
+        available_images = [img for img in all_image_paths if img not in used_images]
+        
+        if not available_images:
+            # All images from this category are used, pick any unused image from pool
+            logger.info("Q%d: All images from '%s' used, picking from remaining pool", idx + 1, challenge_text)
+            available_images = all_image_paths
+        
+        # Select the first available unique image
+        image_path = available_images[0]
+        used_images.add(image_path)
+        
+        logger.info("Q%d: Category '%s': using UNIQUE local image '%s'", idx + 1, challenge_text, image_path)
+        
+        # Return a special marker dict indicating this is a local file
+        result_dict = {
+            "local_path": image_path,
+            "category": challenge_text
+        }
+        results.append(result_dict)
+        logger.info("Q%d: Added result: %s", idx + 1, result_dict)
+    
+    logger.info("Returning %d UNIQUE results: %s", len(results), results)
+    logger.info("Used images: %s", used_images)
+    logger.info("=" * 80)
+    
+    return results[:3]
+
+
 @bp.post("/distraction-image")
 def distraction_image():
     """Return all 3 distraction images for Q1-Q3 in one response.
@@ -2171,13 +2249,61 @@ def distraction_image():
         for f in (body.get("followup_answers") or [])[:6]
         if str(f or "").strip()
     ]
-    logger.info("Parsed: initial_text=%r, followup_answers=%d", initial_text[:60], len(followup_answers))
+    focus_selection = body.get("focus_selection")
+    logger.info("Parsed: initial_text=%r, followup_answers=%d, has_focus=%s", 
+                initial_text[:60], len(followup_answers), bool(focus_selection))
 
     if not initial_text and not followup_answers:
         logger.warning("No context provided, returning no_context status")
         return jsonify({"images": [None, None, None], "status": "no_context"})
 
+    # Check if we should use category-based images
+    # Use category images ONLY when user skips details (minimal/no text)
+    use_category_images = False
+    selected_challenges = []
+    
+    if focus_selection and isinstance(focus_selection, dict):
+        challenges = focus_selection.get("challenges", [])
+        details = focus_selection.get("details", "")
+        logger.info("focus_selection received:")
+        logger.info("  - details: '%s' (len=%d)", details, len(details))
+        logger.info("  - challenges: %s", [c.get("text") for c in challenges])
+        
+        # Decide whether to use category images based on details length
+        if challenges and should_use_category_images(focus_selection):
+            use_category_images = True
+            selected_challenges = challenges
+            logger.info("✓✓✓ USING CATEGORY IMAGES (details skipped/minimal) ✓✓✓")
+            logger.info("Selected challenges: %s", [c.get("text") for c in selected_challenges])
+        elif challenges and details:
+            use_category_images = False
+            logger.info("✓✓✓ USING API IMAGES (user provided details) ✓✓✓")
+            logger.info("Details provided: '%s'", details[:100])
+        else:
+            logger.info("No challenges found in focus_selection, using fallback categories")
+            # Use fallback categories if no challenges provided
+            use_category_images = True
+            selected_challenges = [
+                {"text": "Phone Addiction", "value": "phone_addiction"},
+                {"text": "Poor Concentration", "value": "concentration"},
+                {"text": "Study Burnout", "value": "burnout"}
+            ]
+    else:
+        logger.info("No focus_selection data, using fallback categories")
+        # Use fallback categories
+        use_category_images = True
+        selected_challenges = [
+            {"text": "Phone Addiction", "value": "phone_addiction"},
+            {"text": "Poor Concentration", "value": "concentration"},
+            {"text": "Study Burnout", "value": "burnout"}
+        ]
+        logger.info("Using fallback challenges: %s", [c.get("text") for c in selected_challenges])
+
     cache_key = f"{initial_text[:80]}|{len(followup_answers)}"
+    if use_category_images and selected_challenges:
+        # Use a different cache key for category images
+        challenge_names = "|".join(c.get("text", "") for c in selected_challenges[:3])
+        cache_key = f"category:{challenge_names}"
     logger.info("Cache key: %r", cache_key)
 
     # Empty results expire so a transient web-search miss can be retried later.
@@ -2195,11 +2321,20 @@ def distraction_image():
         images = []
         for img_data in img_data_list:
             if img_data:
-                data_b64 = base64.b64encode(img_data["data"]).decode("ascii")
-                images.append({
-                    "data": data_b64,
-                    "content_type": img_data["content_type"]
-                })
+                # Check if this is a local file path (category image)
+                if "local_path" in img_data:
+                    images.append({
+                        "url": f"/{img_data['local_path']}",  # Serve as static file
+                        "category": img_data.get("category"),
+                        "is_local": True
+                    })
+                else:
+                    # Base64 encoded image (generated)
+                    data_b64 = base64.b64encode(img_data["data"]).decode("ascii")
+                    images.append({
+                        "data": data_b64,
+                        "content_type": img_data["content_type"]
+                    })
             else:
                 images.append(None)
         logger.info("distraction-image ready — returning %d images as base64", len([i for i in images if i]))
@@ -2208,13 +2343,52 @@ def distraction_image():
     # Generate images synchronously on first call
     # This is simpler and more reliable than background tasks with eventlet
     logger.info("Cache MISS - generating images synchronously for key: %r", cache_key)
-    logger.info("distraction-image starting pipeline — text=%r followups=%d",
-                initial_text[:60], len(followup_answers))
     
     try:
-        logger.info("Calling _build_distraction_images_base64...")
-        img_data_list = _build_distraction_images_base64(initial_text, followup_answers)
-        logger.info("_build_distraction_images_base64 returned: %d images", len([i for i in img_data_list if i]))
+        # Use category images OR API images based on user input
+        if use_category_images and selected_challenges:
+            logger.info("=" * 80)
+            logger.info("GENERATING CATEGORY-BASED IMAGES (LOCAL FILES)")
+            logger.info("=" * 80)
+            logger.info("Challenges to use: %s", [c.get("text") for c in selected_challenges])
+            img_data_list = _build_category_images(selected_challenges)
+        else:
+            logger.info("=" * 80)
+            logger.info("GENERATING API-BASED IMAGES (OPENAI + WEB SEARCH)")
+            logger.info("=" * 80)
+            logger.info("Starting AI pipeline — text=%r followups=%d",
+                        initial_text[:60], len(followup_answers))
+            logger.info("User provided details, attempting API image generation...")
+            
+            try:
+                img_data_list = _build_distraction_images_base64(initial_text, followup_answers)
+                
+                # Check if API generation failed (returned all nulls)
+                if not img_data_list or all(i is None for i in img_data_list):
+                    logger.warning("API image generation failed or returned no images")
+                    
+                    # FALLBACK: Use category images if available
+                    if focus_selection and focus_selection.get("challenges"):
+                        logger.info("FALLBACK: Using category images instead")
+                        fallback_challenges = focus_selection.get("challenges", [])
+                        img_data_list = _build_category_images(fallback_challenges)
+                    else:
+                        logger.warning("No fallback categories available")
+                        img_data_list = [None, None, None]
+                        
+            except Exception as api_error:
+                logger.error("API image generation exception: %s", api_error, exc_info=True)
+                
+                # FALLBACK: Use category images if available
+                if focus_selection and focus_selection.get("challenges"):
+                    logger.info("FALLBACK: Using category images due to API error")
+                    fallback_challenges = focus_selection.get("challenges", [])
+                    img_data_list = _build_category_images(fallback_challenges)
+                else:
+                    logger.warning("No fallback categories available")
+                    img_data_list = [None, None, None]
+        
+        logger.info("Image generation returned: %d images", len([i for i in img_data_list if i]))
         _distraction_image_cache[cache_key] = img_data_list
         
         if not img_data_list or all(i is None for i in img_data_list):
@@ -2223,15 +2397,24 @@ def distraction_image():
         else:
             logger.info("distraction-image SUCCESS: %d images cached", len([i for i in img_data_list if i]))
         
-        # Convert to base64 and return
+        # Convert to response format
         images = []
         for img_data in img_data_list:
             if img_data:
-                data_b64 = base64.b64encode(img_data["data"]).decode("ascii")
-                images.append({
-                    "data": data_b64,
-                    "content_type": img_data["content_type"]
-                })
+                # Check if this is a local file path (category image)
+                if "local_path" in img_data:
+                    images.append({
+                        "url": f"/{img_data['local_path']}",  # Serve as static file
+                        "category": img_data.get("category"),
+                        "is_local": True
+                    })
+                else:
+                    # Base64 encoded image (generated)
+                    data_b64 = base64.b64encode(img_data["data"]).decode("ascii")
+                    images.append({
+                        "data": data_b64,
+                        "content_type": img_data["content_type"]
+                    })
             else:
                 images.append(None)
         

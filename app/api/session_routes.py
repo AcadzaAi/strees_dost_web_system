@@ -270,12 +270,46 @@ def start_session():
     try:
         body = request.get_json(force=True, silent=True) or {}
         text = (body.get("text") or "").strip()
-        current_app.logger.info("start_session: incoming text len=%s", len(text))
+        focus_selection = body.get("focus_selection")  # New focus selection data
+        
+        current_app.logger.info("start_session: incoming text len=%s, has_focus_selection=%s", len(text), bool(focus_selection))
         if not text:
             return jsonify({"error": "text is required"}), 400
 
         session = create_session(text)
         current_app.logger.info("start_session: created session_id=%s", session.id)
+
+        # Try to extract academic subjects from focus details if provided
+        extracted_subject = None
+        extracted_topics = []
+        if focus_selection and isinstance(focus_selection, dict):
+            details = focus_selection.get("details", "")
+            current_app.logger.info("start_session: focus_selection details='%s'", details)
+            
+            # Try to extract from details first, then fall back to main text
+            extraction_text = details if details and len(details) > 10 else text
+            current_app.logger.info("start_session: attempting extraction from text (len=%s): '%s'", len(extraction_text), extraction_text[:100])
+            
+            if extraction_text and len(extraction_text) > 10:
+                # Use the existing academic topic extractor
+                try:
+                    result = extract_academic_topics(extraction_text)
+                    current_app.logger.info("start_session: extract_academic_topics result=%s", result)
+                    
+                    # Result has 'subjects' (array), not 'subject'
+                    subjects = result.get("subjects", []) if result else []
+                    chapters = result.get("chapters", []) if result else []
+                    
+                    if subjects and len(subjects) > 0:
+                        extracted_subject = subjects[0]  # Take first subject
+                        extracted_topics = chapters  # Use chapters as topics
+                        current_app.logger.info("start_session: extracted subject=%s, topics=%s from focus data", extracted_subject, extracted_topics)
+                    else:
+                        current_app.logger.info("start_session: no subjects found in extraction result")
+                except Exception as e:
+                    current_app.logger.warning("start_session: failed to extract academic topics: %s", e)
+        else:
+            current_app.logger.info("start_session: no focus_selection data provided")
 
         prefill = prefill_slots_with_llm(text)
         current_app.logger.debug("start_session: prefill=%s", prefill)
@@ -285,6 +319,19 @@ def start_session():
         meta = dict(session.meta or {})
         meta["causes"] = causes
         meta["clarifier_queue"] = []
+        
+        # Store focus selection data in meta for devil screen
+        if focus_selection:
+            meta["focus_selection"] = focus_selection
+            current_app.logger.info("start_session: stored focus_selection in meta")
+        
+        # Store extracted academic info
+        if extracted_subject:
+            meta["extracted_subject"] = extracted_subject
+            if extracted_topics:
+                meta["extracted_topics"] = extracted_topics
+            current_app.logger.info("start_session: stored extracted academic info")
+        
         if getattr(prefill, "extracted_state", None):
             meta["extracted_state"] = prefill.extracted_state.model_dump()
         raw_client = body.get("client_user")
@@ -317,14 +364,20 @@ def start_session():
         save_session(session)
         current_app.logger.info("start_session: saved session_id=%s", session.id)
 
-        return jsonify(
-            {
-                "session_id": str(session.id),
-                "status": session.status,
-                "active_domains": session.active_domains,
-                "prefilled": session.filled_slots,
-            }
-        )
+        response_data = {
+            "session_id": str(session.id),
+            "status": session.status,
+            "active_domains": session.active_domains,
+            "prefilled": session.filled_slots,
+        }
+        
+        # Include extracted subject if available
+        if extracted_subject:
+            response_data["extracted_subject"] = extracted_subject
+            if extracted_topics:
+                response_data["extracted_topics"] = extracted_topics
+
+        return jsonify(response_data)
     except Exception as exc:  # pragma: no cover - defensive logging
         current_app.logger.exception("start_session failed: %s", exc)
         return jsonify({"error": "internal error", "detail": str(exc)}), 500
