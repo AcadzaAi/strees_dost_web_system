@@ -292,25 +292,25 @@ class QuestionIDLoader:
         return random.sample(self.question_ids, count)
 
     def get_test_ids(self, subject: str = None, topics: list = None, is_new_user: bool = True) -> List[str]:
-        """Get 7 unique test IDs: 2 hard + 5 medium, filtered by subject/chapter.
+        """Get 5 unique test IDs: 2 hard + 3 medium, filtered by subject/chapter.
         
         For new users (first session):
-        - Q1: Medium, Q2: Hard, Q3-Q5: Medium, Q6: Hard, Q7: Medium
+        - Q1-Q3: Medium, Q4-Q5: Hard
         
         For returning users:
         - Q1: Always Medium (never hard)
-        - Q2-Q7: Random mix of 2 hard + 4 medium
+        - Q2-Q5: Random mix of 2 hard + 2 medium
         
         Priority: 
-        1. Try to get 2 hard + 5 medium from matching chapter
+        1. Try to get 2 hard + 3 medium from matching chapter
         2. If not enough, fill from same subject
         3. If still not enough, fill from any questions
         
-        Returns list of 7 question IDs.
+        Returns list of 5 question IDs.
         """
-        TARGET = 7
+        TARGET = 5
         HARD_COUNT = 2
-        MEDIUM_COUNT = 5
+        MEDIUM_COUNT = 3
         
         if not self.enriched_data:
             return self.get_random_ids(TARGET)
@@ -432,13 +432,13 @@ class QuestionIDLoader:
         random.shuffle(selected_medium)
         
         if is_new_user:
-            # NEW USER: Fixed positions - Q2 and Q6 are hard
-            # Q1(M), Q2(H), Q3(M), Q4(M), Q5(M), Q6(H), Q7(M)
+            # NEW USER: Fixed positions - Q4 and Q5 are hard
+            # Q1(M), Q2(M), Q3(M), Q4(H), Q5(H)
             medium_idx = 0
             hard_idx = 0
             
             for i in range(TARGET):
-                if i == 1 or i == 5:  # Q2 or Q6 (0-indexed: 1 and 5)
+                if i == 3 or i == 4:  # Q4 or Q5 (0-indexed: 3 and 4)
                     if hard_idx < len(selected_hard):
                         final_questions.append(selected_hard[hard_idx])
                         hard_idx += 1
@@ -454,17 +454,15 @@ class QuestionIDLoader:
                         hard_idx += 1
             
             logger.info(
-                "NEW USER - Fixed positions: Q1=%s, Q2=%s, Q3=%s, Q4=%s, Q5=%s, Q6=%s, Q7=%s",
+                "NEW USER - Fixed positions: Q1=%s, Q2=%s, Q3=%s, Q4=%s, Q5=%s",
                 final_questions[0].get("level") if len(final_questions) > 0 else "N/A",
                 final_questions[1].get("level") if len(final_questions) > 1 else "N/A",
                 final_questions[2].get("level") if len(final_questions) > 2 else "N/A",
                 final_questions[3].get("level") if len(final_questions) > 3 else "N/A",
-                final_questions[4].get("level") if len(final_questions) > 4 else "N/A",
-                final_questions[5].get("level") if len(final_questions) > 5 else "N/A",
-                final_questions[6].get("level") if len(final_questions) > 6 else "N/A"
+                final_questions[4].get("level") if len(final_questions) > 4 else "N/A"
             )
         else:
-            # RETURNING USER: Q1 always medium, Q2-Q7 random mix
+            # RETURNING USER: Q1 always medium, Q2-Q5 random mix
             # Ensure Q1 is medium
             if selected_medium:
                 final_questions.append(selected_medium.pop(0))
@@ -759,7 +757,7 @@ def load_test_questions():
 
     question_ids = question_loader.get_test_ids(subject=subject, topics=topics, is_new_user=is_new_user)
     if not question_ids:
-        fallback = _local_fallback_questions(count=7, subject=subject, topics=topics)
+        fallback = _local_fallback_questions(count=5, subject=subject, topics=topics)
         return jsonify(
             {
                 "status": "success",
@@ -773,7 +771,7 @@ def load_test_questions():
 
     raw_questions = acadza_fetcher.fetch_multiple(question_ids)
     if not raw_questions:
-        fallback = _local_fallback_questions(count=7, subject=subject, topics=topics)
+        fallback = _local_fallback_questions(count=5, subject=subject, topics=topics)
         return jsonify(
             {
                 "status": "success",
@@ -785,11 +783,11 @@ def load_test_questions():
             }
         )
 
-    # If we got fewer than 7, try to fetch more from the pool
-    if len(raw_questions) < 7:
+    # If we got fewer than 5, try to fetch more from the pool
+    if len(raw_questions) < 5:
         fetched_ids = {q.get("_id") for q in raw_questions}
         extra_ids = [qid for qid in question_loader.question_ids if qid not in fetched_ids]
-        needed = 7 - len(raw_questions)
+        needed = 5 - len(raw_questions)
         if extra_ids:
             import random as _rand
             extra_pick = _rand.sample(extra_ids, min(needed * 2, len(extra_ids)))  # Try double to account for failures
