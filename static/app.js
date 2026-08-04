@@ -136,12 +136,10 @@ let pendingAdvanceAfterSubmit = false;
 let questionTriggerPlan = null; // Stores trigger plan from backend
 const LOCAL_NEW_USER_TRIGGER_NAMES = [
   "TORCHLIGHT_SPOTLIGHT",
-  "HARD_FOG",
-  "SCREEN_FLIP",
-  "ACCURACY_TEST",
-  "READING_TEST",
-  "HARD_PEER_DOUBT",
-  "BILLIARD_BALL",
+  "NOTIFICATION_BURST",
+  "DISTRACTION_IMAGE",
+  "DISTRACTION_IMAGE",
+  "DISTRACTION_IMAGE",
 ];
 const SOLUTION_GRACE_MS = 1400;
 
@@ -9412,16 +9410,16 @@ function buildLocalNewUserTriggerPlan() {
   const sequence = LOCAL_NEW_USER_TRIGGER_NAMES.map((trigger_name, idx) => ({
     question_number: idx + 1,
     trigger_name,
-    difficulty: trigger_name.includes("HARD") ? "hard" : "medium",
-    intensity: idx < 2 ? "mild" : idx < 5 ? "moderate" : "strong",
-    is_hard: trigger_name === "HARD_FOG" || trigger_name === "HARD_PEER_DOUBT",
-    is_meta_question: trigger_name === "HARD_FOG" || trigger_name === "HARD_PEER_DOUBT",
+    difficulty: idx >= 3 ? "hard" : "medium",
+    intensity: idx < 2 ? "mild" : idx < 4 ? "moderate" : "high",
+    is_hard: idx >= 3,
+    is_meta_question: false,
   }));
   return {
     status: "success",
     is_new_user: true,
     user_type: "new",
-    total_questions: 7,
+    total_questions: 5,
     medium_count: sequence.filter((t) => !t.is_hard).length,
     hard_count: sequence.filter((t) => t.is_hard).length,
     sequence,

@@ -878,8 +878,8 @@ def get_trigger_plan():
     {
         "status": "success",
         "is_new_user": true,
-        "total_questions": 7,
-        "medium_count": 5,
+        "total_questions": 5,
+        "medium_count": 3,
         "hard_count": 2,
         "sequence": [
             {

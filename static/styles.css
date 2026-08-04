@@ -1415,6 +1415,1146 @@ textarea:focus {
 
 .row { display: flex; gap: 12px; flex-wrap: wrap; }
 
+/* ============================================================================
+   MOBILE RESPONSIVE STYLES FOR ANDROID
+   ============================================================================ */
+
+/* Mobile-first: Larger screens (tablets) - 768px and below */
+@media (max-width: 768px) {
+  /* Top Bar */
+  .top-bar {
+    min-height: 56px;
+    padding: 0 16px;
+    gap: 8px;
+  }
+
+  .top-bar h1 {
+    font-size: 11px;
+  }
+
+  .brand-mark {
+    width: 28px;
+    height: 28px;
+    font-size: 14px;
+  }
+
+  .back-btn {
+    width: 32px;
+    height: 32px;
+    font-size: 24px;
+  }
+
+  /* App Shell */
+  .app-shell {
+    min-height: 100vh;
+  }
+
+  /* Viewport */
+  .viewport {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Stage Containers */
+  .stage {
+    padding: 0 12px 20px;
+  }
+
+  /* Glass Cards */
+  .glass {
+    border-radius: 20px;
+    padding: 24px 20px;
+  }
+
+  /* Name Stage */
+  #stageName .name-card {
+    padding: 24px 20px;
+    border-radius: 12px;
+  }
+
+  #stageName .name-card h2 {
+    font-size: 24px;
+  }
+
+  #stageName .name-card input[type="text"] {
+    min-height: 48px;
+    font-size: 16px; /* Prevents zoom on iOS */
+  }
+
+  /* QA Stage */
+  .qa-shell {
+    padding: 20px 16px 28px;
+    gap: 14px;
+  }
+
+  .qa-topbar {
+    gap: 8px;
+  }
+
+  .qa-title {
+    font-size: 13px;
+  }
+
+  .qa-card {
+    padding: 24px 20px;
+    border-radius: 20px;
+  }
+
+  .qa-question {
+    font-size: 20px;
+    margin-bottom: 18px;
+  }
+
+  .qa-card textarea {
+    min-height: 140px;
+    font-size: 16px; /* Prevents zoom */
+    padding: 12px 14px;
+  }
+
+  .qa-help {
+    margin: 12px 0 18px;
+    padding: 10px 12px;
+    font-size: 12px;
+  }
+
+  /* Devil Stage */
+  #stageDevil {
+    padding: 20px 12px 32px;
+  }
+
+  .devil-brief-card {
+    padding: 20px 18px;
+    border-radius: 16px;
+  }
+
+  .devil-hero {
+    grid-template-columns: 72px 1fr;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .devil-avatar {
+    width: 72px;
+    height: 72px;
+    border-radius: 20px;
+    font-size: 42px;
+  }
+
+  .devil-intro {
+    font-size: 14px;
+  }
+
+  .devil-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .devil-panel {
+    padding: 12px;
+  }
+
+  .devil-list {
+    font-size: 12px;
+    gap: 5px;
+  }
+
+  /* Loading Screen */
+  .loading-screen {
+    padding: 28px 14px 36px;
+    gap: 14px;
+  }
+
+  .loading-copy h2 {
+    font-size: 20px;
+  }
+
+  .loading-copy p {
+    font-size: 13px;
+  }
+
+  .neural-field {
+    width: min(520px, 88vw);
+    height: 220px;
+  }
+
+  /* Test/Popup Stage */
+  .pop-card {
+    padding: 8px 12px;
+    height: calc(100vh - 64px);
+  }
+
+  .test-card {
+    padding: 10px 10px 12px;
+    border-radius: 18px;
+  }
+
+  .test-topbar {
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+
+  .test-close {
+    width: 40px;
+    height: 40px;
+    font-size: 22px;
+  }
+
+  .test-timer-pill {
+    padding: 6px 14px;
+    font-size: 18px;
+  }
+
+  .test-finish {
+    font-size: 16px;
+  }
+
+  .test-head-main {
+    gap: 6px;
+  }
+
+  .q-count {
+    padding: 6px 10px;
+    font-size: 14px;
+  }
+
+  .q-type-select {
+    min-height: 36px;
+    font-size: 14px;
+    padding: 0 10px;
+  }
+
+  .question-header-save {
+    width: 32px;
+    height: 32px;
+    margin-left: 4px;
+  }
+
+  .question-header-save svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .question-body {
+    gap: 6px;
+  }
+
+  .question-toolbar {
+    gap: 8px;
+  }
+
+  .question-pill {
+    padding: 6px 12px;
+    font-size: 11px;
+  }
+
+  .question-panel {
+    padding: 12px 14px 16px;
+    border-radius: 14px;
+  }
+
+  .question-stem {
+    font-size: 16px;
+    line-height: 1.55;
+  }
+
+  .question-stem p {
+    font-size: 16px;
+    margin-bottom: 6px;
+  }
+
+  .question-stem .stem-options {
+    font-size: 15px;
+    margin-top: 12px;
+  }
+
+  .question-stem .stem-option-row {
+    font-size: 15px;
+    margin-bottom: 8px;
+  }
+
+  .options-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .option {
+    padding: 12px 10px;
+    border-radius: 8px;
+  }
+
+  .option .option-label {
+    font-size: 16px;
+  }
+
+  .option .option-text {
+    font-size: 15px;
+  }
+
+  .option .option-text p {
+    font-size: 15px;
+  }
+
+  .option .option-mark {
+    font-size: 16px;
+  }
+
+  .test-submit .btn.primary {
+    min-height: 52px;
+    font-size: 17px;
+    border-radius: 8px;
+  }
+
+  .test-nav {
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .test-nav .btn {
+    min-height: 44px;
+    font-size: 15px;
+    padding: 10px 18px;
+  }
+
+  .test-nav #btnPrevQuestion {
+    max-width: 160px;
+  }
+
+  /* Integer Panel */
+  .integer-panel input {
+    padding: 10px 12px;
+    font-size: 15px;
+  }
+
+  .keypad {
+    gap: 6px;
+  }
+
+  .keypad button {
+    min-height: 42px;
+    font-size: 14px;
+  }
+
+  /* Buttons */
+  .btn {
+    padding: 12px 24px;
+    font-size: 14px;
+    border-radius: 10px;
+  }
+
+  .btn.small {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+
+  /* Subject/Topic Selection */
+  .subject-options {
+    gap: 10px;
+    margin: 20px 0;
+  }
+
+  .subject-option {
+    padding: 14px;
+    border-radius: 10px;
+  }
+
+  .subject-name {
+    font-size: 15px;
+  }
+
+  .topic-options {
+    gap: 5px;
+    margin: 20px 0;
+    max-height: 380px;
+  }
+
+  .topic-option {
+    padding: 12px 14px;
+    border-radius: 10px;
+  }
+
+  .topic-name {
+    font-size: 14px;
+  }
+
+  /* Modals */
+  .binary-card {
+    width: min(92vw, 520px);
+    padding: 24px 20px;
+    border-radius: 24px;
+  }
+
+  .binary-question {
+    font-size: 20px;
+    margin: 10px 0 16px;
+  }
+
+  .binary-actions {
+    gap: 12px;
+  }
+
+  .binary-btn {
+    min-height: 56px;
+    font-size: 14px;
+  }
+
+  .confirm-card {
+    width: min(92vw, 420px);
+    padding: 24px 20px;
+  }
+
+  .confirm-card h3 {
+    font-size: 20px;
+  }
+
+  .solution-card {
+    max-width: 92vw;
+    padding: 24px 20px;
+  }
+
+  /* Feedback Modal */
+  .feedback-modal .feedback-card {
+    width: min(92vw, 480px);
+    padding: 24px 20px;
+    border-radius: 20px;
+  }
+
+  .feedback-modal h3 {
+    font-size: 20px;
+  }
+
+  .feedback-textarea {
+    font-size: 15px;
+    min-height: 100px;
+  }
+
+  /* Category Images - Make them responsive */
+  .psyq-card--katrina {
+    width: min(95vw, 600px) !important;
+    max-height: none !important;
+  }
+
+  .psyq-card--katrina img {
+    max-height: 60vh !important;
+    width: 100% !important;
+    object-fit: contain;
+  }
+
+  /* Results Screen */
+  .results-screen {
+    padding: 20px 12px;
+  }
+}
+
+/* Small phones - 480px and below */
+@media (max-width: 480px) {
+  /* Top Bar */
+  .top-bar {
+    min-height: 52px;
+    padding: 0 12px;
+    gap: 6px;
+  }
+
+  .top-bar h1 {
+    font-size: 10px;
+  }
+
+  .top-bar h1 span {
+    display: none; /* Hide version on very small screens */
+  }
+
+  .brand-mark {
+    width: 26px;
+    height: 26px;
+    font-size: 13px;
+  }
+
+  #userNameDisplay {
+    font-size: 12px !important;
+    max-width: 100px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #sessionCounter {
+    font-size: 11px !important;
+    padding: 3px 8px !important;
+  }
+
+  .logout-btn,
+  #btnLogout {
+    padding: 5px 10px !important;
+    font-size: 12px !important;
+  }
+
+  /* Glass Cards */
+  .glass {
+    padding: 20px 16px;
+    border-radius: 16px;
+  }
+
+  /* Name Stage */
+  #stageName .name-card {
+    padding: 20px 16px;
+  }
+
+  #stageName .name-card h2 {
+    font-size: 20px;
+  }
+
+  #stageName .name-card p {
+    font-size: 14px;
+  }
+
+  #stageName #btnNameNext {
+    min-width: 120px;
+    font-size: 15px;
+  }
+
+  /* QA Stage */
+  .qa-shell {
+    padding: 16px 12px 24px;
+  }
+
+  .qa-card {
+    padding: 20px 16px;
+  }
+
+  .qa-question {
+    font-size: 18px;
+    line-height: 1.4;
+  }
+
+  .qa-card textarea {
+    min-height: 120px;
+    font-size: 16px;
+  }
+
+  #stageQA .btn.primary {
+    padding: 10px 20px;
+    font-size: 14px;
+  }
+
+  #stageQA .btn.ghost {
+    padding: 10px 16px;
+    font-size: 14px;
+  }
+
+  /* Devil Stage */
+  .devil-brief-card {
+    padding: 16px 14px;
+  }
+
+  .devil-hero {
+    grid-template-columns: 1fr;
+    justify-items: start;
+    gap: 10px;
+  }
+
+  .devil-avatar {
+    width: 64px;
+    height: 64px;
+    font-size: 36px;
+    border-radius: 16px;
+  }
+
+  .devil-intro {
+    font-size: 13px;
+  }
+
+  .devil-panel h3 {
+    font-size: 16px;
+  }
+
+  .devil-list {
+    font-size: 11px;
+  }
+
+  .devil-challenge-line {
+    font-size: 13px;
+  }
+
+  .devil-cta-hint {
+    font-size: 12px;
+  }
+
+  .btn.primary.devil-cta {
+    width: 100%;
+    min-height: 50px;
+    font-size: 16px;
+  }
+
+  /* Loading Screen */
+  .loading-screen {
+    padding: 24px 12px 28px;
+  }
+
+  .loading-header {
+    font-size: 10px;
+    width: min(540px, 94vw);
+  }
+
+  .loading-copy h2 {
+    font-size: 18px;
+  }
+
+  .loading-copy p {
+    font-size: 12px;
+  }
+
+  .neural-field {
+    width: min(94vw, 440px);
+    height: 180px;
+  }
+
+  .loading-echo {
+    padding: 6px 12px;
+    font-size: 11px;
+  }
+
+  /* Test Card */
+  .pop-card {
+    padding: 6px 8px;
+  }
+
+  .test-card {
+    padding: 8px 8px 10px;
+    border-radius: 16px;
+  }
+
+  .test-topbar {
+    grid-template-columns: auto auto auto;
+    gap: 6px;
+  }
+
+  .test-close {
+    width: 36px;
+    height: 36px;
+    font-size: 20px;
+  }
+
+  .test-timer-pill {
+    padding: 5px 12px;
+    font-size: 16px;
+  }
+
+  .test-finish {
+    font-size: 14px;
+  }
+
+  .test-head-main {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .q-count {
+    padding: 5px 8px;
+    font-size: 13px;
+  }
+
+  .q-type-wrap {
+    flex: 1;
+    min-width: 100%;
+    order: 3;
+  }
+
+  .q-type-select {
+    min-height: 34px;
+    font-size: 13px;
+    padding: 0 8px;
+  }
+
+  .question-header-save {
+    width: 30px;
+    height: 30px;
+  }
+
+  .question-header-save svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .q-subject {
+    font-size: 12px;
+  }
+
+  .question-toolbar {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .question-pill {
+    padding: 6px 10px;
+    font-size: 11px;
+  }
+
+  #btnLifeline::before {
+    font-size: 12px;
+  }
+
+  .question-panel {
+    padding: 10px 12px 14px;
+    border-radius: 12px;
+  }
+
+  .question-zoom {
+    width: 26px;
+    height: 26px;
+    font-size: 13px;
+    right: 8px;
+    bottom: 8px;
+  }
+
+  .question-stem {
+    font-size: 15px;
+  }
+
+  .question-stem p {
+    font-size: 15px;
+  }
+
+  .question-stem .stem-options {
+    font-size: 14px;
+    margin-top: 10px;
+  }
+
+  .question-stem .stem-option-row {
+    font-size: 14px;
+    margin-bottom: 6px;
+  }
+
+  /* Make options stack vertically on very small screens */
+  .options-grid {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .option {
+    padding: 10px 8px;
+  }
+
+  .option .option-label {
+    font-size: 15px;
+  }
+
+  .option .option-text {
+    font-size: 14px;
+  }
+
+  .option .option-text p {
+    font-size: 14px;
+  }
+
+  .solution-trigger {
+    font-size: 12px;
+    padding: 5px 10px;
+  }
+
+  .solution-trigger .bulb-icon {
+    width: 16px;
+    height: 16px;
+  }
+
+  .solution-trigger .bulb-icon svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .test-submit .btn.primary {
+    min-height: 48px;
+    font-size: 16px;
+  }
+
+  .test-nav {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .test-nav .btn {
+    width: 100%;
+    max-width: none;
+    min-height: 42px;
+    font-size: 14px;
+  }
+
+  /* Integer Panel */
+  .question-body.integer-mode {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    row-gap: 10px;
+  }
+
+  .integer-panel {
+    gap: 10px;
+  }
+
+  .integer-panel input {
+    padding: 8px 10px;
+    font-size: 14px;
+  }
+
+  .keypad {
+    gap: 5px;
+  }
+
+  .keypad button {
+    min-height: 38px;
+    font-size: 13px;
+  }
+
+  .keypad-actions {
+    gap: 6px;
+  }
+
+  /* Subject/Topic Selection */
+  .subject-option {
+    padding: 12px;
+  }
+
+  .subject-name {
+    font-size: 14px;
+  }
+
+  .topic-options {
+    max-height: 320px;
+  }
+
+  .topic-option {
+    padding: 10px 12px;
+  }
+
+  .topic-name {
+    font-size: 13px;
+  }
+
+  .concept-option {
+    padding-left: 24px;
+    margin-left: 8px;
+  }
+
+  /* Buttons */
+  .btn {
+    padding: 10px 20px;
+    font-size: 14px;
+  }
+
+  .btn.small {
+    padding: 7px 10px;
+    font-size: 11px;
+  }
+
+  /* Modals */
+  .binary-card {
+    width: min(94vw, 450px);
+    padding: 20px 16px;
+  }
+
+  .binary-question {
+    font-size: 18px;
+    line-height: 1.3;
+  }
+
+  .binary-actions {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .binary-btn {
+    min-height: 52px;
+    font-size: 14px;
+  }
+
+  .confirm-card,
+  .solution-card {
+    padding: 20px 16px;
+  }
+
+  .confirm-card h3 {
+    font-size: 18px;
+  }
+
+  .solution-content {
+    font-size: 14px;
+  }
+
+  /* Feedback */
+  .feedback-fab {
+    width: 48px !important;
+    height: 48px !important;
+    bottom: 16px !important;
+    right: 16px !important;
+  }
+
+  .feedback-modal .feedback-card {
+    padding: 20px 16px;
+  }
+
+  .feedback-modal h3 {
+    font-size: 18px;
+  }
+
+  .feedback-sub {
+    font-size: 13px;
+  }
+
+  .feedback-label {
+    font-size: 13px;
+  }
+
+  .feedback-select,
+  .feedback-textarea {
+    font-size: 15px;
+    padding: 10px 12px;
+  }
+
+  .feedback-textarea {
+    min-height: 90px;
+  }
+
+  /* Category Images - Optimize for small phones */
+  .psyq-card--katrina {
+    width: min(96vw, 500px) !important;
+  }
+
+  .psyq-card--katrina img {
+    max-height: 55vh !important;
+  }
+
+  /* Difficulty Check Overlay */
+  .stress-difficulty-check-card {
+    width: min(94vw, 380px);
+    padding: 16px 14px 12px;
+  }
+
+  .stress-difficulty-check-title {
+    font-size: 20px;
+  }
+
+  .stress-difficulty-check-sub {
+    font-size: 14px;
+  }
+
+  .stress-difficulty-check-option {
+    min-height: 100px;
+  }
+
+  .stress-difficulty-check-emoji {
+    font-size: 32px;
+  }
+
+  .stress-difficulty-check-label {
+    font-size: 26px;
+  }
+}
+
+/* Very small phones - 375px and below */
+@media (max-width: 375px) {
+  /* Ultra-compact layout for very small screens */
+  .top-bar {
+    min-height: 50px;
+    padding: 0 10px;
+  }
+
+  .top-bar h1 {
+    font-size: 9px;
+  }
+
+  .brand-mark {
+    width: 24px;
+    height: 24px;
+    font-size: 12px;
+  }
+
+  .glass {
+    padding: 18px 14px;
+  }
+
+  #stageName .name-card h2 {
+    font-size: 18px;
+  }
+
+  .qa-question {
+    font-size: 16px;
+  }
+
+  .devil-avatar {
+    width: 56px;
+    height: 56px;
+    font-size: 32px;
+  }
+
+  .test-card {
+    padding: 6px 6px 8px;
+  }
+
+  .question-stem {
+    font-size: 14px;
+  }
+
+  .question-stem p,
+  .question-stem .stem-options,
+  .question-stem .stem-option-row {
+    font-size: 14px;
+  }
+
+  .option .option-label {
+    font-size: 14px;
+  }
+
+  .option .option-text,
+  .option .option-text p {
+    font-size: 13px;
+  }
+
+  .test-submit .btn.primary {
+    min-height: 46px;
+    font-size: 15px;
+  }
+
+  .psyq-card--katrina img {
+    max-height: 50vh !important;
+  }
+}
+
+/* Landscape orientation optimizations for mobile */
+@media (max-width: 896px) and (orientation: landscape) {
+  .app-shell {
+    min-height: auto;
+  }
+
+  .test-card {
+    height: auto;
+    max-height: calc(100vh - 40px);
+  }
+
+  .question-panel {
+    max-height: 35vh;
+    overflow-y: auto;
+  }
+
+  .options-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .neural-field {
+    height: 140px;
+  }
+
+  .loading-screen {
+    gap: 10px;
+    padding: 20px 14px;
+  }
+
+  .psyq-card--katrina img {
+    max-height: 70vh !important;
+  }
+
+  .qa-card textarea {
+    min-height: 100px;
+  }
+}
+
+/* Touch-friendly improvements for all mobile devices */
+@media (max-width: 768px) {
+  /* Ensure all interactive elements are at least 44x44 pixels (Apple guideline) */
+  button,
+  .btn,
+  input[type="submit"],
+  input[type="button"],
+  .option,
+  .subject-option,
+  .topic-option {
+    min-height: 44px;
+    -webkit-tap-highlight-color: rgba(0, 0, 0, 0.1);
+  }
+
+  /* Improve touch scrolling */
+  .viewport,
+  .question-panel,
+  .topic-options,
+  .options-grid {
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+  }
+
+  /* Prevent text selection on buttons */
+  button,
+  .btn,
+  .option,
+  .subject-option,
+  .topic-option {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* Allow text selection in inputs and text areas */
+  input,
+  textarea {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  /* Remove hover effects on touch devices */
+  .option:hover,
+  .subject-option:hover,
+  .topic-option:hover {
+    transform: none;
+  }
+
+  /* Use :active for touch feedback instead */
+  .option:active,
+  .subject-option:active,
+  .topic-option:active {
+    transform: scale(0.98);
+    transition: transform 0.1s ease;
+  }
+
+  .btn:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+
+  /* Improve input focus for mobile */
+  input:focus,
+  textarea:focus,
+  select:focus {
+    font-size: 16px; /* Prevents zoom on iOS */
+  }
+
+  /* Safe area insets for notched devices */
+  .app-shell {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .test-nav {
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+  }
+
+  /* Better scrollbar styling for mobile */
+  .question-panel::-webkit-scrollbar,
+  .topic-options::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  .question-panel::-webkit-scrollbar-thumb,
+  .topic-options::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 2px;
+  }
+
+  /* Reduce animations for better performance on mobile */
+  @media (prefers-reduced-motion: no-preference) {
+    * {
+      animation-duration: 0.3s !important;
+      transition-duration: 0.2s !important;
+    }
+  }
+}
+
+/* ============================================================================
+   END MOBILE RESPONSIVE STYLES
+   ============================================================================ */
+
 .qa-card textarea {
   min-height: 140px;
 }

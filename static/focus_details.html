@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=5.0,viewport-fit=cover" />
+  <meta name="theme-color" content="#6d5dfc" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <title>Tell Us More — Focus Dost</title>
   <link rel="stylesheet" href="/styles.css" />
   <style>
@@ -321,15 +323,196 @@
 
     @media (max-width: 768px) {
       .top-bar {
+        min-height: 56px;
         padding: 0 16px;
+        gap: 8px;
+      }
+
+      .top-bar h1 {
+        font-size: 11px;
+      }
+
+      .brand-mark {
+        width: 28px;
+        height: 28px;
+        font-size: 14px;
       }
 
       .focus-viewport {
         padding: 16px;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
       }
 
       .details-card {
         padding: 28px 24px;
+        border-radius: 16px;
+      }
+
+      .details-header h2 {
+        font-size: 20px;
+      }
+
+      .details-header p {
+        font-size: 13px;
+      }
+
+      .challenge-tag {
+        padding: 8px 14px;
+        font-size: 13px;
+      }
+
+      .quick-prompts-title {
+        font-size: 12px;
+      }
+
+      .quick-prompt-btn {
+        padding: 8px 12px;
+        font-size: 12px;
+      }
+
+      .details-textarea {
+        min-height: 90px;
+        font-size: 15px;
+        padding: 14px;
+      }
+
+      .btn {
+        padding: 12px 24px;
+        font-size: 14px;
+      }
+
+      .btn-skip {
+        font-size: 13px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .top-bar {
+        min-height: 52px;
+        padding: 0 12px;
+      }
+
+      .top-bar h1 {
+        font-size: 10px;
+      }
+
+      .top-bar h1 span {
+        display: none;
+      }
+
+      .brand-mark {
+        width: 26px;
+        height: 26px;
+        font-size: 13px;
+      }
+
+      #userNameDisplay {
+        font-size: 12px !important;
+        max-width: 80px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      #sessionCounter {
+        font-size: 11px !important;
+        padding: 3px 6px !important;
+      }
+
+      .logout-btn {
+        padding: 5px 8px !important;
+        font-size: 11px !important;
+      }
+
+      .focus-viewport {
+        padding: 12px;
+      }
+
+      .details-card {
+        padding: 24px 20px;
+      }
+
+      .details-header h2 {
+        font-size: 18px;
+      }
+
+      .details-header p {
+        font-size: 12px;
+      }
+
+      .challenge-tags {
+        gap: 8px;
+      }
+
+      .challenge-tag {
+        padding: 7px 12px;
+        font-size: 12px;
+      }
+
+      .quick-prompts-title {
+        font-size: 11px;
+        margin-bottom: 8px;
+      }
+
+      .quick-prompt-btn {
+        padding: 8px 10px;
+        font-size: 11px;
+      }
+
+      .details-textarea {
+        min-height: 80px;
+        font-size: 15px;
+        padding: 12px;
+      }
+
+      .details-actions {
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .btn {
+        width: 100%;
+        padding: 12px 20px;
+        font-size: 14px;
+      }
+
+      .btn-skip {
+        font-size: 12px;
+        order: -1;
+      }
+
+      .completion-suggestions {
+        max-height: 100px;
+        font-size: 13px;
+      }
+
+      .completion-item {
+        padding: 8px 12px;
+        font-size: 13px;
+      }
+    }
+
+    @media (max-width: 375px) {
+      .details-card {
+        padding: 20px 16px;
+      }
+
+      .details-header h2 {
+        font-size: 17px;
+      }
+
+      .quick-prompts-grid {
+        grid-template-columns: 1fr;
+        gap: 6px;
+      }
+
+      .quick-prompt-btn {
+        text-align: center;
+      }
+
+      .btn {
+        font-size: 13px;
+        padding: 10px 16px;
       }
     }
   </style>

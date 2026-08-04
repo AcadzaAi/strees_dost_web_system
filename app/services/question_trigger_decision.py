@@ -291,7 +291,7 @@ class QuestionTriggerDecisionEngine:
         
         return {
             "is_new_user": is_new,
-            "total_questions": 7,
+            "total_questions": 5,
             "medium_count": len(medium_questions),
             "hard_count": len(hard_questions),
             "sequence": sequence,

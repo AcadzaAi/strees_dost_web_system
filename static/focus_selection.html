@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=5.0,viewport-fit=cover" />
+  <meta name="theme-color" content="#6d5dfc" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <title>What's Breaking Your Focus? — Focus Dost</title>
   <link rel="stylesheet" href="/styles.css" />
   <style>
@@ -328,6 +330,7 @@
       border-color: #cbd5e1;
     }
 
+    /* Mobile Responsive */
     @media (max-width: 900px) {
       .focus-grid {
         grid-template-columns: repeat(4, 1fr);
@@ -336,15 +339,38 @@
 
     @media (max-width: 768px) {
       .top-bar {
+        min-height: 56px;
         padding: 0 16px;
+        gap: 8px;
+      }
+
+      .top-bar h1 {
+        font-size: 11px;
+      }
+
+      .brand-mark {
+        width: 28px;
+        height: 28px;
+        font-size: 14px;
       }
 
       .focus-viewport {
         padding: 16px;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
       }
 
       .focus-card {
-        padding: 24px;
+        padding: 24px 20px;
+        border-radius: 16px;
+      }
+
+      .focus-card-header h2 {
+        font-size: 20px;
+      }
+
+      .focus-card-header p {
+        font-size: 13px;
       }
 
       .focus-grid {
@@ -359,10 +385,132 @@
 
       .focus-option-emoji {
         font-size: 24px;
+        margin-bottom: 4px;
       }
 
       .focus-option-text {
         font-size: 10px;
+      }
+
+      .focus-checkbox {
+        width: 16px;
+        height: 16px;
+        top: 6px;
+        right: 6px;
+      }
+
+      .focus-checkbox::after {
+        font-size: 10px;
+      }
+
+      .focus-other-option {
+        padding: 10px;
+      }
+
+      .focus-other-link {
+        font-size: 13px;
+      }
+
+      .focus-selection-count {
+        font-size: 12px;
+        padding: 8px;
+      }
+
+      .btn {
+        padding: 10px 20px;
+        font-size: 14px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .top-bar {
+        min-height: 52px;
+        padding: 0 12px;
+      }
+
+      .top-bar h1 {
+        font-size: 10px;
+      }
+
+      .top-bar h1 span {
+        display: none;
+      }
+
+      .brand-mark {
+        width: 26px;
+        height: 26px;
+        font-size: 13px;
+      }
+
+      #userNameDisplay {
+        font-size: 12px !important;
+        max-width: 80px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      #sessionCounter {
+        font-size: 11px !important;
+        padding: 3px 6px !important;
+      }
+
+      .logout-btn {
+        padding: 5px 8px !important;
+        font-size: 11px !important;
+      }
+
+      .focus-viewport {
+        padding: 12px;
+      }
+
+      .focus-card {
+        padding: 20px 16px;
+      }
+
+      .focus-card-header h2 {
+        font-size: 18px;
+      }
+
+      .focus-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 6px;
+      }
+
+      .focus-option {
+        padding: 10px 4px;
+        min-height: 75px;
+      }
+
+      .focus-option-emoji {
+        font-size: 22px;
+      }
+
+      .focus-option-text {
+        font-size: 9px;
+      }
+
+      .btn {
+        padding: 10px 16px;
+        font-size: 13px;
+      }
+    }
+
+    @media (max-width: 375px) {
+      .focus-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .focus-option {
+        min-height: 70px;
+        padding: 8px 4px;
+      }
+
+      .focus-option-emoji {
+        font-size: 20px;
+      }
+
+      .focus-option-text {
+        font-size: 8.5px;
       }
     }
   </style>
