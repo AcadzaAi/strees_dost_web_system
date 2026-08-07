@@ -6,6 +6,9 @@ __pycache__/
 *.pyc
 instance/
 migrations/versions/
+!migrations/versions/
+migrations/versions/*
+!migrations/versions/c2a4d0e8f8b1_add_leaderboard_entries.py
 .vscode/
 *.log
 *.db

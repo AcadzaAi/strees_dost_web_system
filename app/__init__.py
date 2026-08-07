@@ -16,6 +16,7 @@ from .api.extract_routes import bp as extract_bp
 from .api.user_routes import bp as user_bp
 from .api.feedback_routes import bp as feedback_bp
 from .api.focus_prompts_routes import bp as focus_prompts_bp
+from .api.leaderboard_routes import bp as leaderboard_bp
 from .api.question_routes import init_question_service
 from .config import Config
 from .extensions import db, migrate, socketio, limiter
@@ -49,6 +50,7 @@ def create_app():
     app.register_blueprint(user_bp)
     app.register_blueprint(feedback_bp)
     app.register_blueprint(focus_prompts_bp)
+    app.register_blueprint(leaderboard_bp)
     init_question_service(app)
 
     return app
