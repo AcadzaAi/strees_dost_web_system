@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Image Fetch Test</title>
+</head>
+<body>
+    <h1>Image Fetch Test</h1>
+    <div id="output"></div>
+    <button onclick="testFetch()">Test Fetch</button>
+    <div id="images"></div>
+
+    <script>
+        const output = document.getElementById('output');
+        const imagesDiv = document.getElementById('images');
+
+        function log(msg) {
+            const p = document.createElement('p');
+            p.textContent = new Date().toISOString().substr(11, 12) + ' - ' + msg;
+            output.appendChild(p);
+            console.log(msg);
+        }
+
+        async function postJSON(url, body) {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            return await res.json();
+        }
+
+        async function testFetch() {
+            log('Starting test...');
+            const payload = {
+                initial_text: 'alia bhatt',
+                followup_answers: ['i watch her movies', 'her reels are addictive']
+            };
+
+            // Poll until ready
+            log('Polling for images...');
+            for (let i = 0; i < 30; i++) {
+                const data = await postJSON('/api/triggers/distraction-image', payload);
+                log(`Poll ${i+1}: status=${data.status}`);
+                
+                if (data.status === 'ready') {
+                    log('Images ready!');
+                    log('URLs: ' + JSON.stringify(data.image_urls));
+                    
+                    // Try to load each image
+                    data.image_urls.forEach((url, idx) => {
+                        if (url) {
+                            log(`Q${idx+1}: ${url}`);
+                            const img = document.createElement('img');
+                            img.src = url;
+                            img.style.maxWidth = '300px';
+                            img.style.margin = '10px';
+                            img.onload = () => log(`Q${idx+1} image loaded: ${img.naturalWidth}x${img.naturalHeight}`);
+                            img.onerror = () => log(`Q${idx+1} image FAILED to load`);
+                            imagesDiv.appendChild(img);
+                        } else {
+                            log(`Q${idx+1}: NO IMAGE`);
+                        }
+                    });
+                    break;
+                }
+                
+                await new Promise(r => setTimeout(r, 2000));
+            }
+        }
+    </script>
+</body>
+</html>

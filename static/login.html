@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=5.0" />
+  <meta name="theme-color" content="#6d5dfc" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <title>Focus & Accuracy Dost — Sign in</title>
   <link rel="stylesheet" href="/styles.css" />
   <style>
@@ -91,10 +93,132 @@
     .intro-video-continue:hover { transform: translateY(-1px); }
 
     @media (max-width: 640px) {
-      .intro-video-stage { padding: 14px; }
-      .intro-video-skip { top: 12px; right: 12px; padding: 6px 14px; font-size: 13px; }
-      .intro-video-caption { font-size: 13px; }
-      .intro-video-continue { padding: 10px 22px; font-size: 14px; }
+      .intro-video-stage { 
+        padding: 14px; 
+      }
+      
+      .intro-video-skip { 
+        top: 12px; 
+        right: 12px; 
+        padding: 6px 14px; 
+        font-size: 13px; 
+      }
+      
+      .intro-video-caption { 
+        font-size: 13px; 
+      }
+      
+      .intro-video-continue { 
+        padding: 10px 22px; 
+        font-size: 14px; 
+      }
+    }
+
+    /* Additional mobile improvements for login page */
+    @media (max-width: 768px) {
+      .viewport {
+        padding: 20px 16px;
+      }
+
+      #stageName .name-card {
+        padding: 24px 20px;
+        border-radius: 12px;
+      }
+
+      #stageName .name-card h2 {
+        font-size: 24px;
+      }
+
+      #stageName .name-card p {
+        font-size: 14px;
+      }
+
+      #stageName .name-card input[type="text"] {
+        min-height: 48px;
+        font-size: 16px;
+        padding: 14px 16px;
+      }
+
+      #stageName #btnNameNext {
+        min-width: 140px;
+        font-size: 15px;
+        padding: 12px 24px;
+      }
+
+      .intro-video-frame {
+        width: min(94vw, 960px);
+      }
+    }
+
+    @media (max-width: 480px) {
+      .viewport {
+        padding: 16px 12px;
+      }
+
+      #stageName .name-card {
+        padding: 20px 16px;
+      }
+
+      #stageName .name-card h2 {
+        font-size: 20px;
+      }
+
+      #stageName .name-card p {
+        font-size: 13px;
+      }
+
+      .eyebrow {
+        font-size: 11px;
+      }
+
+      .label {
+        font-size: 12px;
+      }
+
+      #stageName .name-card input[type="text"] {
+        min-height: 46px;
+        font-size: 16px;
+        padding: 12px 14px;
+      }
+
+      #stageName #btnNameNext {
+        min-width: 120px;
+        font-size: 14px;
+        padding: 10px 20px;
+      }
+
+      .stage-hint {
+        font-size: 12px;
+      }
+
+      .intro-video-caption {
+        font-size: 12px;
+        padding: 0 8px;
+      }
+
+      .intro-video-continue {
+        padding: 10px 20px;
+        font-size: 13px;
+      }
+    }
+
+    @media (max-width: 375px) {
+      #stageName .name-card {
+        padding: 18px 14px;
+      }
+
+      #stageName .name-card h2 {
+        font-size: 18px;
+      }
+
+      #stageName .name-card p {
+        font-size: 12px;
+      }
+
+      #stageName #btnNameNext {
+        width: 100%;
+        min-width: auto;
+      }
     }
   </style>
 </head>
@@ -160,7 +284,7 @@
 
       function goHome() {
         if (videoFrame) { try { videoFrame.src = "about:blank"; } catch (_) {} }
-        window.location.href = "/";
+        window.location.href = "/focus_selection.html";
       }
 
       function showIntroVideo() {

@@ -244,7 +244,8 @@ class QuestionTriggerDecisionEngine:
         if not 1 <= question_number <= 7:
             raise ValueError(f"Invalid question_number: {question_number}. Must be 1-7.")
         
-        is_new = self.is_new_user(user_profile)
+        force_new = bool(user_profile.get("force_new_user"))
+        is_new = force_new or self.is_new_user(user_profile)
         
         if is_new:
             sequence = self.get_trigger_sequence_for_new_user()
@@ -276,7 +277,8 @@ class QuestionTriggerDecisionEngine:
             - medium_questions: List of medium trigger configs
             - hard_questions: List of hard trigger configs
         """
-        is_new = self.is_new_user(user_profile)
+        force_new = bool(user_profile.get("force_new_user"))
+        is_new = force_new or self.is_new_user(user_profile)
         
         if is_new:
             sequence = self.get_trigger_sequence_for_new_user()
@@ -289,7 +291,7 @@ class QuestionTriggerDecisionEngine:
         
         return {
             "is_new_user": is_new,
-            "total_questions": 7,
+            "total_questions": 5,
             "medium_count": len(medium_questions),
             "hard_count": len(hard_questions),
             "sequence": sequence,

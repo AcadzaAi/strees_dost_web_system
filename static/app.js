@@ -1,8 +1,11 @@
+// Global cache for focus selection data (survives sessionStorage clearing)
+// This needs to be global so it's accessible from anywhere
+window.__focusSelectionCache = null;
+
 // DOM helpers --------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
 const stageEls = {
   name: $("stageName"),
-  intro: $("stageIntro"),
   loading: $("stageLoading"),
   qa: $("stageQA"),
   subjectSelection: $("stageSubjectSelection"),
@@ -10,6 +13,7 @@ const stageEls = {
   devil: $("stageDevil"),
   fullscreen: $("stageFullscreen"),
   popups: $("stagePopups"),
+  results: $("stageResults"),
 };
 
 const logBox = $("logBox");
@@ -31,8 +35,6 @@ const introHintEl = $("introHint");
 const storyPromptEl = $("storyPrompt");
 const hintBox = $("hintBox");
 const popupSummary = null;
-const suggestionWrap = $("suggestionWrap");
-const suggestionList = $("suggestionList");
 
 // Academic topics elements
 const subjectOptions = $("subjectOptions");
@@ -78,7 +80,6 @@ const btnBackspace = $("btnBackspace");
 const scoreMeta = $("scoreMeta");
 const testHint = $("testHint");
 const btnPrevQuestion = $("btnPrevQuestion");
-const btnNextQuestion = $("btnNextQuestion");
 const btnReloadQuestions = $("btnReloadQuestions");
 const btnSubmitQuestion = $("btnSubmitQuestion");
 const btnFinishTest = $("btnFinishTest");
@@ -114,6 +115,8 @@ let recordedAudioBlob = null;
 let recordingMimeType = "audio/webm";
 let testQuestions = [];
 let testQuestionIndex = 0;
+let submitInFlight = false;
+let nextInFlight = false;
 let selectedOptions = {};
 let answeredMap = {};
 let pendingTriggerTimeouts = []; // Store pending trigger timeouts to cancel when switching questions
@@ -125,9 +128,19 @@ let suggestTimer = null;
 let loadingTicker = null;
 let loadingFrameIndex = 0;
 let lastAnswerEcho = "";
+let sessionInitialQuery = "";
+let questionWarningCopyCache = new Map();
+let questionWarningCopyPromises = new Map();
 let solutionModalOpen = false;
 let pendingAdvanceAfterSubmit = false;
 let questionTriggerPlan = null; // Stores trigger plan from backend
+const LOCAL_NEW_USER_TRIGGER_NAMES = [
+  "TORCHLIGHT_SPOTLIGHT",
+  "NOTIFICATION_BURST",
+  "DISTRACTION_IMAGE",
+  "DISTRACTION_IMAGE",
+  "DISTRACTION_IMAGE",
+];
 const SOLUTION_GRACE_MS = 1400;
 
 // Cancel all pending trigger timeouts when switching questions
@@ -135,6 +148,11 @@ function cancelPendingTriggers() {
   console.log('[cancelPendingTriggers] Cancelling', pendingTriggerTimeouts.length, 'pending triggers');
   pendingTriggerTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
   pendingTriggerTimeouts = [];
+  // Also clean up any persistent Q3 flip if still active
+  const shell = document.querySelector(".app-shell");
+  if (shell && shell.dataset.psyqFlipActive === "1") {
+    shell._psyqFlipCleanup?.();
+  }
 }
 const disableStressMode = false;
 const stressDebug = true;
@@ -364,6 +382,7 @@ async function openDevFallbackQuestionsDirect() {
     }));
     testQuestions = cloned;
     testQuestionIndex = 0;
+    resetSubmitNavigationGuard();
     selectedOptions = {};
     answeredMap = {};
     
@@ -562,12 +581,8 @@ function setHint(text) {
 }
 
 function setIntroHint(text) {
-  if (!introHintEl) return;
-  introHintEl.textContent = text || "";
-  if (text) {
-    stageEls.intro?.classList.add("shake");
-    setTimeout(() => stageEls.intro?.classList.remove("shake"), 400);
-  }
+  // Intro screen removed - this is now a no-op
+  // Kept for backwards compatibility with recording code
 }
 
 function setNameHint(text) {
@@ -721,12 +736,27 @@ function setQuestionUI(data) {
 
 function resetFlow() {
   StressTriggers.onReset();
+  resetSubmitNavigationGuard();
+  
+  // Clear session started flag so user can start fresh
+  sessionStorage.removeItem('sessionStarted');
+  sessionStorage.removeItem('focusSelection');
+  sessionStorage.removeItem('initialText');
+  
+  // Clear global focus selection cache
+  window.__focusSelectionCache = null;
+  
+  console.log('[resetFlow] Cleared all session flags and caches');
+  
   // Reset academic topics (raw, autoPickedSubject, autoPickedTopics → null)
   if (sessionId) window.academicTopics?.resetAcademicTopics?.(sessionId);
   sessionId = null;
   currentDomain = null;
   currentSlot = null;
-  setSuggestions([]);
+  sessionInitialQuery = "";
+  questionWarningCopyCache = new Map();
+  questionWarningCopyPromises = new Map();
+  clearGhost();
   btnAnswer.disabled = true;
   btnAnswer.hidden = true;
   if (btnSkip) {
@@ -757,7 +787,7 @@ function resetFlow() {
   testQuestionIndex = 0;
   selectedOptions = {};
   answeredMap = {};
-  if (questionStem) questionStem.textContent = "Questions will appear here with options.";
+  clearQuestionStem("Questions will appear here with options.");
   if (questionOptions) questionOptions.innerHTML = "";
   if (questionCounter) questionCounter.textContent = "Q. 1 of 1";
   if (questionSubject) questionSubject.textContent = "ID: —";
@@ -778,7 +808,8 @@ function resetFlow() {
   if (popupOverlay) popupOverlay.innerHTML = "";
   log("reset_flow");
   setSessionUI(null, null);
-  showStage("intro");
+  // Redirect to focus selection instead of showing intro
+  window.location.href = '/focus_selection.html';
 }
 
 function summarizeFollowupThemes(followups) {
@@ -794,115 +825,99 @@ function summarizeFollowupThemes(followups) {
   return out.slice(0, 4);
 }
 
-async function buildDevilBriefPage() {
+async function buildDevilBriefPage(passedInitialText, passedHistory) {
   const followups = StressTriggers.getFollowupAnswers ? StressTriggers.getFollowupAnswers() : [];
-  const themes = summarizeFollowupThemes(followups);
   const user = window.StressDostAuth?.getUser?.();
   const userName = user?.display_name || "challenger";
+
+  // Use passed initialText first, then fallback to lastAnswerEcho or textarea
+  const initialText = passedInitialText || lastAnswerEcho || $("initialText")?.value || "";
+  
+  // Build followup context from conversation history if StressTriggers followups are empty
+  let effectiveFollowups = followups;
+  if (!effectiveFollowups.length && Array.isArray(passedHistory) && passedHistory.length) {
+    effectiveFollowups = passedHistory
+      .filter(h => h.role === "user" || h.answer)
+      .map(h => ({
+        answer: h.answer || h.content || "",
+        domain: h.domain || "",
+        slot: h.slot || "",
+      }))
+      .filter(f => f.answer.trim());
+  }
+  
+  console.log("[buildDevilBriefPage] initialText:", initialText?.substring(0, 60), "followups:", effectiveFollowups.length);
 
   const planned = {
     trigger_count: 19,
     one_trigger_at_a_time: true,
     ai_driven: true,
-    event_rules: [
-      "wrong_answer -> pressure trigger",
-      "answer_changed -> hesitation trigger",
-      "idle_resumed -> distraction trigger",
-      "time_pressure -> urgency trigger",
-    ],
     expected_question_count: testQuestions.length || 20,
   };
 
   let brief = null;
   try {
     brief = await postJSON("/api/triggers/devil-brief", {
-      followup_answers: followups,
+      followup_answers: effectiveFollowups,
+      initial_text: initialText,
       planned_test: planned,
-    }, { timeoutMs: 6000 });
+    }, { timeoutMs: 10000 });
+    console.log("[buildDevilBriefPage] Response source:", brief?.source, "core_issue:", brief?.core_issue);
   } catch (err) {
+    console.warn("[buildDevilBriefPage] AI call failed:", err);
     brief = null;
   }
 
-  // Helper function to capitalize first letter of a sentence
-  function capitalizeFirstLetter(str) {
-    if (!str) return str;
-    return str.charAt(0).toUpperCase() + str.slice(1);
+  const devilName = brief?.devil_name || "The Focus Breaker";
+  
+  // Create better fallback text based on initialText
+  let coreIssueFallback = "Unclear focus patterns need measurement";
+  let problemPointsFallback = ["Your attention baseline needs to be established", "Focus endurance under pressure is unknown"];
+  
+  if (initialText && initialText.trim()) {
+    coreIssueFallback = `${initialText.substring(0, 80)}${initialText.length > 80 ? '...' : ''}`;
+    problemPointsFallback = [
+      "These patterns affect your concentration during study",
+      "Let's measure how they impact your performance"
+    ];
   }
+  
+  const coreIssue = brief?.core_issue || coreIssueFallback;
+  const problemPoints = Array.isArray(brief?.problem_points) && brief.problem_points.length
+    ? brief.problem_points
+    : problemPointsFallback;
+  const challengeLine = brief?.challenge_line || "Let's see what breaks your concentration first.";
 
-  const devilName = brief?.devil_name || "Lucifer the Tempter";
-  const intro = brief?.intro || `I designed your focus test, ${userName}.`;
-  const taunt = (Array.isArray(brief?.challenge_lines) && brief.challenge_lines[0])
-    ? capitalizeFirstLetter(brief.challenge_lines[0])
-    : "Dare you think you can outsmart the flames of the underworld? Let's see if you burn or rise!";
-  const problems = Array.isArray(brief?.problems) && brief.problems.length
-    ? brief.problems.map(p => capitalizeFirstLetter(p))
-    : themes.map((t) => capitalizeFirstLetter(t));
-  const warningLine = capitalizeFirstLetter(brief?.taunt)
-    || "Face the flames and prove your mettle, or be consumed by your own hesitation!";
-
-  // Build a summary from followup text
-  const firstAnswer = followups[0]?.answer || "";
-  const insightSummary = firstAnswer
-    ? `Stress related to ${firstAnswer.toLowerCase().substring(0, 80)}`
-    : "Stress related to your academics";
-
-  // Fill new HTML
-  if (devilTitle) devilTitle.textContent = `Meet ${devilName}`;
-  if (devilIntro) devilIntro.textContent = intro;
-  if (devilChallengeLine) devilChallengeLine.textContent = taunt;
+  // Fill HTML
+  if (devilTitle) devilTitle.textContent = devilName;
+  if (devilIntro) devilIntro.textContent = `I've analyzed your patterns, ${userName}.`;
+  if (devilChallengeLine) devilChallengeLine.textContent = challengeLine;
 
   const insightEl = document.getElementById("devilInsightSummary");
-  if (insightEl) insightEl.textContent = insightSummary;
+  if (insightEl) insightEl.textContent = coreIssue;
 
-  const warningEl = document.getElementById("devilWarning");
-  if (warningEl) {
-    warningEl.innerHTML = `<span class="devil-warning-icon">⚠️</span> ${escapeHTML(warningLine)}`;
-  }
-
+  // Show the "Specifically" section and fill problem points
+  const insightSubEl = document.querySelector(".devil-insight-sub");
+  if (insightSubEl) insightSubEl.style.display = problemPoints.length ? "block" : "none";
+  
   if (devilProblems) {
+    devilProblems.style.display = problemPoints.length ? "block" : "none";
     devilProblems.innerHTML = "";
-    problems.slice(0, 2).forEach((line) => {
+    problemPoints.slice(0, 2).forEach((line) => {
       const li = document.createElement("li");
       li.innerHTML = `<span class="insight-icon">🔥</span> ${escapeHTML(line)}`;
       devilProblems.appendChild(li);
     });
   }
 
-  // Still fill hidden panels for data purposes
-  const designPoints = Array.isArray(brief?.design_points) && brief.design_points.length
-    ? brief.design_points
-    : ["Triggers activate on wrong answers, hesitation, and idle patterns."];
+  // Remove warning line - keep it minimal
+  const warningEl = document.getElementById("devilWarning");
+  if (warningEl) warningEl.style.display = "none";
 
-  if (devilDesign) {
-    devilDesign.innerHTML = "";
-    designPoints.slice(0, 5).forEach((line) => {
-      const li = document.createElement("li");
-      li.textContent = line;
-      devilDesign.appendChild(li);
-    });
-  }
-
-  if (devilBlueprint) {
-    const expected = testQuestions.length || 20;
-    devilBlueprint.innerHTML = "";
-    const metrics = [
-      ["Question Set", `${expected} adaptive questions`],
-      ["Trigger Mode", "AI controlled + event based"],
-      ["Concurrency", "Single active trigger only"],
-      ["Timeout Policy", "2s to 12s per trigger"],
-      ["Primary Pressure Inputs", "Wrong answers, hesitation, idle, time pressure"],
-    ];
-    metrics.forEach(([label, value]) => {
-      const row = document.createElement("div");
-      row.className = "devil-metric";
-      row.innerHTML = `<span>${escapeHTML(label)}</span><strong>${escapeHTML(value)}</strong>`;
-      devilBlueprint.appendChild(row);
-    });
-  }
-
-  if (devilHint) {
-    devilHint.textContent = "";
-  }
+  // Clean up hidden panels
+  if (devilDesign) devilDesign.innerHTML = "";
+  if (devilBlueprint) devilBlueprint.innerHTML = "";
+  if (devilHint) devilHint.textContent = "";
 }
 
 async function startRecording() {
@@ -960,8 +975,19 @@ function getAudioExtension() {
 }
 
 async function resolveInitialText() {
-  const typed = $("initialText").value.trim();
-  if (typed) return typed;
+  // Check for stored initial text from focus selection first
+  const storedInitialText = sessionStorage.getItem('initialText');
+  if (storedInitialText) {
+    return storedInitialText.trim();
+  }
+  
+  // Check if initialText element exists (old flow)
+  const initialTextEl = $("initialText");
+  if (initialTextEl) {
+    const typed = initialTextEl.value.trim();
+    if (typed) return typed;
+  }
+  
   if (!recordedAudioBlob) return "";
 
   setLoadingMessage("Transcribing your recording...");
@@ -969,8 +995,8 @@ async function resolveInitialText() {
   formData.append("audio", recordedAudioBlob, `recording.${getAudioExtension()}`);
   const data = await postFormData("/session/transcribe", formData);
   const text = (data.text || "").trim();
-  if (text) {
-    $("initialText").value = text;
+  if (text && initialTextEl) {
+    initialTextEl.value = text;
   }
   return text;
 }
@@ -1113,6 +1139,7 @@ const StressTriggers = (() => {
     optionFeedbackInterceptionEnabled: false,
     optionFeedbackInterceptionCount: 0,
     optionFeedbackMaxInterceptions: 2,
+    q1PopupShownThisSession: false,
   };
 
   const FEEDBACK_PROMPT_LIBRARY = {
@@ -1604,6 +1631,10 @@ const StressTriggers = (() => {
     if (!isTriggerEnabled(name)) return { ok: false, reason: "disabled" };
     const force = Boolean(context?.force);
     if (disableStressMode) return { ok: false, reason: "disabled" };
+    
+    // HARD BLOCK: Never activate triggers when test is over
+    if (state.stage === "results") return { ok: false, reason: "test-ended" };
+    if (typeof isTestActive !== 'undefined' && !isTestActive) return { ok: false, reason: "test-inactive" };
     
     // When force is true (question-level triggers), bypass most checks
     if (force) {
@@ -2281,7 +2312,7 @@ const StressTriggers = (() => {
           challenge.failOverlay?.remove();
           challenge.failOverlay = null;
           clearHardQuestionChallenge();
-          advanceAfterSubmit();
+          afterQuestionSubmittedFeedback(false);
         }, 3200);
       }, 120);
     }, 2100);
@@ -2831,7 +2862,7 @@ const StressTriggers = (() => {
     };
   }
 
-  function triggerTorchlightSpotlight() {
+  function triggerTorchlightSpotlight(ctx) {
     if (!questionBody || !state.currentQuestionId) return null;
     const qid = String(state.currentQuestionId || "");
     let rect = questionBody.getBoundingClientRect();
@@ -2841,19 +2872,30 @@ const StressTriggers = (() => {
     host.className = "stress-torchlight-mask";
     document.body.appendChild(host);
 
-    const taunts = [
+    const defaultTaunts = [
       "Read in fragments. Decide under pressure.",
-      "Only a sliver of truth at a time.",
-      "Find the answer before the light runs away.",
-      "You do not get full visibility this round.",
+      "Only a sliver at a time — stop whining.",
+      "Chase the beam before it moves again.",
+      "Full view? You didn't earn that.",
     ];
-    const taunt = taunts[stableRange("torchlightSpotlight_taunt", 0, taunts.length - 1)];
+    const taunts = Array.isArray(ctx?.taunts) && ctx.taunts.length ? ctx.taunts : defaultTaunts;
+    const taunt = String(ctx?.spotlightTaunt || "").trim()
+      || taunts[stableRange("torchlightSpotlight_taunt", 0, taunts.length - 1)];
     const topBanner = mountDevilTopBanner({
-      title: "Torchlight Mode",
-      lead: "A larger focus area is visible now.",
-      challenge: "Track the light and lock your answer.",
+      title: String(ctx?.spotlightTitle || "Narrow beam"),
+      lead: String(ctx?.spotlightLead || "Most of the question stays dark."),
+      challenge: String(ctx?.spotlightChallenge || "Follow the light. Answer anyway."),
       taunt,
     });
+
+    let captionEl = null;
+    const captionText = String(ctx?.caption || ctx?.hintLine || "").trim();
+    if (captionText) {
+      captionEl = document.createElement("div");
+      captionEl.className = "stress-torchlight-caption";
+      captionEl.textContent = captionText;
+      document.body.appendChild(captionEl);
+    }
 
     let rafId = null;
     let monitorTimer = null;
@@ -3101,6 +3143,7 @@ const StressTriggers = (() => {
         if (resizeObserver) resizeObserver.disconnect();
         host.remove();
         topBanner.remove();
+        if (captionEl) captionEl.remove();
       },
     };
   }
@@ -3143,6 +3186,1328 @@ const StressTriggers = (() => {
       },
     };
   }
+
+  // ── AI Student Companion Card (shown before Q1 torchlightSpotlight) ───────
+  // Uses the same hard-question-fullscreen pattern — one single screen,
+  // insight + stat (when relevant) combined, minimal layout.
+
+  async function showCompanionCard(onComplete, prefetchedData) {
+    // Prevent double-trigger with global activation guard
+    if (showCompanionCard._active) {
+      console.warn("[showCompanionCard] Already active, skipping duplicate call");
+      return;
+    }
+    // Block if test has ended
+    if (state.stage === "results" || !isTestActive) {
+      console.log("[showCompanionCard] Blocked — test ended");
+      if (onComplete) onComplete();
+      return;
+    }
+    showCompanionCard._active = true;
+
+    const studentName = window.StressDostAuth?.getUser?.()?.display_name || "";
+    const initialText = lastAnswerEcho || $("initialText")?.value || "";
+    const followupAnswers = (state.followupAnswers || []).slice(-4);
+
+    console.log("[showCompanionCard] Starting — initialText:", initialText.substring(0, 50));
+
+    // Scene → background gradient (mirrors hard-question-fullscreen palette)
+    const SCENE_BG = {
+      habit_insight: "radial-gradient(circle at 50% 30%, rgba(120,53,15,0.55), rgba(0,0,0,0.96) 68%), linear-gradient(180deg,rgba(2,8,23,0.98),rgba(0,0,0,0.98))",
+      focus_insight: "radial-gradient(circle at 50% 30%, rgba(14,60,110,0.5), rgba(0,0,0,0.95) 68%), linear-gradient(180deg,rgba(2,8,23,0.98),rgba(0,0,0,0.98))",
+      motivation:    "radial-gradient(circle at 50% 30%, rgba(127,29,29,0.5), rgba(0,0,0,0.95) 68%), linear-gradient(180deg,rgba(8,4,8,0.98),rgba(0,0,0,0.98))",
+      productivity:  "radial-gradient(circle at 50% 30%, rgba(6,78,59,0.45), rgba(0,0,0,0.95) 68%), linear-gradient(180deg,rgba(2,8,23,0.98),rgba(0,0,0,0.98))",
+      quick_concept: "radial-gradient(circle at 50% 30%, rgba(14,60,110,0.5), rgba(0,0,0,0.95) 68%), linear-gradient(180deg,rgba(2,8,23,0.98),rgba(0,0,0,0.98))",
+      casual_chat:   "radial-gradient(circle at 50% 30%, rgba(49,46,129,0.45), rgba(0,0,0,0.95) 68%), linear-gradient(180deg,rgba(2,8,23,0.98),rgba(0,0,0,0.98))",
+    };
+
+    // Scene → eyebrow accent colour
+    const SCENE_COLOR = {
+      habit_insight: "rgba(251,191,36,0.95)",
+      focus_insight: "rgba(167,139,250,0.95)",
+      motivation:    "rgba(248,113,113,0.95)",
+      productivity:  "rgba(52,211,153,0.95)",
+      quick_concept: "rgba(96,165,250,0.95)",
+      casual_chat:   "rgba(167,139,250,0.95)",
+    };
+
+    // Show fullscreen overlay with loading dots (always shows for 1s minimum)
+    const overlay = document.createElement("div");
+    overlay.className = "hard-question-fullscreen is-intro";
+    overlay.style.cssText = "position:fixed;inset:0;z-index:9998;display:flex;align-items:center;justify-content:center;background:#000;";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.innerHTML = `
+      <div style="display:flex;gap:10px;align-items:center;">
+        <span style="width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.4);animation:cmpDot 1.2s ease infinite;"></span>
+        <span style="width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.4);animation:cmpDot 1.2s ease 0.2s infinite;"></span>
+        <span style="width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.4);animation:cmpDot 1.2s ease 0.4s infinite;"></span>
+      </div>
+      <style>@keyframes cmpDot{0%,80%,100%{opacity:0.25;transform:scale(0.8);}40%{opacity:1;transform:scale(1.3);}}</style>
+    `;
+    document.body.appendChild(overlay);
+
+    // Use prefetched data or fetch fresh
+    let data = (prefetchedData && prefetchedData.scene) ? prefetchedData : null;
+    if (!data) {
+      try {
+        const resp = await fetch("/api/triggers/companion", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: initialText,
+            student_name: studentName,
+            initial_text: initialText,
+            followup_answers: followupAnswers,
+          }),
+          signal: AbortSignal.timeout(4000),
+        });
+        if (resp.ok) {
+          data = await resp.json();
+          console.log("[showCompanionCard] AI response — scene:", data.scene, "source:", data.source);
+        } else {
+          console.warn("[showCompanionCard] API error:", resp.status);
+        }
+      } catch (err) {
+        console.warn("[showCompanionCard] Fetch failed:", err.message);
+      }
+    } else {
+      console.log("[showCompanionCard] Using prefetched data — scene:", data.scene);
+    }
+
+    // Always show loading dots for at least 1 second (feels intentional, not laggy)
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    // Fallback
+    if (!data || !data.scene) {
+      console.log("[showCompanionCard] Using fallback response");
+      data = {
+        scene: "focus_insight", icon: "🎯", label: "THE NUMBERS",
+        lines: ["1.36% selection rate. Same syllabus for everyone. The only variable is how you spend the next 4 hours."],
+        fact: "Students who cut phone time by 2 hrs/day improved mock scores by 18-22%.",
+        question: null,
+        stat_card: null,
+      };
+    }
+
+    const bg    = SCENE_BG[data.scene]    || SCENE_BG.focus_insight;
+    const color = SCENE_COLOR[data.scene] || SCENE_COLOR.focus_insight;
+    overlay.style.background = "#000";
+
+    // Premium emoji per scene (not generic AI emojis)
+    const SCENE_EMOJI = {
+      habit_insight: "◉",
+      focus_insight: "◈",
+      motivation: "↯",
+      productivity: "⬡",
+      quick_concept: "△",
+      casual_chat: "○",
+    };
+    const sceneEmoji = SCENE_EMOJI[data.scene] || "◉";
+
+    // Main line and fact
+    const mainLine = (data.lines && data.lines[0]) ? escapeHTML(String(data.lines[0])) : "";
+    const factLine = data.fact ? escapeHTML(String(data.fact)) : "";
+    const sc = data.stat_card;
+
+    // Build stat section
+    const statHTML = sc ? `
+      <div class="cmp-f2" style="opacity:0;transform:translateY(6px);margin-top:28px;width:100%;max-width:400px;text-align:left;">
+        <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:10px;">
+          <span style="font-size:44px;font-weight:800;color:#fff;letter-spacing:-1.5px;line-height:1;">${escapeHTML(String(sc.value))}</span>
+          <span style="font-size:14px;color:rgba(255,255,255,0.45);text-transform:uppercase;letter-spacing:0.1em;font-weight:600;">${escapeHTML(String(sc.headline))}</span>
+        </div>
+        <div style="font-size:16px;color:rgba(255,255,255,0.55);line-height:1.5;margin-bottom:10px;font-weight:500;">${escapeHTML(String(sc.subtext || ""))}</div>
+        <div style="font-size:16px;color:${color};line-height:1.5;font-weight:600;">${escapeHTML(String(sc.mirror || ""))}</div>
+        ${sc.source ? `<div style="font-size:11px;color:rgba(255,255,255,0.25);margin-top:12px;letter-spacing:0.12em;text-transform:uppercase;font-weight:500;">— ${escapeHTML(String(sc.source))}</div>` : ""}
+      </div>` : "";
+
+    // Render
+    overlay.innerHTML = `
+      <div style="
+        display:flex;flex-direction:column;align-items:center;justify-content:center;
+        text-align:center;padding:44px 24px;max-width:480px;width:100%;
+        opacity:0;transition:opacity 0.3s ease;
+      " id="cmpContent">
+        
+        <div style="font-size:42px;color:${color};margin-bottom:28px;opacity:0.7;line-height:1;">${sceneEmoji}</div>
+        
+        <div style="font-size:14px;letter-spacing:0.22em;text-transform:uppercase;color:${color};font-weight:700;margin-bottom:28px;">${escapeHTML(String(data.label || "INSIGHT"))}</div>
+        
+        ${mainLine ? `<div class="cmp-f1" style="
+          font-size:26px;font-weight:600;color:rgba(255,255,255,0.92);
+          line-height:1.6;margin-bottom:22px;
+          opacity:0;transform:translateY(6px);
+        ">${mainLine}</div>` : ""}
+        
+        ${factLine && !sc ? `<div class="cmp-f2" style="
+          font-size:18px;color:${color};font-weight:600;
+          line-height:1.6;
+          opacity:0;transform:translateY(6px);
+        ">${factLine}</div>` : ""}
+        
+        ${statHTML}
+        
+        <button id="cmpFsBtn" type="button" class="cmp-f3" style="
+          margin-top:40px;padding:16px 36px;
+          background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);
+          border-radius:8px;color:rgba(255,255,255,0.7);
+          font-size:16px;font-weight:600;cursor:pointer;
+          transition:all 0.2s;letter-spacing:0.02em;
+          opacity:0;transform:translateY(6px);
+        " onmouseover="this.style.background='rgba(255,255,255,0.09)';this.style.color='rgba(255,255,255,0.95)'"
+           onmouseout="this.style.background='rgba(255,255,255,0.05)';this.style.color='rgba(255,255,255,0.7)'"
+        >Continue</button>
+      </div>
+    `;
+
+    // Smooth reveal
+    requestAnimationFrame(() => {
+      const content = overlay.querySelector("#cmpContent");
+      if (content) content.style.opacity = "1";
+      
+      setTimeout(() => {
+        const el = overlay.querySelector(".cmp-f1");
+        if (el) { el.style.transition = "opacity 0.35s ease, transform 0.35s ease"; el.style.opacity = "1"; el.style.transform = "translateY(0)"; }
+      }, 100);
+      
+      setTimeout(() => {
+        const el = overlay.querySelector(".cmp-f2");
+        if (el) { el.style.transition = "opacity 0.35s ease, transform 0.35s ease"; el.style.opacity = "1"; el.style.transform = "translateY(0)"; }
+      }, 250);
+      
+      setTimeout(() => {
+        const el = overlay.querySelector(".cmp-f3");
+        if (el) { el.style.transition = "opacity 0.35s ease, transform 0.35s ease"; el.style.opacity = "1"; el.style.transform = "translateY(0)"; }
+      }, 400);
+    });
+
+    // Dismiss handler with double-trigger protection
+    let dismissed = false;
+    const dismiss = () => {
+      if (dismissed) return;
+      dismissed = true;
+      clearTimeout(autoTimer);
+      showCompanionCard._active = false; // Release global lock
+      
+      console.log("[showCompanionCard] Dismissing, calling onComplete");
+      overlay.style.opacity = "0";
+      overlay.style.transition = "opacity 280ms ease";
+      setTimeout(() => { 
+        overlay.remove(); 
+        if (onComplete) onComplete(); 
+      }, 300);
+    };
+
+    // Auto-dismiss after 15s (reduced from 20s for better pacing)
+    const autoTimer = setTimeout(dismiss, 15000);
+
+    // Button click listener
+    const btn = overlay.querySelector("#cmpFsBtn");
+    if (btn) btn.addEventListener("click", dismiss);
+  }
+
+  // ── Personalized "You Said This" Quiz (shown before Q3 screenFlip) ────────
+
+  /**
+   * Extract the single most emotionally resonant keyword from the user's
+   * initial text + follow-up answers, then return a reflection sentence and
+   * a psychologically connected yes/no question.
+   */
+  function buildPersonalizedQuizPrompt() {
+    const initialRaw = lastAnswerEcho || $("initialText")?.value || "";
+    const followups  = (state.followupAnswers || []).map(f => f.answer || "").join(" ");
+    const combined   = (initialRaw + " " + followups).toLowerCase();
+
+    // Keyword → personalized topic + prompt copy
+    const patterns = [
+      {
+        words: ["stress", "stressed", "pressure", "overwhelm"],
+        topic: "stress and pressure",
+        reflection: "You mentioned pressure can disrupt your focus in key moments.",
+        question:   "Do you want to check how that pressure is affecting your current accuracy?",
+      },
+      {
+        words: ["instagram", "reel", "reels", "distract", "distraction", "phone", "scroll", "notification"],
+        topic: "Instagram reels and phone distractions",
+        reflection: "I know you get distracted by Instagram reels.",
+        question:   "Top IITs like IIT Bombay and IIT Kharagpur are not for people who keep feeding distractions 📉. They are for deep focus, discipline, and consistency every day 🔥. Still want to test your real accuracy now?",
+      },
+      {
+        words: ["focus", "concentrate", "concentration", "attention"],
+        topic: "focus consistency",
+        reflection: "You mentioned maintaining focus is difficult when the stakes rise.",
+        question:   "Should we test how this affects your question accuracy right now?",
+      },
+      {
+        words: ["overthink", "overthinking", "mind", "thought", "mental"],
+        topic: "overthinking",
+        reflection: "You mentioned overthinking slows your decision speed under pressure.",
+        question:   "Do you want to test whether this is reducing your accuracy today?",
+      },
+      {
+        words: ["tired", "fatigue", "sleep", "exhausted", "drain"],
+        topic: "mental fatigue",
+        reflection: "You said mental fatigue can reduce clarity while solving questions.",
+        question:   "Do you want to check how this is affecting your current performance?",
+      },
+      {
+        words: ["miss", "detail", "mistake", "error", "overlook"],
+        topic: "missing details",
+        reflection: "You mentioned you sometimes miss small details while solving.",
+        question:   "Should we test if this is currently affecting your score accuracy?",
+      },
+      {
+        words: ["exam", "test", "paper", "deadline", "marks", "score"],
+        topic: "exam pressure",
+        reflection: "You mentioned exam pressure sometimes clouds your judgement.",
+        question:   "Do you want to test how much this pressure impacts your accuracy now?",
+      },
+    ];
+
+    for (const p of patterns) {
+      if (p.words.some(w => combined.includes(w))) {
+        return { topic: p.topic, reflection: p.reflection, question: p.question, sourceText: combined };
+      }
+    }
+
+    // Generic fallback
+    return {
+      topic: "focus and distractions",
+      reflection: "You mentioned focus challenges can affect your consistency.",
+      question:   "Do you want to test how this is affecting your accuracy right now?",
+      sourceText: combined,
+    };
+  }
+
+  function inferDistractionSeverity(text, followupCount) {
+    const src = String(text || "").toLowerCase();
+    const heavySignals = [
+      "all day", "whole day", "every time", "cannot stop", "can't stop", "addicted",
+      "reels", "instagram", "shorts", "binge", "hours", "late night", "procrastinate",
+    ];
+    const mediumSignals = [
+      "distract", "distraction", "phone", "scroll", "notification", "waste time",
+      "delay", "postpone", "break focus", "lose focus",
+    ];
+
+    let score = 0;
+    heavySignals.forEach((k) => { if (src.includes(k)) score += 2; });
+    mediumSignals.forEach((k) => { if (src.includes(k)) score += 1; });
+    score += Math.min(3, Number(followupCount || 0));
+
+    if (score >= 10) return "brutal";
+    if (score >= 6) return "hard";
+    return "medium";
+  }
+
+  function summarizeDistractionTopic(rawAnswer, fallbackTopic) {
+    const src = String(rawAnswer || "").toLowerCase();
+    if (!src) return String(fallbackTopic || "distractions");
+    if (src.includes("instagram") || src.includes("reel")) return "Instagram reels";
+    if (src.includes("youtube") || src.includes("shorts")) return "YouTube shorts";
+    if (src.includes("whatsapp") || src.includes("chat")) return "chat notifications";
+    if (src.includes("game")) return "mobile gaming";
+    if (src.includes("sleep") || src.includes("late night")) return "late-night screen time";
+    if (src.includes("phone") || src.includes("scroll")) return "phone scrolling";
+    return String(fallbackTopic || "distractions");
+  }
+
+  function getSessionInitialQuery() {
+    return String(sessionInitialQuery || $("initialText")?.value || "").trim();
+  }
+
+  function extractLiteralPopupTopic(rawInitial, rawFollowup, fallbackTopic) {
+    const NOISE = new Set(["hello","hi","hey","ok","okay","yes","no","nothing","idk","fine","good","bad","help","please","thanks","test","testing","hii","yo","sup"]);
+    const clean = (value) =>
+      String(value || "")
+        .replace(/\s+/g, " ")
+        .replace(/^[,.;:\-\s]+|[,.;:\-\s]+$/g, "")
+        .trim();
+
+    const candidates = [rawInitial, rawFollowup]
+      .map(clean)
+      .filter(Boolean);
+
+    for (const candidate of candidates) {
+      const words = candidate.split(/\s+/).filter(Boolean);
+      // Skip noise words and very short inputs
+      if (words.length === 1 && NOISE.has(words[0].toLowerCase())) continue;
+      if (candidate.length < 4) continue;
+      if (words.length >= 1 && words.length <= 8 && candidate.length <= 80) {
+        return candidate;
+      }
+    }
+
+    return clean(fallbackTopic) || "distractions";
+  }
+
+  /**
+   * Show the full personalized quiz overlay.
+   * Calls onComplete() after the user dismisses the response popup.
+   */
+  function buildQ1WarningCopy() {
+    const rawInitial = getSessionInitialQuery();
+    const initialSnippet = rawInitial
+      .split(/\s+/)
+      .slice(0, 12)
+      .join(" ");
+    const subjectLine = summarizeDistractionTopic(rawInitial, rawInitial || "distractions");
+    const severity = inferDistractionSeverity(rawInitial, 0);
+    const literalTopic = extractLiteralPopupTopic(initialSnippet, "", subjectLine);
+    const topicLead = literalTopic ? `"${literalTopic}"` : subjectLine;
+    const reelRoast = /reel|instagram|shorts|scroll|phone/i.test(`${rawInitial} ${literalTopic} ${subjectLine}`);
+    const lines = {
+      medium: reelRoast
+        ? `${topicLead} already has more grip on your attention than this paper does.`
+        : `${topicLead} is already crowding the space where your focus should have been.`,
+      hard: reelRoast
+        ? `${topicLead} keeps getting fed, and your discipline keeps showing up hungry.`
+        : `${topicLead} walked into the test before your discipline did, and it shows.`,
+      brutal: reelRoast
+        ? `${topicLead} is not harmless entertainment. It is the leak in your discipline, and this paper will expose it fast.`
+        : `${topicLead} already owns part of your mind. Leave it there and your rank will get punished honestly.`,
+    };
+    const subs = {
+      medium: `The stem is on screen, but ${topicLead} is still getting the better seat in your head.`,
+      hard: `A stronger student would have left ${topicLead} outside the hall. You brought it in and called it harmless.`,
+      brutal: `If ${topicLead} still feels bigger than the question stem, the score will read exactly like your priorities.`,
+    };
+    return {
+      headline: lines[severity] || lines.medium,
+      sub: subs[severity] || subs.medium,
+    };
+  }
+
+  function getQuestionWarningInputs(questionNumber) {
+    const initialText = getSessionInitialQuery();
+    const followupAnswers = Array.isArray(state.followupAnswers)
+      ? state.followupAnswers
+          .slice(0, 2)
+          .map((item) => String(item?.answer || "").trim())
+          .filter(Boolean)
+      : [];
+    const contextParts = questionNumber <= 3
+      ? [initialText]
+      : [initialText, ...followupAnswers];
+    return {
+      initialText,
+      followupAnswers,
+      contextParts: contextParts.filter(Boolean),
+      combinedContext: contextParts.filter(Boolean).join(" | "),
+    };
+  }
+
+  function getQuestionWarningPresentation(questionNumber) {
+    const map = {
+      1: { label: "Reality check", icon: "🚨" },
+      2: { label: "Damage report", icon: "💀" },
+      3: { label: "Pattern exposed", icon: "😈" },
+      4: { label: "Focus decay", icon: "🩸" },
+      5: { label: "No hiding", icon: "🔥" },
+      6: { label: "Weakness spotted", icon: "☠️" },
+      7: { label: "Final blow", icon: "👁️" },
+    };
+    return map[questionNumber] || map[1];
+  }
+
+  function getQuestionWarningCacheKey(questionNumber) {
+    const normalizedQuestionNumber = Number(questionNumber || 1);
+    const { initialText, followupAnswers } = getQuestionWarningInputs(normalizedQuestionNumber);
+    return JSON.stringify({
+      questionNumber: normalizedQuestionNumber,
+      initialText,
+      followupAnswers,
+    });
+  }
+
+  function extractNamedPersonFromText(rawText) {
+    const text = String(rawText || "").trim();
+    if (!text) return "";
+    
+    // Common noise words that are NOT person/entity names
+    const NOISE_WORDS = new Set([
+      "hello", "hi", "hey", "ok", "okay", "yes", "no", "nothing", "idk",
+      "fine", "good", "bad", "help", "please", "thanks", "study", "studies",
+      "focus", "distract", "problem", "issue", "stress", "exam", "test",
+      "phone", "mobile", "internet", "time", "day", "night", "morning",
+      "always", "never", "sometimes", "often", "just", "only", "really",
+      "very", "too", "much", "many", "lot", "lots", "bit", "little",
+    ]);
+    
+    const cleaned = text
+      .replace(/\b(?:reels?|shorts?|movies?|movie|videos?|video|songs?|edits?|photos?|pics?|images?|and|with|of|about|on|watching|watch|i|my|me|the|a|an|is|are|was|were|be|been|being|have|has|had|do|does|did|will|would|could|should|may|might|can|get|got|getting|like|likes|liked|love|loves|loved)\b/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    
+    if (!cleaned) return "";
+    
+    const parts = cleaned.split(/\s+/).filter(Boolean);
+    
+    // Must be 1-4 words, each word must start with uppercase (proper noun) or be a known entity
+    // Single lowercase common words are NOT person names
+    if (parts.length < 1 || parts.length > 4) return "";
+    
+    // Check if it looks like a proper noun (at least one word starts with uppercase in original)
+    const hasProperNoun = parts.some(p => /^[A-Z]/.test(p));
+    const allLower = parts.every(p => p === p.toLowerCase());
+    
+    // If all lowercase and single word, check it's not a noise word
+    if (allLower && parts.length === 1 && NOISE_WORDS.has(parts[0].toLowerCase())) return "";
+    
+    // If all lowercase and short (1-2 chars), skip
+    if (allLower && cleaned.length <= 3) return "";
+    
+    // Require at least 4 chars total to be meaningful
+    if (cleaned.length < 4) return "";
+    
+    return parts.join(" ");
+  }
+
+  function detectMediaCue(rawText) {
+    const text = String(rawText || "").toLowerCase();
+    if (/\breels?\b|\bshorts?\b/.test(text)) return "reels";
+    if (/\bmovies?\b|\bmovie\b/.test(text)) return "movies";
+    if (/\bedits?\b/.test(text)) return "edits";
+    if (/\bvideos?\b|\bvideo\b/.test(text)) return "videos";
+    return "";
+  }
+
+ // ── Distraction image helpers ─────────────────────────────────────
+  // Single shared state for the whole session.
+  // _imageUrls[0..2] = resolved URL (string) or null for Q1/Q2/Q3.
+  // _imageFetchPromise = the one in-flight polling promise (or null).
+  let _imageUrls = [undefined, undefined, undefined]; // undefined = not yet resolved
+  let _imageFetchPromise = null;
+  let _imageFetchContext = null; // {initial_text, followup_answers} used for the current fetch
+  let _cachedFocusSelection = null; // Cache focus_selection data before sessionStorage clears it
+
+  // Called from onReset() — wipe image state so a new session fetches fresh images.
+  function clearImageCache() {
+    _imageUrls = [undefined, undefined, undefined];
+    _imageFetchPromise = null;
+    _imageFetchContext = null;
+    _cachedFocusSelection = null; // Clear cached focus data too
+    window.__focusSelectionCache = null; // Clear global cache too
+    console.log('[img] cache cleared for new session');
+  }
+
+  function _makeSessionImagePayload(overrideText, overrideFollowups) {
+    console.log('[img payload] ========== BUILDING IMAGE PAYLOAD ==========');
+    
+    const payload = {
+      initial_text: overrideText || getSessionInitialQuery(),
+      followup_answers: overrideFollowups || (Array.isArray(state.followupAnswers)
+        ? state.followupAnswers.map(f => String(f?.answer || "").trim()).filter(Boolean)
+        : []),
+    };
+    
+    console.log('[img payload] Base payload - text:', payload.initial_text?.substring(0, 50));
+    console.log('[img payload] Base payload - followups:', payload.followup_answers.length);
+    
+    // PRIORITY 1: Check global cache (most reliable)
+    if (window.__focusSelectionCache) {
+      payload.focus_selection = window.__focusSelectionCache;
+      console.log('[img payload] ✓✓✓ Using GLOBAL CACHE:', window.__focusSelectionCache);
+      console.log('[img payload] Challenges:', window.__focusSelectionCache.challenges);
+      return payload;
+    }
+    
+    // PRIORITY 2: Check local cache
+    if (_cachedFocusSelection) {
+      payload.focus_selection = _cachedFocusSelection;
+      console.log('[img payload] ✓ Using local cache:', _cachedFocusSelection);
+      return payload;
+    }
+    
+    // PRIORITY 3: Try sessionStorage (might be cleared)
+    const focusData = sessionStorage.getItem('focusSelection');
+    if (focusData) {
+      try {
+        const parsed = JSON.parse(focusData);
+        payload.focus_selection = parsed;
+        // Cache it everywhere for future use
+        _cachedFocusSelection = parsed;
+        window.__focusSelectionCache = parsed;
+        console.log('[img payload] Found in sessionStorage, cached globally:', parsed);
+      } catch (e) {
+        console.error('[img payload] Failed to parse focus_selection:', e);
+      }
+    } else {
+      console.warn('[img payload] ⚠️⚠️⚠️ NO FOCUS DATA AVAILABLE ANYWHERE! ⚠️⚠️⚠️');
+      console.warn('[img payload] Global cache:', window.__focusSelectionCache);
+      console.warn('[img payload] Local cache:', _cachedFocusSelection);
+      console.warn('[img payload] SessionStorage:', focusData);
+    }
+    
+    console.log('[img payload] ========== FINAL PAYLOAD ==========');
+    console.log('[img payload] Has focus_selection:', !!payload.focus_selection);
+    if (payload.focus_selection) {
+      console.log('[img payload] Challenges:', payload.focus_selection.challenges);
+    }
+    
+    return payload;
+  }
+
+  /**
+   * Fetch all 3 distraction images for this session in one shared promise.
+   * Returns a Promise<string[]> — array of 3 URLs (or nulls).
+   * All callers share the same promise; it is never started twice.
+   */
+  function _fetchAllDistractionImages(overrideText, overrideFollowups) {
+    // If already resolved, return immediately.
+    if (_imageUrls.every(u => u !== undefined)) {
+      console.log('[img] All images already resolved:', _imageUrls.map(u => u ? 'ready' : 'null'));
+      return Promise.resolve(_imageUrls);
+    }
+    // If already in-flight, reuse.
+    if (_imageFetchPromise) {
+      console.log('[img] Fetch already in progress, reusing promise');
+      return _imageFetchPromise;
+    }
+
+    const payload = _makeSessionImagePayload(overrideText, overrideFollowups);
+    if (!payload.initial_text && !payload.followup_answers.length && !payload.focus_selection) {
+      console.warn('[img] No context (no text, no followups, no focus_selection) — skipping image fetch');
+      _imageUrls = [null, null, null];
+      return Promise.resolve(_imageUrls);
+    }
+
+    _imageFetchContext = payload;
+    console.log(`[img] Starting session fetch — text: "${payload.initial_text?.substring(0,40)}", followups: ${payload.followup_answers?.length}, has_focus: ${!!payload.focus_selection}`);
+
+    _imageFetchPromise = (async () => {
+      const maxAttempts = 45;
+      for (let i = 0; i < maxAttempts; i++) {
+        try {
+          // First call may take 10-20s for image generation, so use longer timeout
+          const timeoutMs = i === 0 ? 35000 : 8000;
+          console.log(`[img] Poll ${i+1}/${maxAttempts} - timeout: ${timeoutMs}ms`);
+          
+          const data = await postJSON("/api/triggers/distraction-image", payload, { timeoutMs });
+          console.log(`[img] Poll ${i+1}: status=${data?.status}, images=${data?.images ? data.images.length : 0}`);
+          
+          if (data?.status === "ready") {
+            const images = Array.isArray(data.images) ? data.images : [null, null, null];
+            // Convert images to URLs
+            _imageUrls = images.map((img, idx) => {
+              if (!img) {
+                console.log(`[img] Q${idx+1}: No image returned`);
+                return null;
+              }
+              
+              // Check if this is a local file (category image)
+              if (img.is_local && img.url) {
+                console.log(`[img] Q${idx+1}: Using LOCAL category image: ${img.url}`);
+                return img.url;
+              }
+              
+              // Otherwise it's a base64 encoded image
+              if (img.data) {
+                const dataUrl = `data:${img.content_type || 'image/jpeg'};base64,${img.data}`;
+                console.log(`[img] Q${idx+1}: Using BASE64 image (${img.data.length} chars)`);
+                return dataUrl;
+              }
+              
+              console.warn(`[img] Q${idx+1}: Image object has no url or data:`, Object.keys(img));
+              return null;
+            });
+            
+            const validCount = _imageUrls.filter(u => u).length;
+            console.log(`[img] SUCCESS: Received ${validCount}/3 valid images`);
+            console.log(`[img] Image types:`, _imageUrls.map((u, i) => {
+              if (!u) return `Q${i+1}: null`;
+              if (u.startsWith('/')) return `Q${i+1}: local`;
+              if (u.startsWith('data:')) return `Q${i+1}: base64`;
+              return `Q${i+1}: unknown`;
+            }));
+            
+            _imageFetchPromise = null;
+            return _imageUrls;
+          }
+          
+          if (data?.status === "pending" || data?.status === "no_context") {
+            console.log(`[img] Poll ${i+1}: Status ${data.status}, waiting 1s...`);
+            await new Promise(r => setTimeout(r, 1000));
+            continue;
+          }
+          
+          if (data?.status === "error") {
+            console.error(`[img] Server error: ${data?.error || 'unknown'}`);
+            break;
+          }
+          
+          console.warn(`[img] Unexpected status: ${data?.status}`);
+          break;
+          
+        } catch (err) {
+          console.error(`[img] Poll ${i+1} error:`, err.message);
+          // Retry on network errors, but with longer delay
+          if (i < maxAttempts - 1) {
+            await new Promise(r => setTimeout(r, 2000));
+            continue;
+          }
+          break;
+        }
+      }
+      
+      console.warn(`[img] Failed after ${maxAttempts} attempts - using nulls`);
+      _imageUrls = [null, null, null];
+      _imageFetchPromise = null;
+      return _imageUrls;
+    })();
+
+    return _imageFetchPromise;
+  }
+
+  /**
+   * Get the image URL for a specific question (1-indexed).
+   * Returns the cached URL, or waits for the shared fetch to complete.
+   */
+  async function fetchDistractionImage(questionNumber, overrideText, overrideFollowups) {
+    const idx = questionNumber - 1;
+    if (idx < 0 || idx > 2) return null;
+
+    // Already resolved for this slot.
+    if (_imageUrls[idx] !== undefined) {
+      console.log(`[img] Q${questionNumber} cache hit:`, _imageUrls[idx] ? 'has url' : 'null');
+      return _imageUrls[idx];
+    }
+
+    // Wait for the shared fetch.
+    const urls = await _fetchAllDistractionImages(overrideText, overrideFollowups);
+    return urls[idx] || null;
+  }
+
+  /**
+   * Preload an image URL and verify it actually renders.
+   * Returns the URL if it loads successfully, null if broken.
+   * For failed images, attempts to fetch a fallback local category image.
+   */
+  async function _verifyImageUrl(url) {
+    if (!url) {
+      console.log('[img verify] No URL provided');
+      return null;
+    }
+    
+    // For base64 data URLs, skip verification (they're inline, always work)
+    if (url.startsWith('data:')) {
+      console.log('[img verify] Base64 data URL, skipping verification');
+      return url;
+    }
+    
+    console.log('[img verify] Testing URL:', url.substring(0, 80));
+    
+    return new Promise((resolve) => {
+      const img = new Image();
+      const timer = setTimeout(() => {
+        img.onload = img.onerror = null;
+        console.warn(`[img verify] TIMEOUT after 10s: ${url.substring(0,60)}`);
+        console.log('[img verify] Attempting fallback to local category image...');
+        _getFallbackCategoryImage().then(resolve);
+      }, 10000);
+      
+      img.onload = () => {
+        clearTimeout(timer);
+        if (img.naturalWidth < 50 || img.naturalHeight < 50) {
+          console.warn(`[img verify] REJECTED tiny image ${img.naturalWidth}x${img.naturalHeight}: ${url.substring(0,60)}`);
+          console.log('[img verify] Attempting fallback to local category image...');
+          _getFallbackCategoryImage().then(resolve);
+        } else {
+          console.log(`[img verify] SUCCESS ${img.naturalWidth}x${img.naturalHeight}: ${url.substring(0,60)}`);
+          resolve(url);
+        }
+      };
+      
+      img.onerror = (e) => {
+        clearTimeout(timer);
+        console.warn(`[img verify] LOAD ERROR:`, e, url.substring(0,60));
+        console.log('[img verify] Attempting fallback to local category image...');
+        _getFallbackCategoryImage().then(resolve);
+      };
+      
+      img.src = url;
+    });
+  }
+
+  /**
+   * Get a random local category image as fallback when API images fail
+   */
+  async function _getFallbackCategoryImage() {
+    console.log('[img fallback] Fetching random local category image...');
+    
+    // Check if we have cached focus selection with challenges
+    const focusCache = window.__focusSelectionCache;
+    if (focusCache && focusCache.challenges && focusCache.challenges.length > 0) {
+      // Use the first challenge category
+      const challenge = focusCache.challenges[0];
+      const categoryName = challenge.text;
+      console.log('[img fallback] Using category from focus selection:', categoryName);
+      
+      // Get the category slug
+      const categorySlugMap = {
+        "Phone Addiction": "phone_addiction",
+        "Social Media Addiction": "social_media",
+        "Entertainment Distraction": "entertainment",
+        "Sports & Gaming Distraction": "gaming",
+        "Exam Stress & Anxiety": "exam_stress",
+        "Overthinking": "overthinking",
+        "Low Motivation": "low_motivation",
+        "Lack of Consistency": "lack_consistency",
+        "Poor Time Management": "time_management",
+        "Sleep Issues": "sleep_issues",
+        "Difficulty Understanding Concepts": "understanding",
+        "Low Confidence & Self-Doubt": "self_doubt",
+        "Family Pressure": "family_pressure",
+        "Study Burnout": "burnout",
+        "Poor Concentration": "concentration"
+      };
+      
+      const slug = categorySlugMap[categoryName];
+      if (slug) {
+        // Pick a random image (1-5)
+        const randomNum = Math.floor(Math.random() * 5) + 1;
+        const fallbackUrl = `/category_images/${slug}_${randomNum}.jpg`;
+        console.log('[img fallback] Selected fallback image:', fallbackUrl);
+        return fallbackUrl;
+      }
+    }
+    
+    // Default fallback if no focus selection
+    console.log('[img fallback] No focus selection, using default fallback');
+    const defaultCategories = ['phone_addiction', 'concentration', 'burnout'];
+    const randomCategory = defaultCategories[Math.floor(Math.random() * defaultCategories.length)];
+    const randomNum = Math.floor(Math.random() * 5) + 1;
+    const fallbackUrl = `/category_images/${randomCategory}_${randomNum}.jpg`;
+    console.log('[img fallback] Selected default fallback:', fallbackUrl);
+    return fallbackUrl;
+  }
+
+  function prefetchDistractionImage(initialText, followupAnswers) {
+    console.log(`[img] prefetch starting — text: "${(initialText||'').substring(0,40)}", followups: ${(followupAnswers||[]).length}`);
+    // Start the single shared fetch for all 3 questions at once.
+    _fetchAllDistractionImages(initialText, followupAnswers);
+  }
+
+  // Legacy getter used by the popup watcher — checks if any slot is resolved.
+  function getImageCacheEntry(key) {
+    // key is "img_q1", "img_q2", "img_q3"
+    const m = key.match(/img_q(\d)/);
+    if (!m) return undefined;
+    const idx = parseInt(m[1]) - 1;
+    return _imageUrls[idx]; // undefined = not yet resolved, null = resolved but no image
+  }
+  // ──────────────────────────────────────────────────────────────────────
+
+  function buildQuestionWarningFallbackCopy(questionNumber) {
+    const { initialText, followupAnswers, contextParts } = getQuestionWarningInputs(questionNumber);
+    const baseSource = contextParts.join(" | ") || initialText || "your distraction";
+    const fallbackTopic = summarizeDistractionTopic(baseSource, initialText || "your distraction");
+    const literalTopic = extractLiteralPopupTopic(
+      questionNumber <= 3 ? initialText : contextParts.join(", "),
+      questionNumber <= 3 ? "" : followupAnswers.join(", "),
+      fallbackTopic
+    );
+    const topicLead = literalTopic ? `"${literalTopic}"` : fallbackTopic;
+    const second = followupAnswers[0] ? `"${followupAnswers[0]}"` : "the same weakness";
+    const third = followupAnswers[1] ? `"${followupAnswers[1]}"` : "the excuse you keep feeding";
+    const personName = extractNamedPersonFromText(initialText);
+    const mediaCue = detectMediaCue(initialText);
+
+    if (personName) {
+      const personCopyMap = {
+        1: {
+          headline: `${personName} is moving ahead in life. You're still giving away attention like it costs you nothing.`,
+          sub: "",
+        },
+        2: {
+          headline: `${personName} does not know you exist, but your focus is still working harder for ${personName} than for you.`,
+          sub: "",
+        },
+        3: {
+          headline: `${personName}, ${second}, and now ${third} make it look like distraction is not the problem. You are.`,
+          sub: "",
+        },
+        4: {
+          headline: `${personName} got the attention, ${second} kept it alive, and ${third} made the weakness obvious to anyone watching.`,
+          sub: "",
+        },
+        5: {
+          headline: `At this point ${personName} is just the surface. ${second} and ${third} are the real reason your focus keeps folding.`,
+          sub: "",
+        },
+        6: {
+          headline: `${personName}, ${second}, and ${third} together make your priorities look embarrassingly easy to read.`,
+          sub: "",
+        },
+        7: {
+          headline: `${personName} was the bait. ${second} lowered your guard. ${third} finished the job and left your focus looking cheap.`,
+          sub: "",
+        },
+      };
+
+      if (mediaCue === "reels" && questionNumber <= 3) {
+        personCopyMap[1].headline = `${personName} is building a career while you sit here feeding reels and calling it harmless.`;
+        personCopyMap[2].headline = `${personName} does not know you exist. The reels still get your time, and your own work gets whatever is left.`;
+      }
+      if (mediaCue === "movies" && questionNumber <= 3) {
+        personCopyMap[1].headline = `${personName} keeps moving forward. You keep sitting still and calling it entertainment.`;
+        personCopyMap[2].headline = `${personName} is not ruining your focus. You're the one choosing fantasy over your own work again.`;
+      }
+
+      return personCopyMap[questionNumber] || personCopyMap[1];
+    }
+
+    const copyMap = {
+      1: {
+        headline: `${topicLead} is already getting more of your attention than the question in front of you.`,
+        sub: "",
+      },
+      2: {
+        headline: `${topicLead} looks small until you notice how easily it keeps pulling you away from your own life.`,
+        sub: "",
+      },
+      3: {
+        headline: `${topicLead}, ${second}, and ${third} together make this look less like bad luck and more like your usual pattern.`,
+        sub: "",
+      },
+      4: {
+        headline: `${topicLead} got your attention, ${second} kept it there, and ${third} made the habit obvious.`,
+        sub: "",
+      },
+      5: {
+        headline: `${topicLead} is the distraction, ${second} is the excuse, and ${third} is what happens when you stop guarding your time.`,
+        sub: "",
+      },
+      6: {
+        headline: `${topicLead}, ${second}, and ${third} together make your weak spot look embarrassingly easy to predict.`,
+        sub: "",
+      },
+      7: {
+        headline: `${topicLead} took your attention, ${second} lowered your guard, and ${third} finished what was left of your focus.`,
+        sub: "",
+      },
+    };
+
+    return copyMap[questionNumber] || copyMap[1];
+  }
+  function normalizeQ1WarningResponse(raw, fallbackCopy) {
+    const fallback = fallbackCopy || buildQ1WarningCopy();
+    const headline = String(raw?.headline || "").replace(/\s+/g, " ").trim();
+    const sub = String(raw?.sub || "").replace(/\s+/g, " ").trim();
+    if (!headline || !sub) return fallback;
+    return { headline, sub };
+  }
+
+  function normalizeQuestionWarningResponse(raw, fallbackCopy) {
+    const fallback = fallbackCopy || buildQuestionWarningFallbackCopy(1);
+    const headline = String(raw?.headline || "").replace(/\s+/g, " ").trim();
+    const sub = String(raw?.sub || "").replace(/\s+/g, " ").trim();
+    if (!headline) return fallback;
+    return { headline, sub };
+  }
+
+  async function fetchQ1WarningCopy() {
+    return fetchQuestionWarningCopy(1);
+  }
+
+  async function fetchQuestionWarningCopy(questionNumber) {
+    const normalizedQuestionNumber = Number(questionNumber || 1);
+    const fallbackCopy = buildQuestionWarningFallbackCopy(normalizedQuestionNumber);
+    const { initialText, followupAnswers } = getQuestionWarningInputs(normalizedQuestionNumber);
+    if (!initialText) return fallbackCopy;
+
+    const cacheKey = getQuestionWarningCacheKey(normalizedQuestionNumber);
+
+    if (questionWarningCopyCache.has(cacheKey)) {
+      return questionWarningCopyCache.get(cacheKey);
+    }
+
+    if (questionWarningCopyPromises.has(cacheKey)) {
+      return questionWarningCopyPromises.get(cacheKey);
+    }
+
+    const promise = postJSON(
+      "/api/triggers/question-warning-copy",
+      {
+        question_number: normalizedQuestionNumber,
+        initial_text: initialText,
+        followup_answers: followupAnswers,
+      },
+      { timeoutMs: 6000 }
+    )
+      .then((data) => {
+        const copy = normalizeQuestionWarningResponse(data, fallbackCopy);
+        questionWarningCopyCache.set(cacheKey, copy);
+        return copy;
+      })
+      .catch(() => fallbackCopy)
+      .finally(() => {
+        questionWarningCopyPromises.delete(cacheKey);
+      });
+
+    questionWarningCopyPromises.set(cacheKey, promise);
+    return promise;
+  }
+
+  async function prefetchQuestionWarningCopies() {
+    const initialText = getSessionInitialQuery();
+    if (!initialText) return [];
+    const jobs = [];
+    for (let qNum = 1; qNum <= 3; qNum += 1) {
+      jobs.push(fetchQuestionWarningCopy(qNum));
+    }
+    return Promise.allSettled(jobs);
+  }
+
+  function buildQ2PopupCopy() {
+    const { topic, sourceText } = buildPersonalizedQuizPrompt();
+    const firstFollowupAnswer = String(state.followupAnswers?.[0]?.answer || "").trim();
+    const subjectLine = summarizeDistractionTopic(firstFollowupAnswer, topic);
+    const severity = inferDistractionSeverity(
+      sourceText || "",
+      Array.isArray(state.followupAnswers) ? state.followupAnswers.length : 0
+    );
+    const lines = {
+      medium: `Keep this lifestyle — IIT Bombay and IIT Kharagpur aren't reserving seats for ${subjectLine} addicts.`,
+      hard: `You won't waltz into IIT KGP or IIT Bombay with this focus. Those campuses chew up disciplined kids — you're still owned by ${subjectLine}.`,
+      brutal: `Dream IIT Kharagpur / IIT Bombay all you want. With ${subjectLine} steering your day, you're dead weight in that race — not competition.`,
+    };
+    const subs = {
+      medium: `You're of no use to that dream until habits change. Answer honestly — then a crawling torch owns the question.`,
+      hard: `Rank doesn't care about your campus fantasy while ${subjectLine} runs your day. Say yes or no — then the narrow beam hits.`,
+      brutal: `Not "almost IIT." Nowhere near that grind. Pick below — partial sight next, same as your half-attention habits.`,
+    };
+    const { question: personalizedQuestion } = buildPersonalizedQuizPrompt();
+    const focusQuestion = /focus|accuracy|test/i.test(String(personalizedQuestion || ""))
+      ? personalizedQuestion
+      : "Do you want to test your focus and accuracy right now?";
+    return {
+      headline: lines[severity] || lines.medium,
+      sub: subs[severity] || subs.medium,
+      focusQuestion,
+      subjectLine,
+    };
+  }
+
+  function dismissPsyqOverlay(overlay, onComplete) {
+    overlay.classList.remove("psyq-overlay--visible");
+    const dismissMs = overlay?.classList?.contains("psyq-overlay--warning-slow") ? 2200 : 280;
+    setTimeout(() => {
+      overlay.remove();
+      onComplete?.();
+    }, dismissMs);
+  }
+
+async function showQuestionWarningPopup(questionNumber, onComplete) {
+    const qNum = Number(questionNumber || 1);
+    const fallbackCopy = buildQuestionWarningFallbackCopy(qNum);
+    const cacheKey = getQuestionWarningCacheKey(qNum);
+    const resolvedCopy = questionWarningCopyCache.get(cacheKey) || fallbackCopy;
+
+    document.querySelectorAll(".psyq-overlay[data-question-warning='1']").forEach((el) => el.remove());
+
+    // Get image — use cache, in-flight promise, or start fresh fetch.
+    // Then verify it actually loads (preload) so we never show a broken <img>.
+    let imgUrl = null;
+    try {
+      const cachedKey = `img_q${qNum}`;
+      let rawUrl = null;
+      console.log(`[popup] Q${qNum} checking cache for key:`, cachedKey);
+      const cachedValue = StressTriggers.getImageCache ? StressTriggers.getImageCache(cachedKey) : undefined;
+      console.log(`[popup] Q${qNum} cached value:`, cachedValue, 'type:', typeof cachedValue);
+      
+      if (cachedValue !== undefined) {
+        rawUrl = cachedValue;
+        console.log(`[popup] Q${qNum} using cached image:`, rawUrl ? rawUrl.substring(0,60) : 'null');
+      } else {
+        console.log(`[popup] Q${qNum} image not in cache, fetching now`);
+        rawUrl = await StressTriggers.fetchDistractionImage(qNum);
+        console.log(`[popup] Q${qNum} fetch result:`, rawUrl ? rawUrl.substring(0,60) : 'null');
+      }
+      // Verify the URL actually renders before injecting into the DOM.
+      if (rawUrl) {
+        console.log(`[popup] Q${qNum} verifying image URL:`, rawUrl.substring(0,60));
+        imgUrl = await StressTriggers.verifyImageUrl(rawUrl);
+        if (!imgUrl) console.warn(`[popup] Q${qNum} image failed verification, showing without image`);
+        else console.log(`[popup] Q${qNum} image verified OK`);
+      } else {
+        console.log(`[popup] Q${qNum} rawUrl is null/empty, no image to verify`);
+      }
+    } catch(imgErr) {
+      console.warn(`[popup] Q${qNum} image error:`, imgErr.message);
+      imgUrl = null;
+    }
+
+    console.log(`[popup] Q${qNum} FINAL imgUrl:`, imgUrl, '| will show image:', !!imgUrl);
+    const overlay = document.createElement("div");
+    overlay.className = "psyq-overlay psyq-overlay--warning-slow";
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("data-question-warning", "1");
+    overlay.setAttribute("data-question-number", String(qNum));
+
+    overlay.innerHTML = `
+      <div class="psyq-card psyq-card--warning psyq-card--warning-slow psyq-card--minimal ${imgUrl ? 'psyq-card--katrina' : ''}" id="psyqCard">
+        <button class="psyq-close psyq-close--minimal" id="psyqClose" type="button" aria-label="Close popup">×</button>
+        ${imgUrl ? `<img class="psyq-katrina-image" src="${imgUrl}" alt=""
+            onerror="this.style.display='none';this.closest('.psyq-card').classList.remove('psyq-card--katrina');console.warn('[popup] img onerror hidden:', this.src.substring(0,60))"
+            onload="console.log('[popup] img loaded OK:', this.src.substring(0,60))" />` : "<!-- no image -->"}
+        <p class="psyq-reflection ${imgUrl ? 'psyq-reflection--katrina' : ''}" id="psyqReflection"></p>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add("psyq-overlay--visible"));
+
+    const reflEl = overlay.querySelector("#psyqReflection");
+    const closeBtn = overlay.querySelector("#psyqClose");
+
+    if (reflEl) reflEl.textContent = resolvedCopy.headline || fallbackCopy.headline;
+
+    closeBtn?.addEventListener("click", () => dismissPsyqOverlay(overlay, onComplete));
+  }
+
+  function showPersonalizedQuiz(onComplete, opts = {}) {
+    const { topic, reflection, question, sourceText } = buildPersonalizedQuizPrompt();
+    const mode = opts.mode === "q1" ? "q1" : opts.mode === "q2" ? "q2" : "q3";
+    const isCompactCard = mode === "q1";
+    const q2Copy = mode === "q2" ? buildQ2PopupCopy() : null;
+    const heading = mode === "q1" ? "Reality check" : mode === "q2" ? "Campus fantasy" : "Focus check";
+    const firstFollowupAnswer = String(state.followupAnswers?.[0]?.answer || "").trim();
+    const severity = inferDistractionSeverity(
+      `${sourceText || ""} ${firstFollowupAnswer}`,
+      Array.isArray(state.followupAnswers) ? state.followupAnswers.length : 0
+    );
+    const subjectLine = summarizeDistractionTopic(firstFollowupAnswer, topic);
+    const compactCopy = mode === "q1" ? buildQ1WarningCopy() : null;
+    const cardIcon = mode === "q1" ? "🚨" : mode === "q2" ? "💀" : "🧠";
+
+    const overlay = document.createElement("div");
+    overlay.className = `psyq-overlay${isCompactCard ? " psyq-overlay--warning-slow" : ""}`;
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("role", "dialog");
+
+    overlay.innerHTML = `
+      <div class="psyq-card${isCompactCard ? " psyq-card--warning psyq-card--warning-slow" : ""}" id="psyqCard">
+        <div class="psyq-header">
+          <span class="psyq-icon">${cardIcon}</span>
+          <span class="psyq-label">${escapeHTML(heading)}</span>
+          ${isCompactCard
+            ? `<button class="psyq-close" id="psyqClose" type="button" aria-label="Close popup">×</button>`
+            : ``}
+        </div>
+        <p class="psyq-reflection" id="psyqReflection"></p>
+        <div class="psyq-divider"></div>
+        <p class="psyq-question" id="psyqQuestion" style="opacity:0;transition:opacity 400ms ease;"></p>
+        ${isCompactCard
+          ? ``
+          : `<div class="psyq-actions" id="psyqActions" style="opacity:0;pointer-events:none;transition:opacity 350ms ease;">
+          <button class="psyq-btn psyq-btn-yes" id="psyqYes" type="button">Yes</button>
+          <button class="psyq-btn psyq-btn-no"  id="psyqNo"  type="button">No</button>
+        </div>`}
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add("psyq-overlay--visible"));
+
+    const card       = overlay.querySelector("#psyqCard");
+    const reflEl     = overlay.querySelector("#psyqReflection");
+    const questionEl = overlay.querySelector("#psyqQuestion");
+    const actionsEl  = overlay.querySelector("#psyqActions");
+    const yesBtn     = overlay.querySelector("#psyqYes");
+    const noBtn      = overlay.querySelector("#psyqNo");
+    const closeBtn = overlay.querySelector("#psyqClose");
+
+    const introLine = isCompactCard
+      ? compactCopy.headline
+      : `${reflection} ${subjectLine} killing focus — prove it or tap through.`;
+
+    if (isCompactCard) {
+      if (mode === "q1") {
+        const existing = document.querySelector(".psyq-overlay[data-warning-only='1']");
+        if (existing) existing.remove();
+        overlay.setAttribute("data-warning-only", "1");
+      }
+      reflEl.textContent = introLine;
+      questionEl.style.opacity = "1";
+      questionEl.textContent = compactCopy.sub;
+      if (mode === "q1") {
+        void fetchQ1WarningCopy().then((aiCopy) => {
+          if (!document.body.contains(overlay) || !aiCopy) return;
+          reflEl.textContent = aiCopy.headline || compactCopy.headline;
+          questionEl.textContent = aiCopy.sub || compactCopy.sub;
+        });
+      }
+      closeBtn?.addEventListener("click", () => dismissPsyqOverlay(overlay, onComplete));
+      return;
+    }
+
+    function showResponse(isYes) {
+      const yes = overlay.querySelector("#psyqYes");
+      const no = overlay.querySelector("#psyqNo");
+      if (yes) yes.disabled = true;
+      if (no) no.disabled = true;
+
+      const icon  = isYes ? "😒" : "🙄";
+      const title = isYes ? "Sure you are." : "Denial won't save your rank.";
+      const body  = isYes
+        ? "Talk is cheap. The torch test starts next — let's see if you mean it."
+        : "No doesn't pause this. The beam still hits — enjoy half-blind reading.";
+      const cta   = isYes ? "Whatever — continue" : "Fine — continue";
+
+      card.innerHTML = `
+        <div class="psyq-response">
+          <div class="psyq-response-icon">${icon}</div>
+          <p class="psyq-response-title">${title}</p>
+          <p class="psyq-response-body">${body}</p>
+          <button class="psyq-btn psyq-btn-cta" id="psyqCta" type="button">${cta}</button>
+        </div>
+      `;
+      card.classList.add("psyq-card--response");
+
+      overlay.querySelector("#psyqCta").addEventListener("click", () => dismissPsyqOverlay(overlay, onComplete));
+    }
+
+    // Q2: roast in card → then highlighted question + Yes/No (same card, no Continue)
+    if (q2Copy) {
+      const divider = overlay.querySelector(".psyq-divider");
+      reflEl.textContent = q2Copy.headline;
+      reflEl.style.minHeight = "0";
+
+      const subEl = document.createElement("p");
+      subEl.className = "psyq-subline";
+      subEl.textContent = q2Copy.sub;
+      if (divider) divider.insertAdjacentElement("afterend", subEl);
+
+      questionEl.style.display = "none";
+      questionEl.style.opacity = "0";
+      if (actionsEl) {
+        actionsEl.style.opacity = "0";
+        actionsEl.style.pointerEvents = "none";
+      }
+
+      const revealFocusId = setTimeout(() => {
+        if (!document.body.contains(overlay)) return;
+        questionEl.style.display = "";
+        questionEl.style.opacity = "1";
+        questionEl.className = "psyq-question psyq-question--highlight";
+        questionEl.textContent = q2Copy.focusQuestion;
+        if (actionsEl) {
+          actionsEl.style.opacity = "1";
+          actionsEl.style.pointerEvents = "auto";
+        }
+        overlay.querySelector("#psyqYes")?.addEventListener("click", () => showResponse(true));
+        overlay.querySelector("#psyqNo")?.addEventListener("click", () => showResponse(false));
+      }, 2600);
+      pendingTriggerTimeouts.push(revealFocusId);
+      return;
+    }
+
+    // Typewriter for interactive mode (fallback)
+    let charIdx = 0;
+    const typeInterval = setInterval(() => {
+      reflEl.textContent = introLine.slice(0, ++charIdx);
+      if (charIdx >= introLine.length) {
+        clearInterval(typeInterval);
+        setTimeout(() => {
+          questionEl.style.opacity = "1";
+          questionEl.textContent   = question;
+          setTimeout(() => {
+            if (actionsEl) {
+              actionsEl.style.opacity = "1";
+              actionsEl.style.pointerEvents = "auto";
+            }
+          }, 280);
+        }, 500);
+      }
+    }, 26);
+
+    yesBtn?.addEventListener("click", () => showResponse(true));
+    noBtn?.addEventListener("click",  () => showResponse(false));
+  }
+
+  /** Q2: short irritating popup, then hard-fog (difficulty check → hard question). */
+  function runQ2HardFogSequence(questionNumber) {
+    if (questionStem) questionStem.style.visibility = "hidden";
+    if (questionOptions) questionOptions.style.visibility = "hidden";
+    if (state.feedbackPromptOpen) {
+      state.feedbackPromptOpen = false;
+      releaseInterruptionLock("feedback");
+    }
+    const difficultyCheckResult = activateTrigger("difficultyCheckPrompt", {
+      userState: currentUserState(),
+      force: true,
+      reason: `question_trigger:Q${questionNumber}:pre_sequence`,
+      questionNumber,
+    });
+    if (!difficultyCheckResult) {
+      const fallbackId = setTimeout(() => {
+        const q = testQuestions[testQuestionIndex];
+        if (!q || testQuestionIndex + 1 !== questionNumber) return;
+        activateHardQuestionChallenge({ ...q, difficulty: "hard" });
+      }, 2500);
+      pendingTriggerTimeouts.push(fallbackId);
+      return;
+    }
+    const waitForDifficultyCheck = setInterval(() => {
+      if (!isTriggerActive("difficultyCheckPrompt")) {
+        clearInterval(waitForDifficultyCheck);
+        const afterId = setTimeout(() => {
+          const q = testQuestions[testQuestionIndex];
+          if (!q || testQuestionIndex + 1 !== questionNumber) return;
+          activateHardQuestionChallenge({ ...q, difficulty: "hard" });
+        }, 2500);
+        pendingTriggerTimeouts.push(afterId);
+      }
+    }, 100);
+  }
+
+  function activateQ2TorchSpotlight(questionNumber) {
+    if (testQuestionIndex + 1 !== questionNumber) return;
+    const q2 = buildQ2PopupCopy();
+    const subj = q2.subjectLine || "distractions";
+    activateTrigger("torchlightSpotlight", {
+      userState: currentUserState(),
+      force: true,
+      reason: `question_trigger:Q${questionNumber}:torchlight_after_popup`,
+      intensity: "medium",
+      questionNumber,
+      caption: `Can't see the full question? Good. Chase the beam.`,
+      spotlightTitle: "Narrow beam",
+      spotlightLead: `${subj} won't solve itself in the dark.`,
+      spotlightChallenge: "Track the light. Pick an answer anyway.",
+      spotlightTaunt: "One patch lit. Rest hidden. Stop sulking.",
+      taunts: [
+        "Light moves. Your focus should too.",
+        "Half-blind read — that's the point.",
+        "Still scrolling in your head? Pathetic.",
+        "Beam's on the stem. Eyes up.",
+      ],
+    });
+  }
+
+  function runQ2PopupFlow(questionNumber) {
+    let flowStarted = false;
+    const startFlow = () => {
+      if (flowStarted) return;
+      if (testQuestionIndex + 1 !== questionNumber) return;
+      flowStarted = true;
+      window.removeEventListener("scroll", onScroll);
+      showPersonalizedQuiz(() => {
+        activateQ2TorchSpotlight(questionNumber);
+      }, { mode: "q2" });
+    };
+    const onScroll = () => startFlow();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    const timeoutId = setTimeout(startFlow, 8000);
+    const cleanupId = setTimeout(() => window.removeEventListener("scroll", onScroll), 12000);
+    pendingTriggerTimeouts.push(timeoutId);
+    pendingTriggerTimeouts.push(cleanupId);
+  }
+
+  // ── End Personalized Quiz ─────────────────────────────────────────────────
 
   function triggerScreenFlip(ctx) {
     const shell = getAppShell();
@@ -5426,6 +6791,7 @@ const StressTriggers = (() => {
     
     // Show roast message
     const showRoast = (message, callback) => {
+      if (isCleanedUp || state.stage === "results") return;
       console.log('[triggerAccuracyTest] Showing roast:', message);
       const roastOverlay = document.createElement('div');
       roastOverlay.className = 'stress-difficulty-check-overlay';
@@ -5445,8 +6811,8 @@ const StressTriggers = (() => {
     
     // Show post-shake check
     const showPostShakeCheck = () => {
-      // Don't show if we've moved to a different question or cleanup was called
-      if (isCleanedUp || state.currentQuestionId !== triggerQuestionId) {
+      // Don't show if we've moved to a different question or cleanup was called or test ended
+      if (isCleanedUp || state.currentQuestionId !== triggerQuestionId || state.stage === "results") {
         console.log('[triggerAccuracyTest] Skipping post-shake check - question changed or cleaned up');
         return;
       }
@@ -6405,6 +7771,9 @@ const StressTriggers = (() => {
   }
 
   function onQuestionRendered(question) {
+    const clearQuestionWarningOverlay = () => {
+      document.querySelectorAll(".psyq-overlay[data-question-warning='1'], .psyq-overlay[data-warning-only='1']").forEach((el) => el.remove());
+    };
     if (state.optionFeedbackActive && state.optionFeedbackQuestionId &&
         String(state.optionFeedbackQuestionId) !== String(question?.question_id || "")) {
       closeOptionFeedbackPopup();
@@ -6421,147 +7790,90 @@ const StressTriggers = (() => {
     state.hoverOptionEl = null;
     state.interactionHesitationMs = 0;
     state.interactionHesitationStartedAt = 0;
+    state.optionFeedbackInterceptionEnabled = false;
+    state.optionFeedbackInterceptionCount = 0;
+    state.optionFeedbackMaxInterceptions = 0;
     
     // Check if this is a hard question
     const isHard = isHardDifficulty(question?.difficulty);
     const questionNumber = testQuestionIndex + 1;
+    clearQuestionWarningOverlay();
     
     console.log('[onQuestionRendered] Current testQuestionIndex:', testQuestionIndex);
     console.log('[onQuestionRendered] Calculated questionNumber:', questionNumber);
     console.log('[onQuestionRendered] Question ID:', question?.question_id);
     console.log('[onQuestionRendered] Question difficulty:', question?.difficulty);
+
+    // Q1, Q2 & Q3: image warning popup only (no stress triggers like torch/fog)
+    if (questionNumber >= 1 && questionNumber <= 3) {
+      const renderedQuestionId = String(question?.question_id || "");
+      void fetchQuestionWarningCopy(questionNumber);
+      fetchDistractionImage(questionNumber);
+
+      const questionRenderedAt = Date.now();
+      const MIN_WAIT_MS = 5000;
+      const HARD_CAP_MS = 45000;
+
+      let popupFired = false;
+      const firePopup = () => {
+        if (popupFired) return;
+        if (String(state.currentQuestionId || "") !== renderedQuestionId) return;
+        popupFired = true;
+        const imgReady = StressTriggers.getImageCache && StressTriggers.getImageCache(`img_q${questionNumber}`);
+        console.log(`[popup] Q${questionNumber} firing — image: ${imgReady ? 'YES' : 'NO'}, elapsed: ${Date.now() - questionRenderedAt}ms`);
+        showQuestionWarningPopup(questionNumber, () => {});
+      };
+
+      const watchId = setInterval(() => {
+        if (popupFired) { clearInterval(watchId); return; }
+        if (String(state.currentQuestionId || "") !== renderedQuestionId) { clearInterval(watchId); return; }
+        const elapsed = Date.now() - questionRenderedAt;
+        const imgDone = _imageUrls[questionNumber - 1] !== undefined;
+        if (elapsed >= MIN_WAIT_MS && imgDone) {
+          clearInterval(watchId);
+          clearTimeout(hardCapId);
+          firePopup();
+        }
+      }, 250);
+
+      const hardCapId = setTimeout(() => {
+        clearInterval(watchId);
+        firePopup();
+      }, HARD_CAP_MS);
+
+      pendingTriggerTimeouts.push(hardCapId);
+      pendingTriggerTimeouts.push(watchId);
+      return;
+    }
     
-    // Check if this question has a custom trigger sequence
+    // Fixed per-question flows (new-user sequence every session)
+    ensureQuestionTriggerPlan();
     const triggerInfo = getQuestionTrigger(questionNumber);
     const hasCustomTriggerSequence = triggerInfo && triggerInfo.name;
     
-    // ONLY use custom trigger sequences for Q1-Q7, disable all automatic trigger activation
-    if (hasCustomTriggerSequence) {
+    if (testQuestions.length >= 1 && questionNumber >= 1 && questionNumber <= 7) {
       console.log('[onQuestionRendered] Activating custom trigger sequence for question:', questionNumber);
       
-      if (triggerInfo && triggerInfo.name) {
-        // Different delays and sequences for different triggers per specifications
-        let delayMs = 5000; // Default 5 seconds
+      if (questionNumber >= 1 && questionNumber <= 7) {
+        let delayMs = 5000;
         
-        // Q1 → TORCHLIGHT_SPOTLIGHT
-        // Fires 6 seconds after Q1 loads
-        if (triggerInfo.name === 'torchlightSpotlight') {
-          delayMs = 6000;
-          const timeoutId = setTimeout(() => {
-            console.log(`[onQuestionRendered] Activating Q1 trigger: torchlightSpotlight`);
-            activateTrigger('torchlightSpotlight', {
-              userState: currentUserState(),
-              force: true,
-              reason: `question_trigger:Q${questionNumber}:torchlightSpotlight`,
-              intensity: 'mild',
-              questionNumber: questionNumber
-            });
-          }, delayMs);
-          pendingTriggerTimeouts.push(timeoutId);
-        }
-        
-        // Q2 → HARD_FOG (with pre-sequence)
-        // Pre-sequence: difficultyCheckPrompt → 2.5s pause → hardQuestion (activateHardQuestionChallenge) → includes 30s timer + fog
-        else if (triggerInfo.name === 'hardFog') {
-          // Hide question immediately for Q2
-          if (questionStem) questionStem.style.visibility = 'hidden';
-          if (questionOptions) questionOptions.style.visibility = 'hidden';
-          
-          delayMs = 0; // Show difficulty check instantly
-          const timeoutId1 = setTimeout(() => {
-            console.log(`[onQuestionRendered] Starting Q2 pre-sequence: difficultyCheckPrompt`);
-            console.log(`[onQuestionRendered] state.feedbackPromptOpen:`, state.feedbackPromptOpen);
-            
-            // Force close any existing feedback prompt to ensure difficultyCheckPrompt can activate
-            if (state.feedbackPromptOpen) {
-              console.log(`[onQuestionRendered] Forcing feedbackPromptOpen to false`);
-              state.feedbackPromptOpen = false;
-              releaseInterruptionLock("feedback");
-            }
-            
-            console.log(`[onQuestionRendered] About to call activateTrigger for difficultyCheckPrompt`);
-            
-            // Step 1: Difficulty rating popup (difficultyCheckPrompt trigger)
-            const difficultyCheckResult = activateTrigger('difficultyCheckPrompt', {
-              userState: currentUserState(),
-              force: true,
-              reason: `question_trigger:Q${questionNumber}:pre_sequence`,
-              questionNumber: questionNumber
-            });
-            
-            console.log(`[onQuestionRendered] difficultyCheckPrompt activation result:`, difficultyCheckResult);
-            
-            if (!difficultyCheckResult) {
-              console.error(`[onQuestionRendered] Failed to activate difficultyCheckPrompt! Skipping to hardQuestion.`);
-              // If difficultyCheckPrompt fails, skip directly to hardQuestion
-              const timeoutId2 = setTimeout(() => {
-                console.log(`[onQuestionRendered] Activating hardQuestion challenge (fallback)`);
-                const q = testQuestions[testQuestionIndex];
-                if (q) {
-                  const hardQuestion = { ...q, difficulty: "hard" };
-                  activateHardQuestionChallenge(hardQuestion);
-                }
-              }, 2500);
-              pendingTriggerTimeouts.push(timeoutId2);
-              return;
-            }
-            
-            // Wait for difficulty check to complete, then continue sequence
-            const waitForDifficultyCheck = setInterval(() => {
-              const isActive = isTriggerActive('difficultyCheckPrompt');
-              console.log(`[onQuestionRendered] Checking if difficultyCheckPrompt is active:`, isActive);
-              
-              if (!isActive) {
-                clearInterval(waitForDifficultyCheck);
-                
-                console.log(`[onQuestionRendered] Difficulty check complete, waiting 2.5s`);
-                
-                // Step 2: 2.5s pause, then activate hardQuestion
-                const timeoutId3 = setTimeout(() => {
-                  console.log(`[onQuestionRendered] Activating hardQuestion challenge`);
-                  
-                  // Step 3: Activate hardQuestion challenge
-                  // This shows "Hard Question Ahead" warning for ~2.1s, then starts 30s countdown with scratch-to-reveal fog
-                  const q = testQuestions[testQuestionIndex];
-                  if (q) {
-                    // Force the question to be treated as hard difficulty
-                    const hardQuestion = { ...q, difficulty: "hard" };
-                    activateHardQuestionChallenge(hardQuestion);
-                  }
-                  
-                }, 2500); // 2.5 second pause
-                pendingTriggerTimeouts.push(timeoutId3);
-              }
-            }, 100); // Check every 100ms
-            
-          }, delayMs);
-          pendingTriggerTimeouts.push(timeoutId1);
-        }
-        
-        // Q3 → SCREEN_FLIP
-        // Fires 5 seconds after Q3 loads. Flips 180°, stays 5s, flips back, waits 5s, repeats 5 times
-        else if (triggerInfo.name === 'screenFlip') {
+        // Q3 → screen flip only
+        if (questionNumber === 3) {
           delayMs = 5000;
           const timeoutId = setTimeout(() => {
-            console.log(`[onQuestionRendered] Activating Q3 trigger: screenFlip with 5 flip cycles`);
-            activateTrigger('screenFlip', {
+            if (testQuestionIndex + 1 !== 3) return;
+            activateTrigger("screenFlip", {
               userState: currentUserState(),
               force: true,
-              reason: `question_trigger:Q${questionNumber}:screenFlip`,
-              intensity: 'strong',
-              questionNumber: questionNumber,
-              flipCycles: 5, // 5 total flips
-              flipDuration: 5000, // Stay flipped for 5s
-              waitDuration: 5000, // Wait 5s between flips
-              permanentFinalState: true // Final flip state stays permanently
+              reason: "question_trigger:Q3:screenFlip",
+              questionNumber: 3,
             });
           }, delayMs);
           pendingTriggerTimeouts.push(timeoutId);
         }
         
         // Q4 → ACCURACY_TEST
-        // Fires 1 second after Q4 loads
-        else if (triggerInfo.name === 'accuracyTest') {
+        else if (questionNumber === 4) {
           delayMs = 1000;
           const timeoutId = setTimeout(() => {
             console.log(`[onQuestionRendered] Activating Q4 trigger: accuracyTest`);
@@ -6576,9 +7888,7 @@ const StressTriggers = (() => {
         }
         
         // Q5 → READING_TEST
-        // Fires 3 seconds after Q5 loads
-        // Sequence: focusHandSignal (4s) → 8s clear reading → focusReadGate (blur + unlock)
-        else if (triggerInfo.name === 'readingTest') {
+        else if (questionNumber === 5) {
           delayMs = 3000;
           const timeoutId1 = setTimeout(() => {
             console.log(`[onQuestionRendered] Starting Q5 sequence: focusHandSignal`);
@@ -6611,15 +7921,26 @@ const StressTriggers = (() => {
               }, 12000); // 4s hand signal + 8s clear reading
               pendingTriggerTimeouts.push(timeoutId2);
             } else {
-              console.error(`[onQuestionRendered] Failed to activate focusHandSignal`);
+              console.error(
+                `[onQuestionRendered] Failed to activate focusHandSignal; falling back to readingTest handler`,
+              );
+              const timeoutIdFb = setTimeout(() => {
+                if (testQuestionIndex + 1 !== questionNumber) return;
+                activateTrigger("readingTest", {
+                  userState: currentUserState(),
+                  force: true,
+                  reason: `question_trigger:Q${questionNumber}:readingTest_fallback`,
+                  questionNumber: questionNumber,
+                });
+              }, 600);
+              pendingTriggerTimeouts.push(timeoutIdFb);
             }
           }, delayMs);
           pendingTriggerTimeouts.push(timeoutId1);
         }
         
-        // Q6 → HARD_PEER_DOUBT (with pre-sequence + interception)
-        // Same pre-sequence as Q2: difficultyCheckPrompt → 2.5s pause → hardQuestion challenge
-        else if (triggerInfo.name === 'hardPeerDoubt') {
+        // Q6 → HARD_PEER_DOUBT
+        else if (questionNumber === 6) {
           // Hide question immediately for Q6
           if (questionStem) questionStem.style.visibility = 'hidden';
           if (questionOptions) questionOptions.style.visibility = 'hidden';
@@ -6686,9 +8007,7 @@ const StressTriggers = (() => {
         }
         
         // Q7 → BILLIARD_BALL
-        // Fires 1.5 seconds after Q7 loads
-        // Sequence: premiumImagePopup (4s taunt) → 0.8s gap → bouncingQuestion (indefinite)
-        else if (triggerInfo.name === 'billiardBall') {
+        else if (questionNumber === 7) {
           delayMs = 1500;
           const timeoutId1 = setTimeout(() => {
             console.log(`[onQuestionRendered] Starting Q7 sequence: premiumImagePopup taunt`);
@@ -6729,6 +8048,42 @@ const StressTriggers = (() => {
           }, delayMs);
           pendingTriggerTimeouts.push(timeoutId1);
         }
+
+        // Returning-user plans can assign any medium/hard trigger to Q2–Q7. If the backend
+        // maps e.g. SCREEN_FLIP to Q5, none of the dedicated branches above run; without
+        // this we returned early and fired nothing (and AI triggers stay disabled).
+        else if (triggerHandlers[triggerInfo.name]) {
+          const name = triggerInfo.name;
+          const fallbackDelay =
+            name === "screenFlip"
+              ? 5000
+              : name === "torchlightSpotlight"
+                ? 6000
+                : name === "accuracyTest"
+                  ? 1000
+                  : name === "readingTest"
+                    ? 3000
+                    : name === "billiardBall"
+                      ? 1500
+                      : 2500;
+          const timeoutId = setTimeout(() => {
+            if (String(state.currentQuestionId) !== String(question?.question_id || "")) return;
+            activateTrigger(name, {
+              userState: currentUserState(),
+              force: true,
+              reason: `question_trigger:Q${questionNumber}:planned_generic`,
+              questionNumber: questionNumber,
+            });
+          }, fallbackDelay);
+          pendingTriggerTimeouts.push(timeoutId);
+          console.warn(
+            `[onQuestionRendered] No dedicated sequence for Q${questionNumber} trigger "${name}"; using generic activation after ${fallbackDelay}ms`,
+          );
+        } else {
+          console.warn(
+            `[onQuestionRendered] Planned trigger "${triggerInfo.name}" for Q${questionNumber} has no local handler`,
+          );
+        }
         
         console.log(`[onQuestionRendered] Trigger sequence initiated for Q${questionNumber}:`, triggerInfo.name);
         
@@ -6738,7 +8093,7 @@ const StressTriggers = (() => {
     } else if (!hasCustomTriggerSequence) {
       console.log('[onQuestionRendered] Hard question detected - using hardQuestionChallenge only');
     }
-    
+
     // Only call AI trigger system if no question-level trigger was activated
     // Skip AI triggers for questions with custom trigger sequences
     if (!triggerInfo || !triggerInfo.name) {
@@ -7038,6 +8393,7 @@ const StressTriggers = (() => {
     state.followupAnswers = [];
     state.wrongAnswersCount = 0;
     state.totalSubmissions = 0;
+    state.q1PopupShownThisSession = false;
     state.correctStreak = 0;
     state.aiDecisionInFlight = false;
     state.lastAIDecisionAt = 0;
@@ -7083,6 +8439,8 @@ const StressTriggers = (() => {
     state.optionFeedbackInterceptionCount = 0;
     closeOptionFeedbackPopup();
     deactivateAllTriggers();
+    // Clear distraction image cache so the next session fetches fresh images.
+    clearImageCache();
   }
 
   function recordFollowupAnswer(answer, domain, slot, questionText) {
@@ -7286,6 +8644,18 @@ const StressTriggers = (() => {
     recordFollowupAnswer,
     getFollowupAnswers,
     consumePostSubmitDelayMs,
+    prefetchDistractionImage,
+    prefetchQuestionWarningCopies,
+    fetchDistractionImage,
+    getImageCache: getImageCacheEntry,
+    clearImageCache,
+    verifyImageUrl: _verifyImageUrl,
+    // Focus selection cache for images (survives sessionStorage clearing)
+    getCachedFocusSelection: () => _cachedFocusSelection,
+    setCachedFocusSelection: (value) => { 
+      _cachedFocusSelection = value; 
+      console.log('[StressTriggers] Set cached focus selection:', value);
+    },
     // Q6 interception helpers
     isOptionFeedbackInterceptionEnabled: () => state.optionFeedbackInterceptionEnabled,
     getOptionFeedbackInterceptionCount: () => state.optionFeedbackInterceptionCount,
@@ -7504,7 +8874,7 @@ function ensureStemOptionsInQuestion(q, parts) {
       const label = (opt?.label || "").trim();
       const text = (opt?.text || "").trim();
       if (!label && !text) return "";
-      return `<div class="stem-option-row"><strong>${label}${label ? ")" : ""}</strong> ${text}</div>`;
+      return `<div class="stem-option-row"><strong>${label}${label ? ")" : ""}</strong> ${processAcadzaHtml(text)}</div>`;
     })
     .filter(Boolean);
   if (!rows.length) return;
@@ -7529,11 +8899,11 @@ function collectQuestionImageUrls(q) {
       if (typeof src === "string" && src.trim()) urls.push(src.trim());
     });
   }
-  const html = q?.question_html || "";
+  const html = processAcadzaHtml(q?.question_html || "");
   const regex = /<img[^>]+src=["']([^"']+)["']/gi;
   let match = regex.exec(html);
   while (match) {
-    if (match[1]) urls.push(match[1]);
+    if (match[1]) urls.push(processAcadzaHtml(match[1]));
     match = regex.exec(html);
   }
   return urls;
@@ -7558,16 +8928,82 @@ async function preloadQuestionAssets(questions) {
   await Promise.all([...uniqueUrls].map((url) => preloadImage(url)));
 }
 
-function updateTestSubmitButtonState() {
-  if (!btnSubmitQuestion) return;
+function isCurrentQuestionAnswered() {
   const q = testQuestions[testQuestionIndex];
-  if (!q) {
-    btnSubmitQuestion.disabled = true;
-    return;
+  if (!q) return false;
+  return Boolean(answeredMap[q.question_id]);
+}
+
+function lockQuestionInputsForAnswered(q) {
+  if (!q || !answeredMap[q.question_id]) return;
+  if (questionOptions) {
+    questionOptions.classList.add("is-locked");
+    questionOptions.querySelectorAll("input[type=radio]").forEach((input) => {
+      input.disabled = true;
+    });
   }
-  const picked = selectedOptions[q.question_id];
-  const hasValue = Boolean(String(picked || "").trim());
-  btnSubmitQuestion.disabled = !hasValue;
+  if (integerInput) {
+    integerInput.readOnly = true;
+    integerInput.disabled = true;
+  }
+  if (integerPanel) {
+    integerPanel.classList.add("is-locked");
+    integerPanel.querySelectorAll("button").forEach((btn) => {
+      btn.disabled = true;
+    });
+  }
+}
+
+function updateTestNavigationState() {
+  const q = testQuestions[testQuestionIndex];
+  const answered = isCurrentQuestionAnswered();
+  const atLastQuestion = testQuestions.length > 0 && testQuestionIndex >= testQuestions.length - 1;
+
+  if (btnSubmitQuestion) {
+    if (!q) {
+      btnSubmitQuestion.disabled = true;
+      btnSubmitQuestion.textContent = "Submit Answer";
+    } else if (answered) {
+      if (atLastQuestion) {
+        btnSubmitQuestion.disabled = true;
+        btnSubmitQuestion.textContent = "Submitted";
+      } else {
+        btnSubmitQuestion.disabled = submitInFlight || nextInFlight;
+        btnSubmitQuestion.textContent = "Next";
+      }
+    } else {
+      const picked = selectedOptions[q.question_id];
+      const hasValue = Boolean(String(picked || "").trim());
+      btnSubmitQuestion.disabled = submitInFlight || !hasValue;
+      btnSubmitQuestion.textContent = "Submit Answer";
+    }
+  }
+
+  if (btnPrevQuestion) {
+    btnPrevQuestion.disabled = submitInFlight || testQuestionIndex === 0;
+  }
+
+  lockQuestionInputsForAnswered(q);
+}
+
+function updateTestSubmitButtonState() {
+  updateTestNavigationState();
+}
+
+function afterQuestionSubmittedFeedback(correct) {
+  const atLastQuestion = testQuestions.length > 0 && testQuestionIndex >= testQuestions.length - 1;
+  if (atLastQuestion) {
+    setTestHint("Answer saved. You can finish the test when ready.");
+  } else {
+    setTestHint(
+      correct === undefined
+        ? "Answer saved. Tap Next to continue."
+        : correct
+          ? "Correct answer. Tap Next to continue."
+          : "Wrong answer. Tap Next to continue."
+    );
+  }
+  updateTestNavigationState();
 }
 
 function updateSolutionButtonState() {
@@ -7599,6 +9035,11 @@ function updateTestHintForQuestion(q) {
     return;
   }
   setTestHint(row.correct ? "Correct answer." : "Wrong answer.");
+}
+
+function resetSubmitNavigationGuard() {
+  submitInFlight = false;
+  nextInFlight = false;
 }
 
 function advanceAfterSubmit() {
@@ -7669,12 +9110,54 @@ function stripHardQuestionLabel(html) {
   return html.replace(/<strong>\s*HARD\s+QUESTION\s*:\s*<\/strong>\s*/gi, '');
 }
 
+function processAcadzaHtml(html) {
+  if (window.AcadzaRender?.processAcadzaHtml) {
+    return window.AcadzaRender.processAcadzaHtml(html);
+  }
+  return html || "";
+}
+
+function clearQuestionStem(message) {
+  if (questionStem && window.AcadzaRender?.destroy) {
+    window.AcadzaRender.destroy(questionStem);
+  }
+  if (questionStem) questionStem.textContent = message || "";
+}
+
+function buildQuestionStemHtml(q) {
+  const parts = [];
+  if (q?.question_html) {
+    const cleanedHtml = stripHardQuestionLabel(q.question_html);
+    parts.push(stripEmbeddedOptionsFromQuestionHtml(cleanedHtml));
+  }
+  ensureStemOptionsInQuestion(q, parts);
+  if (Array.isArray(q?.question_images)) {
+    q.question_images.forEach((src) => {
+      if (typeof src !== "string" || !src.trim()) return;
+      const url = processAcadzaHtml(src.trim());
+      parts.push(`<div class="q-img"><img src="${url}" alt="question image" /></div>`);
+    });
+  }
+  return parts.join("");
+}
+
+function renderQuestionStemHtml(q, onReady) {
+  if (!questionStem) return;
+  const html = buildQuestionStemHtml(q);
+  if (window.AcadzaRender?.renderInto) {
+    window.AcadzaRender.renderInto(questionStem, html, { onReady });
+    return;
+  }
+  questionStem.innerHTML = processAcadzaHtml(html);
+  if (typeof onReady === "function") onReady();
+}
+
 function renderTestQuestion() {
   if (!questionStem || !questionOptions || !questionCounter) return;
   if (isLoadingTestBank) return;
 
   if (!testQuestions.length) {
-    questionStem.textContent = "Questions will appear here with options.";
+    clearQuestionStem("Questions will appear here with options.");
     questionOptions.innerHTML = "";
     questionCounter.textContent = "Q. 1 of 1";
     if (questionSubject) questionSubject.textContent = "ID: —";
@@ -7682,13 +9165,15 @@ function renderTestQuestion() {
     if (questionProgress) questionProgress.style.width = "0%";
     if (mutateBadge) mutateBadge.style.display = "none";
     if (btnPrevQuestion) btnPrevQuestion.disabled = true;
-    if (btnNextQuestion) btnNextQuestion.disabled = true;
     updateSolutionButtonState();
     return;
   }
 
   testQuestionIndex = Math.min(Math.max(testQuestionIndex, 0), testQuestions.length - 1);
   const q = testQuestions[testQuestionIndex];
+  // Q2/Q6 hard-fog sequences hide stem/options; always restore when switching questions.
+  if (questionStem) questionStem.style.visibility = "visible";
+  if (questionOptions) questionOptions.style.visibility = "visible";
   if (questionCounter) {
     questionCounter.textContent = `Q. ${testQuestionIndex + 1} of ${testQuestions.length}`;
   }
@@ -7717,29 +9202,31 @@ function renderTestQuestion() {
     if (integerPanel) {
       integerPanel.style.display = "flex";
       const existing = selectedOptions[q.question_id] || "";
-      if (integerInput) integerInput.value = existing;
+      const answered = Boolean(answeredMap[q.question_id]);
+      integerPanel.classList.toggle("is-locked", answered);
+      integerPanel.querySelectorAll("button").forEach((btn) => {
+        btn.disabled = answered;
+      });
+      if (integerInput) {
+        integerInput.value = existing;
+        integerInput.readOnly = answered;
+        integerInput.disabled = answered;
+      }
       attachKeypadListeners();
     }
   } else {
-    if (questionOptions) questionOptions.style.display = "grid";
+    if (questionOptions) {
+      questionOptions.style.display = "grid";
+      questionOptions.classList.toggle("is-locked", Boolean(answeredMap[q.question_id]));
+    }
     if (integerPanel) integerPanel.style.display = "none";
   }
   updateSolutionButtonState();
   updateTestHintForQuestion(q);
-  const parts = [];
-  if (q.question_html) {
-    // Strip "HARD QUESTION:" label before rendering
-    const cleanedHtml = stripHardQuestionLabel(q.question_html);
-    parts.push(stripEmbeddedOptionsFromQuestionHtml(cleanedHtml));
-  }
-  ensureStemOptionsInQuestion(q, parts);
-  if (Array.isArray(q.question_images)) {
-    q.question_images.forEach((src) => {
-      parts.push(`<div class="q-img"><img src="${src}" alt="question image" /></div>`);
-    });
-  }
-  questionStem.innerHTML = parts.join("");
-  applyAdaptiveQuestionDensity(q);
+  renderQuestionStemHtml(q, () => {
+    applyAdaptiveQuestionDensity(q);
+    StressTriggers.onQuestionRendered(q);
+  });
   questionOptions.innerHTML = "";
 
   const opts = q.options || [];
@@ -7757,7 +9244,9 @@ function renderTestQuestion() {
       input.name = `option-${q.question_id}`;
       input.value = opt.label;
       input.checked = selectedOptions[q.question_id] === opt.label;
+      input.disabled = Boolean(answeredMap[q.question_id]);
       input.addEventListener("change", () => {
+        if (answeredMap[q.question_id]) return;
         const prev = selectedOptions[q.question_id] || "";
         selectedOptions[q.question_id] = opt.label;
         StressTriggers.onOptionChange(q.question_id, prev, opt.label);
@@ -7788,7 +9277,11 @@ function renderTestQuestion() {
       markEl.textContent = "";
       const textEl = document.createElement("div");
       textEl.className = "option-text";
-      textEl.textContent = "";
+      if (window.AcadzaRender?.renderPlainHtml) {
+        window.AcadzaRender.renderPlainHtml(textEl, opt.text || "");
+      } else {
+        textEl.innerHTML = processAcadzaHtml(opt.text || "");
+      }
       body.appendChild(labelEl);
       body.appendChild(markEl);
       body.appendChild(textEl);
@@ -7799,13 +9292,10 @@ function renderTestQuestion() {
     });
   }
 
-  if (btnPrevQuestion) btnPrevQuestion.disabled = testQuestionIndex === 0;
-  if (btnNextQuestion) btnNextQuestion.disabled = testQuestionIndex >= testQuestions.length - 1;
-  updateTestSubmitButtonState();
+  updateTestNavigationState();
   updateScoreMeta();
   updateLifelineState();
   renderResultStateForCurrentQuestion();
-  StressTriggers.onQuestionRendered(q);
 }
 
 /* ── question prefetch metadata ─────────────────────────────────────── */
@@ -7833,7 +9323,7 @@ async function loadTestQuestions() {
   if (questionTypeSelect) questionTypeSelect.options[0].textContent = "";
   if (questionProgress) questionProgress.style.width = "0%";
   clearMutationTimers();
-  questionStem.textContent = "";
+  clearQuestionStem("");
   questionOptions.innerHTML = "";
   try {
     let payload = {};
@@ -7873,6 +9363,7 @@ async function loadTestQuestions() {
 
     testQuestions = data.questions || [];
     testQuestionIndex = 0;
+    resetSubmitNavigationGuard();
     if (!testQuestions.length) {
       setTestHint("No questions returned. Add IDs to data/question_ids.csv.");
       questionCounter.textContent = "Questions unavailable";
@@ -7880,6 +9371,12 @@ async function loadTestQuestions() {
     }
     selectedOptions = {};
     answeredMap = {};
+    
+    // Clear focus selection data after test questions load successfully
+    // This prevents re-starting the session on page refresh
+    console.log('[loadTestQuestions] Clearing focus selection data from sessionStorage');
+    sessionStorage.removeItem('focusSelection');
+    sessionStorage.removeItem('initialText');
     
     // Fetch trigger plan for Focus Zones test
     await fetchQuestionTriggerPlan();
@@ -7893,6 +9390,7 @@ async function loadTestQuestions() {
     console.error("[loadTestQuestions] FAILED:", err, err?.stack);
     testQuestions = cloneClientFallbackQuestions();
     testQuestionIndex = 0;
+    resetSubmitNavigationGuard();
     selectedOptions = {};
     answeredMap = {};
     setTestBankLoading(true, "Caching fallback assets...");
@@ -7908,51 +9406,37 @@ async function loadTestQuestions() {
   }
 }
 
+function buildLocalNewUserTriggerPlan() {
+  const sequence = LOCAL_NEW_USER_TRIGGER_NAMES.map((trigger_name, idx) => ({
+    question_number: idx + 1,
+    trigger_name,
+    difficulty: idx >= 3 ? "hard" : "medium",
+    intensity: idx < 2 ? "mild" : idx < 4 ? "moderate" : "high",
+    is_hard: idx >= 3,
+    is_meta_question: false,
+  }));
+  return {
+    status: "success",
+    is_new_user: true,
+    user_type: "new",
+    total_questions: 5,
+    medium_count: sequence.filter((t) => !t.is_hard).length,
+    hard_count: sequence.filter((t) => t.is_hard).length,
+    sequence,
+  };
+}
+
+function ensureQuestionTriggerPlan() {
+  questionTriggerPlan = buildLocalNewUserTriggerPlan();
+}
+
 async function fetchQuestionTriggerPlan() {
-  try {
-    // Get user from auth system
-    const user = window.StressDostAuth?.getUser?.();
-    
-    // Get previous triggers from localStorage
-    const previousTriggers = JSON.parse(localStorage.getItem('previousTriggers') || '[]');
-    
-    const userProfile = {
-      name: user?.display_name || '',
-      test_count: user?.completed_sessions || 0,
-      completed_sessions: user?.completed_sessions || 0,  // Send both fields for backend compatibility
-      previous_triggers: previousTriggers
-    };
-    
-    // Extract question difficulties from loaded questions
-    const questionDifficulties = testQuestions.map(q => (q.level || 'MEDIUM').toUpperCase());
-    
-    console.log('[fetchQuestionTriggerPlan] Fetching trigger plan for user:', userProfile);
-    console.log('[fetchQuestionTriggerPlan] Question difficulties:', questionDifficulties);
-    
-    const response = await postJSON('/api/questions/trigger-plan', {
-      user_profile: userProfile,
-      question_difficulties: questionDifficulties
-    });
-    
-    questionTriggerPlan = response;
-    console.log('[fetchQuestionTriggerPlan] Trigger plan received:', questionTriggerPlan);
-    console.log('[fetchQuestionTriggerPlan] Sequence:', questionTriggerPlan?.sequence);
-    console.log('[fetchQuestionTriggerPlan] User type:', questionTriggerPlan?.user_type);
-    console.log('[fetchQuestionTriggerPlan] Is new user:', questionTriggerPlan?.is_new_user);
-    
-    // Store for next test
-    if (response.sequence && Array.isArray(response.sequence)) {
-      const triggerNames = response.sequence.map(t => t.trigger_name);
-      localStorage.setItem('previousTriggers', JSON.stringify(triggerNames));
-    }
-  } catch (err) {
-    console.error('[fetchQuestionTriggerPlan] Failed to fetch trigger plan:', err);
-    console.error('[fetchQuestionTriggerPlan] Error details:', err.message, err.stack);
-    questionTriggerPlan = null;
-  }
+  questionTriggerPlan = buildLocalNewUserTriggerPlan();
+  console.log("[fetchQuestionTriggerPlan] Using fixed trigger sequence for all sessions");
 }
 
 function getQuestionTrigger(questionNumber) {
+  ensureQuestionTriggerPlan();
   console.log('[getQuestionTrigger] Called for question:', questionNumber);
   console.log('[getQuestionTrigger] questionTriggerPlan:', questionTriggerPlan);
   
@@ -8070,62 +9554,69 @@ async function mutateQuestionAt(index) {
   }
 }
 
+function goToNextQuestionFromSubmit() {
+  if (nextInFlight) return;
+  const q = testQuestions[testQuestionIndex];
+  if (!q) return;
+  if (!answeredMap[q.question_id]) {
+    setTestHint("Submit your answer first.");
+    return;
+  }
+  if (testQuestionIndex >= testQuestions.length - 1) {
+    setTestHint("This is the last question. Tap Finish Test when ready.");
+    return;
+  }
+  nextInFlight = true;
+  try {
+    advanceAfterSubmit();
+  } finally {
+    nextInFlight = false;
+    updateTestNavigationState();
+  }
+}
+
 async function submitCurrentQuestion() {
   console.log('[submitCurrentQuestion] Called');
+
+  if (submitInFlight) {
+    console.log('[submitCurrentQuestion] Ignoring duplicate submit while in flight');
+    return;
+  }
   
   if (!testQuestions.length) {
     setTestHint("Load questions first.");
     return;
   }
-  
-  // Q6 HARD_PEER_DOUBT: Intercept submission with option feedback popup (up to 2 times)
-  // Only intercept if we're actually on Q6 (question number 6)
-  const currentQuestionNumber = testQuestionIndex + 1;
-  
-  if (currentQuestionNumber === 6 &&
-      StressTriggers.isOptionFeedbackInterceptionEnabled() && 
-      StressTriggers.getOptionFeedbackInterceptionCount() < StressTriggers.getOptionFeedbackMaxInterceptions()) {
-    
-    const q = testQuestions[testQuestionIndex];
-    const picked = selectedOptions[q.question_id];
-    
-    if (picked) {
-      StressTriggers.incrementOptionFeedbackInterceptionCount();
-      const count = StressTriggers.getOptionFeedbackInterceptionCount();
-      const max = StressTriggers.getOptionFeedbackMaxInterceptions();
-      console.log(`[submitCurrentQuestion] Q6 Interception ${count}/${max}`);
-      
-      // Activate the trigger to set the flags
-      StressTriggers.activateTrigger('optionFeedbackPopups', {
-        userState: StressTriggers.currentUserState(),
-        force: true,
-        reason: `question_trigger:Q6:peer_doubt_interception`,
-        selectedOption: picked,
-        questionId: q.question_id,
-        interceptionNumber: count
-      });
-      
-      // Show the actual popup (maybeShowOptionFeedbackPopup is inside StressTriggers)
-      // We need to trigger it through option click
-      StressTriggers.onOptionClick(q.question_id, picked);
-      
-      // Don't proceed with submission
+
+  const q = testQuestions[testQuestionIndex];
+  if (!q) return;
+
+  if (answeredMap[q.question_id]) {
+    goToNextQuestionFromSubmit();
+    return;
+  }
+
+  const picked = selectedOptions[q.question_id];
+  const qType = (q.question_type || "").toLowerCase();
+
+  if (qType === "integer") {
+    const value = (picked || "").trim();
+    if (!value) {
+      setTestHint("Enter an integer answer first.");
       return;
     }
+  } else if (!picked) {
+    setTestHint("Select an option before submitting.");
+    return;
   }
-  
+
+  submitInFlight = true;
+  if (btnSubmitQuestion) btnSubmitQuestion.disabled = true;
+
   await StressTriggers.beforeSubmitDelay();
   try {
-    const q = testQuestions[testQuestionIndex];
-    const picked = selectedOptions[q.question_id];
-    const qType = (q.question_type || "").toLowerCase();
-
     if (qType === "integer") {
       const value = (picked || "").trim();
-      if (!value) {
-        setTestHint("Enter an integer answer first.");
-        return;
-      }
       const correctVal = q.integer_answer;
       let correct = false;
       const hasAnswerKey = correctVal !== undefined && correctVal !== null;
@@ -8145,44 +9636,31 @@ async function submitCurrentQuestion() {
       if (!correct && _lifelines > 0) _lifelines -= 1;
       console.log('[submitCurrentQuestion] Lifelines:', lifelinesBeforeDecrement, '→', _lifelines, 'Correct:', correct);
       updateLifelineState();
-      
-      // Check if test should end due to lifeline loss
+
       if (_lifelines <= 0) {
         console.log('[submitCurrentQuestion] All lifelines lost! Showing end screen');
-        
-        // Capture the time used at this moment
         const timeUsedAtEnd = StressTriggers.timeUsedMs();
         console.log('[submitCurrentQuestion] timeUsedAtEnd:', timeUsedAtEnd);
-        
-        // Cancel all pending triggers
         cancelPendingTriggers();
-        
-        // Deactivate all active triggers immediately
         if (typeof StressTriggers !== 'undefined' && StressTriggers.deactivateAllTriggers) {
           StressTriggers.deactivateAllTriggers();
           console.log('[submitCurrentQuestion] Deactivated all triggers');
         }
-        
         showLifelineLostBanner();
         setTimeout(() => {
           showTestEndScreen(timeUsedAtEnd);
         }, 2000);
-        return; // Don't advance to next question
+        return;
       }
-      
+
       StressTriggers.noteAnswerOutcome(correct, hasAnswerKey);
-      setTestHint("Answer saved.");
       const extraDelayMs = StressTriggers.consumePostSubmitDelayMs?.() || 0;
       if (extraDelayMs > 0) await sleep(extraDelayMs);
       await sleep(SOLUTION_GRACE_MS);
-      advanceAfterSubmit();
+      afterQuestionSubmittedFeedback(correct);
       return;
     }
 
-    if (!picked) {
-      setTestHint("Select an option before submitting.");
-      return;
-    }
     const correctAnswer = q.correct_answer || q.correct_answers;
     const hasAnswerKey =
       (Array.isArray(correctAnswer) && correctAnswer.length > 0) ||
@@ -8230,33 +9708,82 @@ async function submitCurrentQuestion() {
     
     renderResultStateForCurrentQuestion();
     StressTriggers.noteAnswerOutcome(correct, hasAnswerKey);
-    setTestHint(correct ? "Correct answer." : "Wrong answer.");
     const extraDelayMs = StressTriggers.consumePostSubmitDelayMs?.() || 0;
     await sleep(900 + extraDelayMs + SOLUTION_GRACE_MS);
-    advanceAfterSubmit();
+    afterQuestionSubmittedFeedback(correct);
   } finally {
+    submitInFlight = false;
     StressTriggers.afterSubmit();
+    updateTestNavigationState();
   }
 }
 
 // Flow ---------------------------------------------------------------------
 async function startSessionFlow() {
+  console.log('[startSessionFlow] Starting...');
+  console.log('[startSessionFlow] Focus data:', sessionStorage.getItem('focusSelection'));
+  console.log('[startSessionFlow] Initial text:', sessionStorage.getItem('initialText'));
+  
   try {
     if (mediaRecorder && mediaRecorder.state === "recording") {
       setIntroHint("Stop the recording first.");
       return;
     }
 
-    btnStart.disabled = true;
+    if (btnStart) btnStart.disabled = true;
     showStage("loading", recordedAudioBlob ? "Transcribing your recording..." : "Absorbing your story...");
+    
+    // Check for focus selection data from new flow
+    const focusData = sessionStorage.getItem('focusSelection');
+    const storedInitialText = sessionStorage.getItem('initialText');
+    
+    if (focusData && storedInitialText) {
+      // Set lastAnswerEcho with limited length for loading screen display
+      const limitedText = storedInitialText.length > 80 
+        ? storedInitialText.substring(0, 77) + '...' 
+        : storedInitialText;
+      lastAnswerEcho = limitedText;
+      console.log('[Focus Selection] ========================================');
+      console.log('[Focus Selection] CACHING FOCUS DATA');
+      console.log('[Focus Selection] Raw data:', focusData);
+      console.log('[Focus Selection] Initial text:', storedInitialText);
+      
+      // Cache focus selection data GLOBALLY so it survives everything
+      try {
+        const parsedFocusData = JSON.parse(focusData);
+        console.log('[Focus Selection] Parsed:', parsedFocusData);
+        console.log('[Focus Selection] Challenges:', parsedFocusData.challenges);
+        console.log('[Focus Selection] Details:', parsedFocusData.details);
+        
+        // Store in GLOBAL variable - most reliable
+        window.__focusSelectionCache = parsedFocusData;
+        console.log('[Focus Selection] ✓✓✓ STORED IN GLOBAL CACHE');
+        
+        // Also store in StressTriggers for redundancy
+        if (typeof StressTriggers !== 'undefined' && StressTriggers.setCachedFocusSelection) {
+          StressTriggers.setCachedFocusSelection(parsedFocusData);
+          console.log('[Focus Selection] ✓ Also stored in StressTriggers');
+        }
+        
+        // Verify it's accessible
+        console.log('[Focus Selection] Verification - window.__focusSelectionCache:', window.__focusSelectionCache);
+        console.log('[Focus Selection] ========================================');
+      } catch (e) {
+        console.error('[Focus Selection] ❌ FAILED TO CACHE:', e);
+      }
+    }
+    
     const text = await resolveInitialText();
     if (!text) {
-      setIntroHint("Please share a few thoughts first.");
-      showStage("intro");
+      // No text - redirect to focus selection
+      window.location.href = '/focus_selection.html';
       return;
     }
 
     lastAnswerEcho = text;
+    sessionInitialQuery = text;
+    questionWarningCopyCache = new Map();
+    questionWarningCopyPromises = new Map();
 
     setIntroHint("");
     showStage("loading", "Absorbing your story…");
@@ -8264,20 +9791,114 @@ async function startSessionFlow() {
     const startBody = { text };
     const clientUser = clientUserPayload();
     if (clientUser) startBody.client_user = clientUser;
+    
+    // Include focus selection data if available
+    if (focusData) {
+      try {
+        const parsedFocusData = JSON.parse(focusData);
+        startBody.focus_selection = parsedFocusData;
+        
+        // If we have focus selection data, skip Q&A and go straight to devil screen
+        console.log('[Focus Flow] Skipping Q&A, going to devil screen');
+        console.log('[Focus Flow] Start body:', startBody);
+        
+        const data = await postJSON("/session/start", startBody);
+        log("start_session", data);
+        console.log('[Focus Flow] Session started:', data);
+        console.log('[Focus Flow] extracted_subject:', data.extracted_subject);
+        console.log('[Focus Flow] extracted_topics:', data.extracted_topics);
+
+        setSessionUI(data.session_id, data.active_domains);
+        joinSessionRoom(data.session_id);
+        clearGhost();
+        
+        // Set academic decision from extracted data
+        if (data.extracted_subject) {
+          window.__academicDecision = {
+            autoPickedSubject: data.extracted_subject,
+            autoPickedTopics: data.extracted_topics || null
+          };
+          console.log('[Focus Flow] Set academic decision:', window.__academicDecision);
+        } else {
+          window.__academicDecision = null;
+          console.log('[Focus Flow] No subject extracted from backend');
+        }
+        
+        // Build followup-like history from focus data for devil screen
+        const followupHistory = parsedFocusData.challenges.map((challenge, idx) => ({
+          answer: `${challenge.text}${idx === parsedFocusData.challenges.length - 1 && parsedFocusData.details ? '. ' + parsedFocusData.details : ''}`,
+          domain: 'focus_challenge',
+          slot: challenge.value
+        }));
+        
+        // Store for StressTriggers
+        if (typeof StressTriggers !== 'undefined' && StressTriggers.recordFollowupAnswer) {
+          followupHistory.forEach(f => {
+            StressTriggers.recordFollowupAnswer(f.answer, f.domain, f.slot, '');
+          });
+        }
+        
+        // Create a full text version that includes details for AI analysis
+        const fullText = parsedFocusData.challenges.map(c => c.text).join(', ') + 
+                        (parsedFocusData.details ? '. ' + parsedFocusData.details : '');
+        
+        // Also create a short version for display (just challenge names)
+        const shortText = parsedFocusData.challenges.map(c => c.text).join(', ');
+        
+        console.log('[Focus Flow] Full text for AI:', fullText);
+        console.log('[Focus Flow] Short text for display:', shortText);
+        console.log('[Focus Flow] Followup history:', followupHistory);
+        
+        // Go to devil screen with full text for AI analysis
+        console.log('[Focus Flow] Building devil brief page...');
+        await buildDevilBriefPage(fullText, followupHistory);
+        console.log('[Focus Flow] Devil brief page built, showing devil stage...');
+        
+        // Prefetch distraction images NOW so they're ready by Q1-Q3
+        console.log('[Focus Flow] Prefetching distraction images...');
+        try {
+          if (typeof StressTriggers !== 'undefined' && StressTriggers.prefetchDistractionImage) {
+            // Extract followup texts for image relevance
+            const followupTexts = followupHistory.map(f => String(f.answer || "").trim()).filter(Boolean);
+            StressTriggers.prefetchDistractionImage(fullText, followupTexts);
+            console.log('[Focus Flow] Image prefetch started with', followupTexts.length, 'followups');
+          }
+        } catch (err) {
+          console.warn('[Focus Flow] Image prefetch failed:', err);
+        }
+        
+        showStage("devil");
+        
+        // DON'T clear sessionStorage yet - keep it for image prefetch
+        // It will be cleared after images are loaded or when test starts
+        // sessionStorage.removeItem('focusSelection');
+        // sessionStorage.removeItem('initialText');
+        
+        if (btnStart) btnStart.disabled = false;
+        return;
+      } catch (e) {
+        console.error('[Focus Selection] Error in focus flow:', e);
+        alert('Error starting session: ' + e.message);
+        // Fall through to normal flow
+      }
+    }
+    
+    // Normal flow without focus selection
     const data = await postJSON("/session/start", startBody);
     log("start_session", data);
 
     setSessionUI(data.session_id, data.active_domains);
     joinSessionRoom(data.session_id);
-    setSuggestions([]);
+    clearGhost();
 
     await fetchNextQuestion("Finding the first question…");
   } catch (err) {
     log("start_error", err.message);
-    setIntroHint(err.message);
-    showStage("intro");
+    alert(err.message || 'Failed to start session. Please try again.');
+    // Redirect to focus selection on error
+    window.location.href = '/focus_selection.html';
   } finally {
-    btnStart.disabled = false;
+    if (btnStart) btnStart.disabled = false;
   }
 }
 
@@ -8317,6 +9938,12 @@ async function submitAnswer() {
   // CRITICAL: Deactivate all triggers immediately when user submits
   // This prevents triggers from overlapping with the next question
   StressTriggers.deactivateAllTriggers();
+
+  // Remove persistent Q3 screen flip on answer submit
+  const shell = document.querySelector(".app-shell");
+  if (shell && shell.dataset.psyqFlipActive === "1") {
+    shell._psyqFlipCleanup?.();
+  }
   
   if (!sessionId || btnAnswer.disabled) return;
   const answer = answerInput.value.trim();
@@ -8360,34 +9987,114 @@ async function submitAnswer() {
   }
 }
 
+// Called by btnSkip (followup QA screen) — skips remaining followup questions, no popup
 async function skipRemainingQuestions() {
-  // CRITICAL: Deactivate all triggers when skipping
-  StressTriggers.deactivateAllTriggers();
-  
   if (!sessionId || !btnSkip || btnSkip.hidden || btnSkip.disabled) return;
   try {
     btnSkip.disabled = true;
     btnAnswer.disabled = true;
-    showStage("loading", "Skipping remaining questions…");
+    showStage("loading", "Finishing session…");
     await postJSON(`/session/${sessionId}/complete`, {});
-    
-    // Increment test count for trigger plan
-    const testCount = parseInt(localStorage.getItem('testCount')) || 0;
-    localStorage.setItem('testCount', testCount + 1);
-    console.log('[skipRemainingQuestions] Test count incremented to:', testCount + 1);
-    
     await handleCompletion();
   } catch (err) {
     log("skip_error", err.message);
-    setHint(err.message || "Could not skip right now.");
+    setHint(err.message || "Could not finish right now.");
     btnSkip.disabled = false;
     btnAnswer.disabled = false;
     showStage("qa");
   }
 }
 
+// Called by btnFinishTest (test topbar) — shows confirmation popup before ending the test
+function finishTestWithConfirm() {
+  const confirmOverlay = document.createElement('div');
+  confirmOverlay.style.cssText = `
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.85);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    backdrop-filter: blur(4px);
+  `;
+
+  confirmOverlay.innerHTML = `
+    <div style="
+      background: linear-gradient(135deg, rgba(30, 30, 40, 0.95), rgba(20, 20, 30, 0.95));
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 16px;
+      padding: 32px;
+      max-width: 420px;
+      width: 100%;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    ">
+      <div style="font-size: 48px; text-align: center; margin-bottom: 16px;">⚠️</div>
+      <div style="font-size: 22px; font-weight: 700; color: #FFFFFF; text-align: center; margin-bottom: 12px;">
+        Finish Test Early?
+      </div>
+      <div style="font-size: 15px; color: rgba(255, 255, 255, 0.7); text-align: center; margin-bottom: 24px; line-height: 1.5;">
+        The test is still in progress. Your results will be calculated based on questions answered so far.
+      </div>
+      <div style="display: flex; gap: 12px;">
+        <button id="confirmNo" style="
+          flex: 1;
+          padding: 14px;
+          background: rgba(255, 255, 255, 0.05);
+          border: 1px solid rgba(255, 255, 255, 0.15);
+          border-radius: 10px;
+          color: #FFFFFF;
+          font-size: 15px;
+          font-weight: 600;
+          cursor: pointer;
+        ">Continue Test</button>
+        <button id="confirmYes" style="
+          flex: 1;
+          padding: 14px;
+          background: rgba(248, 113, 113, 0.15);
+          border: 1px solid rgba(248, 113, 113, 0.3);
+          border-radius: 10px;
+          color: #F87171;
+          font-size: 15px;
+          font-weight: 600;
+          cursor: pointer;
+        ">Finish Now</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(confirmOverlay);
+
+  confirmOverlay.querySelector('#confirmNo').addEventListener('click', () => {
+    confirmOverlay.remove();
+  });
+
+  confirmOverlay.querySelector('#confirmYes').addEventListener('click', async () => {
+    confirmOverlay.remove();
+
+    // Deactivate all stress triggers
+    if (StressTriggers && StressTriggers.deactivateAllTriggers) {
+      StressTriggers.deactivateAllTriggers();
+    }
+
+    // Stop exam timer and get elapsed time
+    let timeUsedMs = 0;
+    if (StressTriggers && StressTriggers.stopExamTimer) {
+      timeUsedMs = StressTriggers.stopExamTimer() || 0;
+    }
+
+    // Increment test count
+    const testCount = parseInt(localStorage.getItem('testCount')) || 0;
+    localStorage.setItem('testCount', testCount + 1);
+    console.log('[finishTestWithConfirm] Test count incremented to:', testCount + 1);
+
+    await showTestEndScreen(timeUsedMs);
+  });
+}
+
 async function handleCompletion() {
-  showStage("loading", "Wrapping up your follow-ups…");
+  showStage("loading", "Absorbing your story…");
   try {
     if (popupSummary) {
       popupSummary.textContent = "Pressure simulation is ready. Accept challenge to begin.";
@@ -8402,20 +10109,74 @@ async function handleCompletion() {
       console.log("[handleCompletion] initialText:", initialText?.substring(0, 80), "history entries:", conversationHistory.length);
     } catch (e) { console.warn("[handleCompletion] debug fetch failed:", e); }
 
-    // Build devil brief page and show it
+    // Stay on loading stage while AI fetches — don't show devil yet
     const extractionPromise = window.academicTopics?.decideAndStore?.(sessionId, initialText, conversationHistory);
-    try { await buildDevilBriefPage(); } catch (e) { console.warn("[handleCompletion] devil brief build failed:", e); }
+    const popupPrefetchPromise = (StressTriggers.prefetchQuestionWarningCopies ? StressTriggers.prefetchQuestionWarningCopies() : Promise.resolve([])).catch((err) => {
+      console.warn("[handleCompletion] popup prefetch failed:", err);
+      return [];
+    });
+    // Start prefetching distraction images NOW (from devil screen) so they're ready by Q1-Q3
+    try {
+      if (typeof StressTriggers !== 'undefined' && StressTriggers.prefetchDistractionImage) {
+        // Pass followup answers from conversation history for better relevance
+        const followupTexts = conversationHistory
+          .filter(h => h.role === "user")
+          .map(h => String(h.text || h.content || "").trim())
+          .filter(Boolean);
+        StressTriggers.prefetchDistractionImage(initialText, followupTexts);
+      }
+    } catch(_) {}
 
-    const decision = await extractionPromise;
+    // Fetch devil brief while still on loading screen
+    const userName = window.StressDostAuth?.getUser?.()?.display_name || "challenger";
+    try {
+      await buildDevilBriefPage(initialText, conversationHistory);
+    } catch (e) {
+      console.error("[handleCompletion] devil brief build FAILED:", e, e?.stack || "");
+      // Pre-fill fallback so devil screen is never empty
+      if (devilTitle) devilTitle.textContent = "The Focus Breaker";
+      if (document.getElementById("devilIntro")) document.getElementById("devilIntro").textContent = `I've analyzed your patterns, ${userName}.`;
+      if (document.getElementById("devilInsightSummary")) document.getElementById("devilInsightSummary").textContent = "Unclear focus patterns need measurement";
+      if (document.getElementById("devilChallengeLine")) document.getElementById("devilChallengeLine").textContent = "Let's see what breaks your concentration first.";
+      const _sub = document.querySelector(".devil-insight-sub");
+      if (_sub) _sub.style.display = "block";
+      if (devilProblems) {
+        devilProblems.style.display = "block";
+        devilProblems.innerHTML = `
+          <li><span class="insight-icon">🔥</span> Your attention baseline needs to be established</li>
+          <li><span class="insight-icon">🔥</span> Focus endurance under pressure is unknown</li>
+        `;
+      }
+    }
+
+    // Now switch to devil stage — content is ready
+    showStage("devil");
+    if (devilHint) devilHint.textContent = "";
+
+    // Non-blocking
+    try { await popupPrefetchPromise; } catch (_) {}
+    let decision = null;
+    try { decision = await extractionPromise; } catch (_) {}
     console.log("[handleCompletion] extraction decision:", JSON.stringify(decision));
     window.__academicDecision = decision || null;
-
-    // Show the devil stage
-    showStage("devil");
   } catch (err) {
-    console.error("[handleCompletion] error, falling through to subject selection:", err);
+    console.error("[handleCompletion] error during completion flow:", err);
     window.__academicDecision = null;
-    try { await acceptDevilChallenge(); } catch (_) { showStage("subjectSelection"); }
+    // Pre-fill fallback then show devil
+    if (devilTitle) devilTitle.textContent = "The Focus Breaker";
+    if (document.getElementById("devilInsightSummary")) document.getElementById("devilInsightSummary").textContent = "Unclear focus patterns need measurement";
+    if (document.getElementById("devilChallengeLine")) document.getElementById("devilChallengeLine").textContent = "Let's see what breaks your concentration first.";
+    if (devilProblems) {
+      devilProblems.style.display = "block";
+      devilProblems.innerHTML = `
+        <li><span class="insight-icon">🔥</span> Your attention baseline needs to be established</li>
+        <li><span class="insight-icon">🔥</span> Focus endurance under pressure is unknown</li>
+      `;
+    }
+    const _sub2 = document.querySelector(".devil-insight-sub");
+    if (_sub2) _sub2.style.display = "block";
+    showStage("devil");
+    if (devilHint) devilHint.textContent = "";
   }
 }
 
@@ -8452,6 +10213,7 @@ async function acceptDevilChallenge() {
 
   // If no subject, go to subject selection
   console.log("[acceptDevilChallenge] no subject → subject screen");
+  console.log("[acceptDevilChallenge] sessionId:", sessionId);
   showStage("subjectSelection");
   await window.academicTopics?.initializeSubjectSelection?.(sessionId, null);
 }
@@ -8487,19 +10249,30 @@ btnReset?.addEventListener("click", resetFlow);
 btnAcceptChallenge?.addEventListener("click", acceptDevilChallenge);
 btnLogout?.addEventListener("click", () => {
   if (confirm('Are you sure you want to logout?')) {
+    // Clear all user data
     window.StressDostAuth?.clearUser?.();
+    
     // Clear localStorage
     try {
       localStorage.removeItem('sd_user');
       localStorage.removeItem('sd_mood');
+      localStorage.removeItem('stress_dost_user_v1');
     } catch (e) {
       console.error('Failed to clear localStorage:', e);
     }
+    
+    // Clear sessionStorage (focus selection data)
+    try {
+      sessionStorage.clear();
+    } catch (e) {
+      console.error('Failed to clear sessionStorage:', e);
+    }
+    
+    // Redirect to login
     window.location.href = "/login";
   }
 });
 btnPrevQuestion?.addEventListener("click", () => gotoQuestion(-1));
-btnNextQuestion?.addEventListener("click", () => gotoQuestion(1));
 btnReloadQuestions?.addEventListener("click", () => loadTestQuestions());
 
 // Fullscreen Management
@@ -8656,8 +10429,12 @@ document.addEventListener('MSFullscreenChange', updateFullscreenStatus);
 // Store the original acceptDevilChallenge logic
 let pendingTestStart = null;
 
+let _proceedingToTest = false;
+
 async function proceedToTest() {
   if (!pendingTestStart) return;
+  if (_proceedingToTest) return; // Prevent double-call
+  _proceedingToTest = true;
   
   const { autoSubject, autoTopics } = pendingTestStart;
   
@@ -8817,295 +10594,301 @@ function showLifelineLostBanner() {
 async function showTestEndScreen(timeUsedMs) {
   console.log('[showTestEndScreen] Called with timeUsedMs:', timeUsedMs);
   
-  // Mark test as inactive - stop monitoring fullscreen
+  // Mark test as inactive IMMEDIATELY — this blocks all trigger activation
   isTestActive = false;
+  _proceedingToTest = false;
   hideFullscreenWarning();
   
-  // Stop the exam timer immediately
-  if (StressTriggers && StressTriggers.stopExamTimer) {
-    StressTriggers.stopExamTimer();
-    console.log('[showTestEndScreen] Stopped exam timer');
+  // Clear session started flag so user can start fresh next time
+  sessionStorage.removeItem('sessionStarted');
+  sessionStorage.removeItem('focusSelection');
+  sessionStorage.removeItem('initialText');
+  
+  // Clear global focus selection cache
+  window.__focusSelectionCache = null;
+  
+  console.log('[showTestEndScreen] Cleared all session flags and caches - user can start fresh');
+  
+  // Kill all triggers completely
+  if (StressTriggers) {
+    if (StressTriggers.deactivateAllTriggers) StressTriggers.deactivateAllTriggers();
+    if (StressTriggers.stopExamTimer) StressTriggers.stopExamTimer();
   }
   
-  // Hide the timer element
-  const timerEl = document.getElementById('questionTimer');
-  if (timerEl) {
-    timerEl.style.display = 'none';
+  // Cancel all pending trigger timeouts
+  cancelPendingTriggers();
+  
+  // Remove any lingering trigger overlays/popups from the DOM
+  document.querySelectorAll('.hard-question-fullscreen, .stress-timer-overlay, .phantom-competitor-bar, .stress-news-diversion, .stress-blackout, .stress-difficulty-check-overlay').forEach(el => el.remove());
+  
+  // Clean up body/shell classes from triggers
+  document.body.classList.remove('stress-blur-attack', 'stress-color-inversion', 'stress-chaos-bg');
+  const shell = document.querySelector('.app-shell');
+  if (shell) {
+    shell.classList.remove('stress-screen-flip', 'stress-wave-distortion', 'stress-heartbeat', 'stress-news-diversion-open');
+    shell.style.transform = '';
+    shell.style.filter = '';
   }
+  
+  // Keep fullscreen — don't exit when showing results
   
   // Calculate stats
   const totalQuestions = testQuestions.length;
+  const answeredCount = Object.keys(answeredMap).length;
   const correctCount = Object.values(answeredMap).filter(a => a.correct).length;
-  const accuracy = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0;
-  const lifelinesLeft = Math.max(0, _lifelines);
-  const lifelinesTotal = 3;
+  const percentage = answeredCount > 0 ? Math.round((correctCount / answeredCount) * 100) : 0;
   
-  // Validate the provided time - should be between 0 and 15 minutes
-  if (!timeUsedMs || timeUsedMs < 0 || timeUsedMs > 900000) {
-    console.warn('[showTestEndScreen] Invalid timeUsedMs:', timeUsedMs, '- using 0');
-    timeUsedMs = 0;
-  }
-  
+  if (!timeUsedMs || timeUsedMs < 0 || timeUsedMs > 900000) timeUsedMs = 0;
   const minutes = Math.floor(timeUsedMs / 60000);
   const seconds = Math.floor((timeUsedMs % 60000) / 1000);
   const timeUsedStr = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
   
-  console.log('[showTestEndScreen] Final stats:', { totalQuestions, correctCount, accuracy, lifelinesLeft, timeUsedStr, timeUsedMs });
+  // Theme
+  let level, ringColor, headline, verdict, ctaText;
+  if (percentage <= 20) {
+    level = "CRITICAL"; ringColor = "#ef4444"; headline = "Needs Attention"; verdict = "Focus broke down early. Identify the pattern and rebuild."; ctaText = "Try Again";
+  } else if (percentage <= 50) {
+    level = "BELOW PAR"; ringColor = "#f97316"; headline = "Room to Grow"; verdict = "Inconsistent under pressure. The gaps are fixable."; ctaText = "Go Again";
+  } else if (percentage <= 75) {
+    level = "AVERAGE"; ringColor = "#eab308"; headline = "Solid Base"; verdict = "Decent hold. One focused session away from the next tier."; ctaText = "Push Further";
+  } else if (percentage <= 89) {
+    level = "STRONG"; ringColor = "#22c55e"; headline = "Well Played"; verdict = "Held focus when it mattered. Keep compounding."; ctaText = "Continue";
+  } else {
+    level = "ELITE"; ringColor = "#06b6d4"; headline = "Exceptional"; verdict = "Peak execution under pressure. Rare territory."; ctaText = "Done";
+  }
+
+  // Switch to results stage — hides test UI completely
+  showStage("results");
   
-  // Calculate focus score (out of 100)
-  const focusScore = Math.min(100, Math.max(0, Math.round(accuracy * 0.7 + (lifelinesLeft / lifelinesTotal) * 30)));
+  const container = document.getElementById("resultsScreen");
+  if (!container) return;
   
-  // Determine verdict
-  let verdict = "Lifelines gone. Lessons earned.";
-  if (lifelinesLeft > 0 && accuracy >= 80) {
-    verdict = "Strong focus. Keep it sharp.";
-  } else if (lifelinesLeft > 0 && accuracy >= 60) {
-    verdict = "Decent effort. Room to grow.";
-  } else if (lifelinesLeft > 0) {
-    verdict = "Focus wavered. Try again.";
+  // Background effects per level (intense glows reaching into the page)
+  let bgEffectHTML = '';
+  if (percentage <= 20) {
+    bgEffectHTML = `
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 0% 50%,rgba(239,68,68,0.18) 0%,transparent 55%);"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 100% 50%,rgba(239,68,68,0.18) 0%,transparent 55%);"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 0%,rgba(239,68,68,0.1) 0%,transparent 40%);animation:resPulse 3s ease-in-out infinite;"></div>`;
+  } else if (percentage <= 50) {
+    bgEffectHTML = `
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 0% 70%,rgba(249,115,22,0.15) 0%,transparent 50%);"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 100% 30%,rgba(249,115,22,0.12) 0%,transparent 50%);"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 100%,rgba(249,115,22,0.1) 0%,transparent 45%);"></div>`;
+  } else if (percentage <= 75) {
+    bgEffectHTML = `
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 0% 30%,rgba(234,179,8,0.12) 0%,transparent 50%);"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 100% 70%,rgba(234,179,8,0.1) 0%,transparent 50%);"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 0%,rgba(234,179,8,0.08) 0%,transparent 40%);"></div>`;
+  } else if (percentage <= 89) {
+    bgEffectHTML = `
+      <div style="position:absolute;inset:0;pointer-events:none;overflow:hidden;" id="resParticles"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 0% 50%,rgba(34,197,94,0.14) 0%,transparent 50%);"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 100% 50%,rgba(34,197,94,0.14) 0%,transparent 50%);"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 100%,rgba(34,197,94,0.08) 0%,transparent 40%);"></div>`;
+  } else {
+    bgEffectHTML = `
+      <div style="position:absolute;inset:0;pointer-events:none;overflow:hidden;" id="resParticles"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 0% 40%,rgba(6,182,212,0.18) 0%,transparent 50%);"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 100% 60%,rgba(6,182,212,0.18) 0%,transparent 50%);"></div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 0%,rgba(6,182,212,0.12) 0%,transparent 45%);"></div>`;
   }
   
-  const overlay = document.createElement('div');
-  overlay.style.cssText = `
-    position: fixed;
-    inset: 0;
-    background: #0A0A0A;
-    z-index: 10001;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-    animation: fadeIn 0.4s ease;
-  `;
-  
-  overlay.innerHTML = `
+  container.style.background = "#000";
+  container.innerHTML = `
     <style>
-      @keyframes fadeIn {
-        from { opacity: 0; }
-        to { opacity: 1; }
-      }
-      @keyframes slideDown {
-        from { transform: translateX(-50%) translateY(-20px); opacity: 0; }
-        to { transform: translateX(-50%) translateY(0); opacity: 1; }
-      }
-      .focus-score-ring {
-        width: 240px;
-        height: 240px;
-        position: relative;
-      }
-      .focus-score-ring svg {
-        transform: rotate(-90deg);
-      }
-      .focus-score-ring circle {
-        fill: none;
-        stroke-width: 12;
-      }
-      .focus-score-bg {
-        stroke: rgba(255, 255, 255, 0.1);
-      }
-      .focus-score-fill {
-        stroke: #F59E0B;
-        stroke-linecap: round;
-        stroke-dasharray: 628;
-        stroke-dashoffset: ${628 - (628 * focusScore / 100)};
-        transition: stroke-dashoffset 1.5s ease;
-      }
-      .breakdown-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 20px 24px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-      }
-      .breakdown-row:last-child {
-        border-bottom: none;
-      }
-      .breakdown-label {
-        font-size: 16px;
-        color: rgba(255, 255, 255, 0.5);
-        font-weight: 400;
-      }
-      .breakdown-value {
-        font-size: 18px;
-        color: #FFFFFF;
-        font-weight: 600;
-      }
-      .breakdown-value.success {
-        color: #4ADE80;
-      }
-      .breakdown-value.danger {
-        color: #F87171;
-      }
+      @keyframes resPulse { 0%,100%{opacity:0.5;} 50%{opacity:1;} }
+      @keyframes resFloat { 0%{transform:translateY(0) scale(1);opacity:0.6;} 50%{transform:translateY(-20px) scale(1.1);opacity:1;} 100%{transform:translateY(-40px) scale(0.8);opacity:0;} }
     </style>
-    
-    <div style="position: absolute; top: 20px; left: 20px; font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; color: rgba(255, 255, 255, 0.4); font-weight: 600;">FOCUSDOST</div>
-    
-    <button onclick="this.parentElement.remove()" style="
-      position: absolute;
-      top: 20px;
-      right: 20px;
-      background: none;
-      border: none;
-      color: rgba(255, 255, 255, 0.5);
-      font-size: 24px;
-      cursor: pointer;
-      padding: 8px;
-      line-height: 1;
-    ">×</button>
-    
-    <div style="text-align: center; margin-bottom: 40px;">
-      <div style="
-        font-size: 11px;
-        letter-spacing: 0.2em;
-        text-transform: uppercase;
-        color: #D4A574;
-        font-weight: 700;
-        margin-bottom: 32px;
-      ">FOCUS SCORE</div>
+    ${bgEffectHTML}
+    <div style="
+      position:relative;z-index:1;
+      width:100%;max-width:440px;display:flex;flex-direction:column;align-items:center;
+      padding:48px 20px 60px;opacity:0;transform:translateY(14px);
+      transition:opacity 0.8s ease,transform 0.8s ease;
+    " id="resInner">
       
-      <div class="focus-score-ring">
-        <svg width="240" height="240">
-          <circle class="focus-score-bg" cx="120" cy="120" r="100"></circle>
-          <circle class="focus-score-fill" cx="120" cy="120" r="100"></circle>
+      <div style="font-size:12px;letter-spacing:0.3em;text-transform:uppercase;color:rgba(255,255,255,0.3);font-weight:600;margin-bottom:44px;">SESSION COMPLETE</div>
+      
+      <!-- Ring -->
+      <div style="position:relative;width:220px;height:220px;margin-bottom:40px;">
+        <svg width="220" height="220" style="transform:rotate(-90deg);">
+          <circle cx="110" cy="110" r="96" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="7"/>
+          <circle cx="110" cy="110" r="96" fill="none" stroke="${ringColor}" stroke-width="7" stroke-linecap="round"
+            stroke-dasharray="603" stroke-dashoffset="603"
+            style="transition:stroke-dashoffset 2s cubic-bezier(0.4,0,0.15,1) 0.5s;"
+            id="resRingFill"/>
         </svg>
-        <div style="
-          position: absolute;
-          inset: 0;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-        ">
-          <div style="font-size: 72px; font-weight: 700; color: #FFFFFF; line-height: 1;">${focusScore}</div>
-          <div style="font-size: 13px; color: rgba(255, 255, 255, 0.5); margin-top: 8px; letter-spacing: 0.1em; text-transform: uppercase;">OUT OF 100</div>
+        <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;">
+          <span style="font-size:62px;font-weight:800;color:rgba(255,255,255,0.95);letter-spacing:-3px;line-height:1;" id="resPercentNum">0</span>
+          <span style="font-size:15px;color:${ringColor};font-weight:600;margin-top:4px;opacity:0.85;">%</span>
         </div>
       </div>
-    </div>
-    
-    <div style="margin-bottom: 40px; text-align: center;">
+      
+      <!-- Level badge -->
       <div style="
-        font-size: 11px;
-        letter-spacing: 0.2em;
-        text-transform: uppercase;
-        color: #D4A574;
-        font-weight: 700;
-        margin-bottom: 12px;
-      ">VERDICT</div>
-      <div style="
-        font-size: 20px;
-        font-weight: 400;
-        color: #FFFFFF;
-        line-height: 1.4;
-      ">${verdict}</div>
+        font-size:13px;letter-spacing:0.18em;text-transform:uppercase;
+        color:${ringColor};font-weight:700;margin-bottom:14px;opacity:0.9;
+      ">${level}</div>
+      <div style="font-size:28px;font-weight:700;color:rgba(255,255,255,0.92);margin-bottom:10px;letter-spacing:-0.3px;">${headline}</div>
+      <div style="font-size:16px;color:rgba(255,255,255,0.5);text-align:center;line-height:1.6;margin-bottom:44px;max-width:320px;">${verdict}</div>
+      
+      <!-- Stats -->
+      <div style="width:100%;display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:rgba(255,255,255,0.06);border-radius:12px;overflow:hidden;margin-bottom:44px;">
+        <div style="background:#0a0a0a;padding:24px 12px;text-align:center;">
+          <div style="font-size:28px;font-weight:800;color:rgba(255,255,255,0.92);">${correctCount}<span style="font-size:15px;font-weight:500;color:rgba(255,255,255,0.35);">/${answeredCount}</span></div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.12em;margin-top:8px;">Correct</div>
+        </div>
+        <div style="background:#0a0a0a;padding:24px 12px;text-align:center;">
+          <div style="font-size:28px;font-weight:800;color:rgba(255,255,255,0.92);">${answeredCount}<span style="font-size:15px;font-weight:500;color:rgba(255,255,255,0.35);">/${totalQuestions}</span></div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.12em;margin-top:8px;">Attempted</div>
+        </div>
+        <div style="background:#0a0a0a;padding:24px 12px;text-align:center;">
+          <div style="font-size:28px;font-weight:800;color:rgba(255,255,255,0.92);">${timeUsedStr}</div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.12em;margin-top:8px;">Duration</div>
+        </div>
+      </div>
+      
+      <!-- CTA -->
+      <button onclick="window.location.href='/'" style="
+        width:100%;padding:18px;border:1px solid rgba(255,255,255,0.12);border-radius:10px;
+        background:transparent;color:rgba(255,255,255,0.75);font-size:16px;font-weight:600;
+        cursor:pointer;letter-spacing:0.03em;transition:all 0.2s;
+      " onmouseover="this.style.background='rgba(255,255,255,0.06)';this.style.color='rgba(255,255,255,0.95)'" onmouseout="this.style.background='transparent';this.style.color='rgba(255,255,255,0.75)'">${ctaText}</button>
     </div>
-    
-    <div id="breakdown-toggle" style="
-      font-size: 13px;
-      color: rgba(255, 255, 255, 0.5);
-      font-style: italic;
-      cursor: pointer;
-      margin-bottom: 20px;
-      user-select: none;
-    ">tap for breakdown ↓</div>
-    
-    <div id="breakdown-panel" style="
-      width: 100%;
-      max-width: 440px;
-      background: rgba(255, 255, 255, 0.02);
-      border: 1px solid rgba(255, 255, 255, 0.05);
-      border-radius: 16px;
-      overflow: hidden;
-      margin-bottom: 32px;
-      display: none;
-    ">
-      <div class="breakdown-row">
-        <div class="breakdown-label">Accuracy</div>
-        <div class="breakdown-value success">${accuracy}%</div>
-      </div>
-      <div class="breakdown-row">
-        <div class="breakdown-label">Correct</div>
-        <div class="breakdown-value">${correctCount} of ${totalQuestions}</div>
-      </div>
-      <div class="breakdown-row">
-        <div class="breakdown-label">Lifelines left</div>
-        <div class="breakdown-value ${lifelinesLeft === 0 ? 'danger' : ''}">${lifelinesLeft} of ${lifelinesTotal}</div>
-      </div>
-      <div class="breakdown-row">
-        <div class="breakdown-label">Time used</div>
-        <div class="breakdown-value">${timeUsedStr}</div>
-      </div>
-      <div class="breakdown-row">
-        <div class="breakdown-label">Distractions survived</div>
-        <div class="breakdown-value">0 of 0</div>
-      </div>
-    </div>
-    
-    <button onclick="window.location.href='/'" style="
-      width: 100%;
-      max-width: 440px;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      border-radius: 12px;
-      color: #FFFFFF;
-      font-size: 16px;
-      font-weight: 600;
-      padding: 16px 24px;
-      cursor: pointer;
-      transition: all 0.2s;
-    " onmouseover="this.style.background='rgba(255, 255, 255, 0.08)'" onmouseout="this.style.background='rgba(255, 255, 255, 0.05)'">Home</button>
   `;
   
-  document.body.appendChild(overlay);
+  // Animate in
+  requestAnimationFrame(() => {
+    const inner = document.getElementById("resInner");
+    if (inner) { inner.style.opacity = "1"; inner.style.transform = "translateY(0)"; }
+    
+    // Animate ring fill
+    setTimeout(() => {
+      const ring = document.getElementById("resRingFill");
+      if (ring) ring.style.strokeDashoffset = String(603 - (603 * percentage / 100));
+    }, 100);
+    
+    // Animate percentage counter
+    let current = 0;
+    const target = percentage;
+    const numEl = document.getElementById("resPercentNum");
+    if (numEl && target > 0) {
+      const step = Math.max(1, Math.floor(target / 40));
+      const interval = setInterval(() => {
+        current += step;
+        if (current >= target) { current = target; clearInterval(interval); }
+        numEl.textContent = String(current);
+      }, 30);
+    }
+    
+    // Floating particles for good/excellent
+    if (percentage > 75) {
+      const particleContainer = document.getElementById("resParticles");
+      if (particleContainer) {
+        for (let i = 0; i < 12; i++) {
+          const p = document.createElement("div");
+          const size = Math.random() * 3 + 2;
+          p.style.cssText = `
+            position:absolute;bottom:0;
+            left:${Math.random() * 100}%;
+            width:${size}px;height:${size}px;
+            background:${ringColor};border-radius:50%;opacity:0;
+            animation:resFloat ${3 + Math.random() * 4}s ease-in-out ${Math.random() * 3}s infinite;
+          `;
+          particleContainer.appendChild(p);
+        }
+      }
+    }
+  });
   
-  // Increment completed_sessions when test ends (await to ensure it completes)
+  // Effects per level
+  if (percentage <= 20) {
+    // No celebration — just the pulsing vignette
+  } else if (percentage <= 50) {
+    // Subtle — no confetti
+  } else if (percentage <= 75) {
+    // Mild confetti
+    setTimeout(() => createConfetti(30, ringColor), 1200);
+  } else if (percentage <= 89) {
+    // Good — confetti burst
+    setTimeout(() => createConfetti(80, ringColor), 900);
+  } else {
+    // Elite — heavy confetti + delayed second wave
+    setTimeout(() => createConfetti(100, ringColor), 700);
+    setTimeout(() => createConfetti(60, '#FFD700'), 1800);
+  }
+  
+  // Increment completed_sessions
   const user = window.StressDostAuth?.getUser();
   if (user && user.user_id) {
-    console.log('[showTestEndScreen] Incrementing completed session count for user:', user.user_id);
     try {
       const response = await fetch(`/api/user/${user.user_id}/session-complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       });
       const data = await response.json();
-      console.log('[showTestEndScreen] Session completed:', data);
-      
-      // Update local storage with new completed session count
       if (user && data.completed_sessions !== undefined) {
         user.completed_sessions = data.completed_sessions;
         window.StressDostAuth.setUser(user);
-        console.log('[showTestEndScreen] Updated user completed_sessions to:', data.completed_sessions);
-        // Update UI to show new session count
         syncUserUI();
       }
     } catch (err) {
       console.error('[showTestEndScreen] Failed to increment completed session:', err);
     }
   }
+}
+
+function createConfetti(count, baseColor) {
+  const colors = [
+    baseColor,
+    '#FFD700', // Gold
+    '#FF69B4', // Pink
+    '#00CED1', // Cyan
+    '#FF6347', // Tomato
+    '#32CD32', // Lime
+    '#FF1493', // Deep pink
+    '#00FF7F'  // Spring green
+  ];
   
-  // Toggle breakdown
-  const toggle = overlay.querySelector('#breakdown-toggle');
-  const panel = overlay.querySelector('#breakdown-panel');
-  let isExpanded = false;
+  const shapes = ['circle', 'square', 'triangle'];
   
-  toggle.addEventListener('click', () => {
-    isExpanded = !isExpanded;
-    if (isExpanded) {
-      panel.style.display = 'block';
-      toggle.textContent = 'hide breakdown ↑';
-    } else {
-      panel.style.display = 'none';
-      toggle.textContent = 'tap for breakdown ↓';
+  for (let i = 0; i < count; i++) {
+    const confetti = document.createElement('div');
+    confetti.className = 'confetti';
+    
+    const shape = shapes[Math.floor(Math.random() * shapes.length)];
+    const color = colors[Math.floor(Math.random() * colors.length)];
+    const size = Math.random() * 8 + 6; // 6-14px
+    const left = Math.random() * 100; // 0-100%
+    const animationDuration = Math.random() * 2 + 3; // 3-5s
+    const animationDelay = Math.random() * 0.5; // 0-0.5s stagger
+    
+    confetti.style.left = `${left}%`;
+    confetti.style.width = `${size}px`;
+    confetti.style.height = `${size}px`;
+    confetti.style.backgroundColor = color;
+    confetti.style.animation = `confettiFall ${animationDuration}s linear ${animationDelay}s forwards`;
+    
+    // Apply shape-specific styles
+    if (shape === 'circle') {
+      confetti.style.borderRadius = '50%';
+    } else if (shape === 'triangle') {
+      confetti.style.width = '0';
+      confetti.style.height = '0';
+      confetti.style.backgroundColor = 'transparent';
+      confetti.style.borderLeft = `${size/2}px solid transparent`;
+      confetti.style.borderRight = `${size/2}px solid transparent`;
+      confetti.style.borderBottom = `${size}px solid ${color}`;
     }
-  });
-  
-  // Home button handler
-  const homeBtn = overlay.querySelector('button');
-  if (homeBtn) {
-    homeBtn.addEventListener('click', () => {
-      overlay.remove();
-      window.location.href = '/';
-    });
+    // square is default (no border-radius)
+    
+    document.body.appendChild(confetti);
+    
+    // Remove confetti after animation completes
+    setTimeout(() => {
+      confetti.remove();
+    }, (animationDuration + animationDelay) * 1000);
   }
 }
 
@@ -9119,7 +10902,12 @@ function openSolutionModal() {
   const answer = labelAnswer || integerAnswer || "Not available";
   if (solutionAnswerLine) solutionAnswerLine.textContent = `Correct answer: ${answer}`;
   if (solutionContent) {
-    solutionContent.innerHTML = q.solution_html || "<p>Solution not available.</p>";
+    const solutionHtml = q.solution_html || "<p>Solution not available.</p>";
+    if (window.AcadzaRender?.renderInto) {
+      window.AcadzaRender.renderInto(solutionContent, solutionHtml);
+    } else {
+      solutionContent.innerHTML = processAcadzaHtml(solutionHtml);
+    }
   }
   solutionModalOpen = true;
   solutionModal.hidden = false;
@@ -9127,10 +10915,14 @@ function openSolutionModal() {
 
 function closeSolutionModal() {
   if (solutionModal) solutionModal.hidden = true;
+  if (solutionContent && window.AcadzaRender?.destroy) {
+    window.AcadzaRender.destroy(solutionContent);
+    solutionContent.textContent = "";
+  }
   solutionModalOpen = false;
   if (pendingAdvanceAfterSubmit) {
     pendingAdvanceAfterSubmit = false;
-    advanceAfterSubmit();
+    updateTestNavigationState();
   }
 }
 
@@ -9185,8 +10977,11 @@ solutionModal?.addEventListener("click", (evt) => {
   if (evt.target === solutionModal) closeSolutionModal();
 });
 
-btnSubmitQuestion?.addEventListener("click", submitCurrentQuestion);
-btnFinishTest?.addEventListener("click", () => skipRemainingQuestions());
+btnSubmitQuestion?.addEventListener("click", (evt) => {
+  evt.preventDefault();
+  void submitCurrentQuestion();
+});
+btnFinishTest?.addEventListener("click", () => finishTestWithConfirm());
 btnReportError?.addEventListener("click", () => {
   setTestHint("Thanks - the report was captured.");
 });
@@ -9241,74 +11036,145 @@ btnZoomQuestion?.addEventListener("click", () => {
   panel.classList.toggle("is-zoomed");
 });
 
-// Live suggestions for initial text ---------------------------------------
-function setSuggestions(items) {
-  if (!suggestionWrap || !suggestionList) return;
-  const focusShell = document.getElementById("focusShell");
-  suggestionList.innerHTML = "";
-  const list = Array.isArray(items) ? items.filter(Boolean) : [];
-  if (!list.length) {
-    suggestionWrap.hidden = true;
-    focusShell?.classList.remove("has-suggestions");
+// Live suggestions for initial text — inline ghost-text autocomplete ------
+// We use a simple approach: a readonly <textarea> clone sits behind the real one,
+// showing the full merged text. The real textarea has a transparent background.
+// Ghost tail is shown in a faded colour; accepted with Tab or →.
+
+let currentGhostSuggestion = ""; // the full text that would result from accepting
+let ghostSyncScheduled = false;
+
+function getGhostTail(typedValue, fullSuggestion) {
+  const typed = String(typedValue || "");
+  const full  = String(fullSuggestion || "").trim();
+  if (!full) return "";
+
+  const typedLower = typed.toLowerCase();
+  const fullLower  = full.toLowerCase();
+
+  if (fullLower.startsWith(typedLower)) {
+    return full.slice(typed.length); // continuation of what they typed
+  }
+  // Suggestion is a replacement / append — show whole thing after a space
+  const trimmed = typed.trimEnd();
+  return (trimmed ? " " : "") + full;
+}
+
+function renderGhost() {
+  ghostSyncScheduled = false;
+  const textarea = document.getElementById("initialText");
+  const ghost    = document.getElementById("inlineSuggestGhost");
+  const hint     = document.getElementById("inlineSuggestHint");
+  if (!textarea || !ghost) return;
+
+  if (!currentGhostSuggestion) {
+    ghost.textContent = "";
+    if (hint) hint.classList.remove("visible");
     return;
   }
-  list.forEach((text) => {
-    const pill = document.createElement("button");
-    pill.type = "button";
-    pill.className = "suggestion-pill";
-    pill.textContent = text;
-    pill.addEventListener("click", () => applySuggestion(text));
-    suggestionList.appendChild(pill);
-  });
-  suggestionWrap.hidden = false;
-  focusShell?.classList.add("has-suggestions");
+
+  const tail = getGhostTail(textarea.value, currentGhostSuggestion);
+  if (!tail) {
+    ghost.textContent = "";
+    if (hint) hint.classList.remove("visible");
+    return;
+  }
+
+  // Copy exact computed styles from textarea so ghost aligns pixel-perfectly
+  const cs = window.getComputedStyle(textarea);
+  const props = [
+    "padding","paddingTop","paddingRight","paddingBottom","paddingLeft",
+    "fontSize","fontFamily","fontWeight","fontStyle","lineHeight",
+    "letterSpacing","wordSpacing","textIndent","borderTopWidth",
+    "borderRightWidth","borderBottomWidth","borderLeftWidth","boxSizing",
+    "width","overflowX","overflowY","whiteSpace","wordWrap","wordBreak"
+  ];
+  props.forEach(p => { ghost.style[p] = cs[p]; });
+  ghost.style.border       = "1px solid transparent"; // same box model, invisible border
+  ghost.style.borderRadius = cs.borderRadius;
+  ghost.style.background   = "transparent";
+  ghost.style.color        = "transparent"; // typed part invisible
+  ghost.style.position     = "absolute";
+  ghost.style.top          = "0";
+  ghost.style.left         = "0";
+  ghost.style.height       = cs.height;
+  ghost.style.pointerEvents = "none";
+  ghost.style.zIndex       = "0";
+  ghost.style.overflow     = "hidden";
+  ghost.style.resize       = "none";
+  ghost.style.whiteSpace   = "pre-wrap";
+
+  // Build: invisible typed text + visible ghost tail
+  ghost.innerHTML = "";
+  const typedNode = document.createTextNode(textarea.value);
+  const tailSpan  = document.createElement("span");
+  tailSpan.style.cssText = "color: #9ca3af; font-style: normal;";
+  tailSpan.textContent   = tail;
+  ghost.appendChild(typedNode);
+  ghost.appendChild(tailSpan);
+
+  if (hint) {
+    hint.textContent = "Tab";
+    hint.classList.add("visible");
+  }
+}
+
+function scheduleGhostRender() {
+  if (!ghostSyncScheduled) {
+    ghostSyncScheduled = true;
+    requestAnimationFrame(renderGhost);
+  }
+}
+
+function setSuggestions(items) {
+  const input = document.getElementById("initialText");
+  const list  = Array.isArray(items) ? items.filter(Boolean) : [];
+
+  if (!list.length || !input) {
+    currentGhostSuggestion = "";
+    scheduleGhostRender();
+    return;
+  }
+
+  // Take only the single best suggestion (first item)
+  const best   = list[0];
+  currentGhostSuggestion = mergeSuggestionText(input.value, best);
+  scheduleGhostRender();
+}
+
+function clearGhost() {
+  currentGhostSuggestion = "";
+  scheduleGhostRender();
 }
 
 function applySuggestion(text) {
-  const input = $("initialText");
+  const input = document.getElementById("initialText");
   if (!input) return;
-  const current = String(input.value || "");
   const suggestion = String(text || "").trim();
   if (!suggestion) return;
-  input.value = mergeSuggestionText(current, suggestion);
+  // text is already the full merged value (typed + continuation)
+  input.value = suggestion;
   input.selectionStart = input.selectionEnd = input.value.length;
   input.focus();
-  setSuggestions([]);
+  currentGhostSuggestion = "";
+  renderGhost(); // immediate, no rAF needed
 }
 
 function mergeSuggestionText(current, suggestion) {
   const base = String(current || "").trimEnd();
   const next = String(suggestion || "").trim();
   if (!base) return next;
+  if (!next) return base;
 
-  const baseKey = normalizeSuggestionCompare(base);
-  const nextKey = normalizeSuggestionCompare(next);
-  if (!nextKey || baseKey.endsWith(nextKey)) return base;
-  if (nextKey.startsWith(baseKey)) return next;
+  const baseLower = base.toLowerCase();
+  const nextLower = next.toLowerCase();
 
-  return shouldAppendSuggestion(next) ? appendSuggestion(base, next) : next;
-}
+  // If suggestion starts with what user typed, it's a full replacement (legacy)
+  if (nextLower.startsWith(baseLower)) return next;
 
-function normalizeSuggestionCompare(value) {
-  return String(value || "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .toLowerCase();
-}
-
-function shouldAppendSuggestion(suggestion) {
-  const text = String(suggestion || "").trim();
-  if (!text) return false;
-  if (/^[,;:)\]}]/.test(text)) return true;
-  if (/^[a-z]/.test(text)) return true;
-  return /^(and|but|or|so|because|while|when|then|also|plus|which|that|who|where|with|without|for|to|from|about|like|especially|instead|even|as)\b/i.test(text);
-}
-
-function appendSuggestion(base, suggestion) {
-  const next = suggestion.trim();
-  if (/^[,;:)\]}]/.test(next)) return `${base}${next}`;
-  if (/[([{/\-]$/.test(base) || /[–—]$/.test(base)) return `${base}${next}`;
-  return `${base} ${next}`;
+  // Otherwise it's a continuation — append with proper spacing
+  const needsSpace = !base.endsWith(" ") && !next.startsWith(",") && !next.startsWith(".");
+  return base + (needsSpace ? " " : "") + next;
 }
 
 function requestSuggestionsDebounced(rawText) {
@@ -9316,18 +11182,47 @@ function requestSuggestionsDebounced(rawText) {
   suggestTimer = setTimeout(() => {
     const text = (rawText || "").trim();
     if (!text || text.length < 4) {
-      setSuggestions([]);
+      clearGhost();
       return;
     }
     if (!socketInitialized) initSocket();
     if (socket) {
       socket.emit("suggest_request", { text });
     }
-  }, 350);
+  }, 280);
 }
 
-const initialTextEl = $("initialText");
-initialTextEl?.addEventListener("input", (evt) => requestSuggestionsDebounced(evt.target.value));
+(function attachInitialTextListeners() {
+  const el = document.getElementById("initialText");
+  if (!el) return;
+
+  // Tab or → at end of line accepts the ghost
+  el.addEventListener("keydown", (evt) => {
+    if (!currentGhostSuggestion) return;
+    const atEnd = el.selectionStart === el.value.length && el.selectionEnd === el.value.length;
+    if ((evt.key === "Tab" || evt.key === "ArrowRight") && atEnd) {
+      evt.preventDefault();
+      applySuggestion(currentGhostSuggestion);
+    } else if (evt.key === "Escape") {
+      clearGhost();
+    }
+    // Don't clear on every other key — let the input event handle it
+  });
+
+  // On new input: clear ghost immediately, then request a fresh one
+  el.addEventListener("input", (evt) => {
+    currentGhostSuggestion = ""; // wipe without rAF so ghost doesn't flicker
+    renderGhost();
+    requestSuggestionsDebounced(evt.target.value);
+  });
+
+  // Clear ghost when focus leaves
+  el.addEventListener("blur", () => clearGhost());
+})();
+
+
+
+
 
 function attachKeypadListeners() {
   if (integerKeypadListenerAttached) return;
@@ -9339,6 +11234,7 @@ function attachKeypadListeners() {
       if (!key) return;
       const q = testQuestions[testQuestionIndex];
       if (!q || (q.question_type || "").toLowerCase() !== "integer") return;
+      if (answeredMap[q.question_id]) return;
       const current = selectedOptions[q.question_id] || "";
       const next = current + key;
       selectedOptions[q.question_id] = next;
@@ -9348,14 +11244,14 @@ function attachKeypadListeners() {
   }
   btnClearInteger?.addEventListener("click", () => {
     const q = testQuestions[testQuestionIndex];
-    if (!q) return;
+    if (!q || answeredMap[q.question_id]) return;
     selectedOptions[q.question_id] = "";
     if (integerInput) integerInput.value = "";
     updateTestSubmitButtonState();
   });
   btnBackspace?.addEventListener("click", () => {
     const q = testQuestions[testQuestionIndex];
-    if (!q) return;
+    if (!q || answeredMap[q.question_id]) return;
     const current = selectedOptions[q.question_id] || "";
     const next = current.slice(0, -1);
     selectedOptions[q.question_id] = next;
@@ -9364,7 +11260,7 @@ function attachKeypadListeners() {
   });
   integerInput?.addEventListener("input", (evt) => {
     const q = testQuestions[testQuestionIndex];
-    if (!q) return;
+    if (!q || answeredMap[q.question_id]) return;
     selectedOptions[q.question_id] = evt.target.value;
     updateTestSubmitButtonState();
   });
@@ -9385,6 +11281,30 @@ function updateAnswerButtonState() {
   btnAnswer.hidden = !hasText;
 }
 
+// Expose API for academic_topics.js and console debugging
+window.__stressApp = {
+  resetFlow,
+  fetchNextQuestion,
+  submitAnswer,
+  loadTestQuestions,
+  startQuestionPrefetch,
+  submitCurrentQuestion,
+  evaluateUserState: StressTriggers.evaluateUserState,
+  activateTrigger: (name, context = {}) =>
+    StressTriggers.activateTrigger(name, { force: true, manual: true, ...context }),
+  activateTriggerManual: (name) =>
+    StressTriggers.activateTrigger(name, { force: true, manual: true }),
+  activateNarrativeTriggerManual: (name) =>
+    StressTriggers.activateManualShowcaseTrigger(name, { force: true, manual: true }),
+  deactivateTrigger: StressTriggers.deactivateTrigger,
+  getUserId: () => window.StressDostAuth?.getUserId?.() ?? null,
+  buildDevilBriefPage,
+  showStage,
+  setPendingTestStart: (params) => {
+    pendingTestStart = params;
+  },
+};
+
 // Init ---------------------------------------------------------------------
 if (!window.StressDostAuth?.getUser?.()) {
   if (window.StressDostAuth?.redirectToLogin) {
@@ -9394,6 +11314,37 @@ if (!window.StressDostAuth?.getUser?.()) {
   }
 } else {
   syncUserUI();
+  
+  // Check for focus selection data from new flow
+  const focusData = sessionStorage.getItem('focusSelection');
+  const storedInitialText = sessionStorage.getItem('initialText');
+  const sessionStarted = sessionStorage.getItem('sessionStarted'); // Flag to prevent re-start on refresh
+  
+  // If session was already started (on refresh), don't restart - just redirect to focus selection
+  if (sessionStarted === 'true') {
+    console.log('[Init] Session already started (page refresh) - clearing focus data and staying on page');
+    // Clear focus data so it doesn't trigger again
+    sessionStorage.removeItem('focusSelection');
+    sessionStorage.removeItem('initialText');
+    // Don't redirect - user is in the middle of a test or session
+    // The page will show whatever stage is appropriate (test, results, etc.)
+  } else if (focusData && storedInitialText) {
+    // Fresh start - user came from focus selection
+    console.log('[Init] Found focus selection data, starting session immediately');
+    console.log('[Init] Focus data:', focusData);
+    console.log('[Init] Initial text:', storedInitialText);
+    
+    // Mark that we're starting a session to prevent re-start on refresh
+    sessionStorage.setItem('sessionStarted', 'true');
+    
+    // Start session immediately - no delay, no intro screen
+    console.log('[Init] Starting session flow...');
+    startSessionFlow();
+  } else {
+    console.log('[Init] No focus data found, redirecting to focus selection');
+    // No focus data - redirect to focus selection
+    window.location.href = '/focus_selection.html';
+  }
   
   // Show logout button, user name, and session counter if logged in
   const user = window.StressDostAuth?.getUser?.();
@@ -9426,31 +11377,16 @@ if (!window.StressDostAuth?.getUser?.()) {
   
   StressTriggers.attachGlobalListeners();
   // Dev panel removed for production
-  resetFlow();
+  
+  // Only reset flow if NOT starting from focus selection
+  // (resetFlow clears the global cache which we need for images)
+  if (!sessionStorage.getItem('sessionStarted')) {
+    console.log('[Init] Calling resetFlow (no active session)');
+    resetFlow();
+  } else {
+    console.log('[Init] Skipping resetFlow (session in progress)');
+  }
+  
   initSocket();
   setRecordButtonState();
 }
-
-// expose for console debugging
-window.__stressApp = {
-  resetFlow,
-  fetchNextQuestion,
-  submitAnswer,
-  loadTestQuestions,
-  startQuestionPrefetch,
-  submitCurrentQuestion,
-  evaluateUserState: StressTriggers.evaluateUserState,
-  activateTrigger: (name, context = {}) =>
-    StressTriggers.activateTrigger(name, { force: true, manual: true, ...context }),
-  activateTriggerManual: (name) =>
-    StressTriggers.activateTrigger(name, { force: true, manual: true }),
-  activateNarrativeTriggerManual: (name) =>
-    StressTriggers.activateManualShowcaseTrigger(name, { force: true, manual: true }),
-  deactivateTrigger: StressTriggers.deactivateTrigger,
-  getUserId: () => window.StressDostAuth?.getUserId?.() ?? null,
-  buildDevilBriefPage,
-  showStage,
-  setPendingTestStart: (params) => {
-    pendingTestStart = params;
-  },
-};

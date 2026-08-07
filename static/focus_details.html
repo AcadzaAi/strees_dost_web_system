@@ -1,0 +1,817 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=5.0,viewport-fit=cover" />
+  <meta name="theme-color" content="#6d5dfc" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <title>Tell Us More — Focus Dost</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      height: 100vh;
+      overflow: hidden;
+      background: #f3f4f6;
+      font-family: "Manrope", "Segoe UI", system-ui, sans-serif;
+    }
+
+    .app-shell {
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      min-height: 64px;
+      padding: 0 32px;
+      border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+      background: #ffffff;
+      flex-shrink: 0;
+    }
+
+    .app-brand {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      color: #ffffff;
+      font-size: 17px;
+      font-weight: 800;
+      background: linear-gradient(145deg, #6d5dfc, #e17676);
+      box-shadow: 0 8px 18px rgba(109, 93, 252, 0.24);
+    }
+
+    .top-bar h1 {
+      margin: 0;
+      font-size: 13px;
+      letter-spacing: 0.15em;
+      font-weight: 800;
+      color: #0f172a;
+    }
+
+    .top-bar h1 span {
+      letter-spacing: 0.08em;
+      color: #334155;
+    }
+
+    .logout-btn {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #ef4444;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .logout-btn:hover {
+      background: rgba(239, 68, 68, 0.2);
+    }
+
+    .focus-viewport {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: auto;
+      padding: 24px;
+    }
+
+    .details-card {
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(20px);
+      border-radius: 20px;
+      padding: 36px 40px;
+      max-width: 650px;
+      width: 100%;
+      box-shadow: 0 20px 60px rgba(39, 22, 116, 0.15);
+      border: 1px solid rgba(255, 255, 255, 0.4);
+    }
+
+    .details-header {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+
+    .details-header h2 {
+      font-size: 22px;
+      font-weight: 700;
+      color: #0f172a;
+      margin: 0 0 8px 0;
+    }
+
+    .details-header p {
+      font-size: 14px;
+      color: rgba(15, 23, 42, 0.6);
+      margin: 0;
+    }
+
+    .selected-challenges {
+      margin-bottom: 24px;
+    }
+
+    .challenge-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+    }
+
+    .quick-prompts {
+      margin-bottom: 20px;
+    }
+
+    .quick-prompts-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #64748b;
+      margin-bottom: 10px;
+      text-align: center;
+    }
+
+    .quick-prompts-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+
+    .quick-prompt-btn {
+      background: white;
+      border: 2px solid #e2e8f0;
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 500;
+      color: #475569;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-align: left;
+      line-height: 1.4;
+    }
+
+    .quick-prompt-btn:hover {
+      border-color: #8561f9;
+      background: rgba(133, 97, 249, 0.05);
+      color: #8561f9;
+      transform: translateY(-1px);
+    }
+
+    .quick-prompt-btn.selected {
+      background: linear-gradient(120deg, #ff6cab, #8561f9);
+      border-color: #8561f9;
+      color: white;
+      font-weight: 600;
+    }
+
+    .prompts-loading {
+      text-align: center;
+      padding: 20px;
+      color: #94a3b8;
+      font-size: 14px;
+    }
+
+    .completion-suggestions {
+      position: absolute;
+      bottom: 100%;
+      left: 0;
+      right: 0;
+      margin-bottom: 4px;
+      background: white;
+      border: 2px solid #8561f9;
+      border-radius: 10px;
+      box-shadow: 0 -4px 20px rgba(133, 97, 249, 0.2);
+      max-height: 120px;
+      overflow-y: auto;
+      display: none;
+      z-index: 10;
+    }
+
+    .completion-suggestions.show {
+      display: block;
+    }
+
+    .completion-item {
+      padding: 10px 14px;
+      cursor: pointer;
+      font-size: 14px;
+      color: #475569;
+      transition: all 0.15s ease;
+      border-bottom: 1px solid #f1f5f9;
+    }
+
+    .completion-item:last-child {
+      border-bottom: none;
+    }
+
+    .completion-item:hover {
+      background: rgba(133, 97, 249, 0.1);
+      color: #8561f9;
+    }
+
+    .textarea-wrapper {
+      position: relative;
+    }
+
+    .challenge-tag {
+      background: linear-gradient(120deg, #ff6cab, #8561f9);
+      color: white;
+      padding: 10px 18px;
+      border-radius: 999px;
+      font-size: 14px;
+      font-weight: 600;
+      box-shadow: 0 4px 12px rgba(133, 97, 249, 0.25);
+      transition: transform 0.2s ease;
+    }
+
+    .challenge-tag:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(133, 97, 249, 0.35);
+    }
+
+    .details-form-group {
+      margin-bottom: 24px;
+    }
+
+    .details-textarea {
+      width: 100%;
+      min-height: 100px;
+      padding: 16px;
+      border: 2px solid #e2e8f0;
+      border-radius: 12px;
+      font-family: inherit;
+      font-size: 15px;
+      line-height: 1.6;
+      resize: vertical;
+      transition: border-color 0.2s ease;
+    }
+
+    .details-textarea:focus {
+      outline: none;
+      border-color: #8561f9;
+      box-shadow: 0 0 0 3px rgba(133, 97, 249, 0.1);
+    }
+
+    .details-actions {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      margin-top: 24px;
+    }
+
+    .btn {
+      padding: 14px 32px;
+      border: none;
+      border-radius: 10px;
+      font-family: inherit;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .btn-primary {
+      background: linear-gradient(120deg, #ff6cab, #8561f9);
+      color: white;
+      box-shadow: 0 10px 25px rgba(133, 97, 249, 0.3);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 14px 32px rgba(133, 97, 249, 0.4);
+    }
+
+    .btn-ghost {
+      background: transparent;
+      color: #64748b;
+      border: 2px solid #e2e8f0;
+    }
+
+    .btn-ghost:hover {
+      background: #f8fafc;
+      border-color: #cbd5e1;
+    }
+
+    .btn-skip {
+      background: transparent;
+      color: #8561f9;
+      border: none;
+      font-size: 14px;
+      padding: 8px 16px;
+      text-decoration: underline;
+    }
+
+    .btn-skip:hover {
+      color: #6d5dfc;
+    }
+
+    @media (max-width: 768px) {
+      .top-bar {
+        min-height: 56px;
+        padding: 0 16px;
+        gap: 8px;
+      }
+
+      .top-bar h1 {
+        font-size: 11px;
+      }
+
+      .brand-mark {
+        width: 28px;
+        height: 28px;
+        font-size: 14px;
+      }
+
+      .focus-viewport {
+        padding: 16px;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      .details-card {
+        padding: 28px 24px;
+        border-radius: 16px;
+      }
+
+      .details-header h2 {
+        font-size: 20px;
+      }
+
+      .details-header p {
+        font-size: 13px;
+      }
+
+      .challenge-tag {
+        padding: 8px 14px;
+        font-size: 13px;
+      }
+
+      .quick-prompts-title {
+        font-size: 12px;
+      }
+
+      .quick-prompt-btn {
+        padding: 8px 12px;
+        font-size: 12px;
+      }
+
+      .details-textarea {
+        min-height: 90px;
+        font-size: 15px;
+        padding: 14px;
+      }
+
+      .btn {
+        padding: 12px 24px;
+        font-size: 14px;
+      }
+
+      .btn-skip {
+        font-size: 13px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .top-bar {
+        min-height: 52px;
+        padding: 0 12px;
+      }
+
+      .top-bar h1 {
+        font-size: 10px;
+      }
+
+      .top-bar h1 span {
+        display: none;
+      }
+
+      .brand-mark {
+        width: 26px;
+        height: 26px;
+        font-size: 13px;
+      }
+
+      #userNameDisplay {
+        font-size: 12px !important;
+        max-width: 80px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      #sessionCounter {
+        font-size: 11px !important;
+        padding: 3px 6px !important;
+      }
+
+      .logout-btn {
+        padding: 5px 8px !important;
+        font-size: 11px !important;
+      }
+
+      .focus-viewport {
+        padding: 12px;
+      }
+
+      .details-card {
+        padding: 24px 20px;
+      }
+
+      .details-header h2 {
+        font-size: 18px;
+      }
+
+      .details-header p {
+        font-size: 12px;
+      }
+
+      .challenge-tags {
+        gap: 8px;
+      }
+
+      .challenge-tag {
+        padding: 7px 12px;
+        font-size: 12px;
+      }
+
+      .quick-prompts-title {
+        font-size: 11px;
+        margin-bottom: 8px;
+      }
+
+      .quick-prompt-btn {
+        padding: 8px 10px;
+        font-size: 11px;
+      }
+
+      .details-textarea {
+        min-height: 80px;
+        font-size: 15px;
+        padding: 12px;
+      }
+
+      .details-actions {
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .btn {
+        width: 100%;
+        padding: 12px 20px;
+        font-size: 14px;
+      }
+
+      .btn-skip {
+        font-size: 12px;
+        order: -1;
+      }
+
+      .completion-suggestions {
+        max-height: 100px;
+        font-size: 13px;
+      }
+
+      .completion-item {
+        padding: 8px 12px;
+        font-size: 13px;
+      }
+    }
+
+    @media (max-width: 375px) {
+      .details-card {
+        padding: 20px 16px;
+      }
+
+      .details-header h2 {
+        font-size: 17px;
+      }
+
+      .quick-prompts-grid {
+        grid-template-columns: 1fr;
+        gap: 6px;
+      }
+
+      .quick-prompt-btn {
+        text-align: center;
+      }
+
+      .btn {
+        font-size: 13px;
+        padding: 10px 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="top-bar">
+      <div class="app-brand">
+        <div class="brand-mark" aria-hidden="true">☯</div>
+        <div>
+          <h1>FOCUS DOST <span>(v1.0)</span></h1>
+        </div>
+      </div>
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <span id="userNameDisplay" style="font-size: 14px; color: rgba(15, 23, 42, 0.7);"></span>
+        <span id="sessionCounter" style="
+          font-size: 13px;
+          color: #334155;
+          background: rgba(59, 130, 246, 0.1);
+          padding: 4px 10px;
+          border-radius: 12px;
+          font-weight: 600;
+          display: none;
+        ">Sessions: 0</span>
+        <button id="btnLogout" class="logout-btn" title="Logout" type="button">Logout</button>
+      </div>
+    </header>
+
+    <div class="focus-viewport">
+      <div class="details-card">
+        <div class="details-header">
+          <h2>Tell us more</h2>
+          <p>Share what's on your mind (Optional)</p>
+        </div>
+
+        <div class="selected-challenges">
+          <div class="challenge-tags" id="challengeTags"></div>
+        </div>
+
+        <div class="quick-prompts" id="quickPromptsSection">
+          <div class="quick-prompts-title">Quick options (tap to add):</div>
+          <div id="quickPromptsGrid" class="quick-prompts-grid">
+            <div class="prompts-loading">Loading suggestions...</div>
+          </div>
+        </div>
+
+        <div class="details-form-group">
+          <div class="textarea-wrapper">
+            <div id="completionSuggestions" class="completion-suggestions"></div>
+            <textarea 
+              id="detailsText" 
+              class="details-textarea" 
+              placeholder="Or type your own..."
+            ></textarea>
+          </div>
+        </div>
+
+        <div class="details-actions">
+          <button type="button" class="btn btn-ghost" id="btnBack">← Back</button>
+          <button type="button" class="btn btn-skip" id="btnSkip">Skip this step</button>
+          <button type="button" class="btn btn-primary" id="btnContinue">Start Session →</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/auth.js"></script>
+  <script>
+    (function() {
+      const challengeTags = document.getElementById('challengeTags');
+      const detailsText = document.getElementById('detailsText');
+      const quickPromptsGrid = document.getElementById('quickPromptsGrid');
+      const completionSuggestions = document.getElementById('completionSuggestions');
+      const btnContinue = document.getElementById('btnContinue');
+      const btnSkip = document.getElementById('btnSkip');
+      const btnBack = document.getElementById('btnBack');
+      const btnLogout = document.getElementById('btnLogout');
+      const userNameDisplay = document.getElementById('userNameDisplay');
+      const sessionCounter = document.getElementById('sessionCounter');
+
+      let selectedPrompts = [];
+      let completionTimeout = null;
+
+      // Check if user is logged in
+      if (window.StressDostAuth) {
+        const user = window.StressDostAuth.getUser();
+        
+        if (!user) {
+          window.location.href = '/login';
+          return;
+        }
+
+        // Display user info
+        if (userNameDisplay && user.display_name) {
+          userNameDisplay.textContent = user.display_name;
+        }
+        
+        if (sessionCounter && user.completed_sessions !== undefined) {
+          sessionCounter.textContent = `Sessions: ${user.completed_sessions}`;
+          sessionCounter.style.display = 'inline-block';
+        }
+      }
+
+      // Get focus selection data
+      const focusDataStr = sessionStorage.getItem('focusSelection');
+      if (!focusDataStr) {
+        window.location.href = '/focus_selection.html';
+        return;
+      }
+
+      const focusData = JSON.parse(focusDataStr);
+      
+      // Display selected challenges
+      focusData.challenges.forEach(challenge => {
+        const tag = document.createElement('div');
+        tag.className = 'challenge-tag';
+        tag.textContent = challenge.text;
+        challengeTags.appendChild(tag);
+      });
+
+      // Fetch quick prompts from API
+      async function loadQuickPrompts() {
+        try {
+          const response = await fetch('/api/focus-prompts/quick-prompts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ challenges: focusData.challenges })
+          });
+
+          const data = await response.json();
+          
+          if (data.prompts && data.prompts.length) {
+            quickPromptsGrid.innerHTML = '';
+            data.prompts.forEach((prompt, index) => {
+              const btn = document.createElement('button');
+              btn.className = 'quick-prompt-btn';
+              btn.textContent = prompt;
+              btn.type = 'button';
+              btn.dataset.prompt = prompt;
+              
+              btn.addEventListener('click', function() {
+                if (this.classList.contains('selected')) {
+                  // Deselect
+                  this.classList.remove('selected');
+                  selectedPrompts = selectedPrompts.filter(p => p !== prompt);
+                } else {
+                  // Select
+                  this.classList.add('selected');
+                  selectedPrompts.push(prompt);
+                }
+                
+                // Update textarea with selected prompts
+                updateTextareaWithPrompts();
+              });
+              
+              quickPromptsGrid.appendChild(btn);
+            });
+          }
+        } catch (error) {
+          console.error('Error loading quick prompts:', error);
+          quickPromptsGrid.innerHTML = '<div class="prompts-loading">Could not load suggestions</div>';
+        }
+      }
+
+      function updateTextareaWithPrompts() {
+        if (selectedPrompts.length > 0) {
+          detailsText.value = selectedPrompts.join('. ') + '.';
+        } else {
+          detailsText.value = '';
+        }
+      }
+
+      // Text completion
+      async function fetchCompletions(text) {
+        if (text.length < 5) {
+          completionSuggestions.innerHTML = '';
+          completionSuggestions.classList.remove('show');
+          return;
+        }
+
+        try {
+          const response = await fetch('/api/focus-prompts/text-completion', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              text: text,
+              challenges: focusData.challenges
+            })
+          });
+
+          const data = await response.json();
+          
+          if (data.suggestions && data.suggestions.length) {
+            completionSuggestions.innerHTML = '';
+            data.suggestions.forEach(suggestion => {
+              const item = document.createElement('div');
+              item.className = 'completion-item';
+              item.textContent = suggestion;
+              item.addEventListener('click', function() {
+                detailsText.value = text + ' ' + suggestion;
+                completionSuggestions.classList.remove('show');
+                detailsText.focus();
+                // Clear selected prompts since user is typing custom text
+                selectedPrompts = [];
+                document.querySelectorAll('.quick-prompt-btn.selected').forEach(btn => {
+                  btn.classList.remove('selected');
+                });
+              });
+              completionSuggestions.appendChild(item);
+            });
+            completionSuggestions.classList.add('show');
+          } else {
+            completionSuggestions.classList.remove('show');
+          }
+        } catch (error) {
+          console.error('Error fetching completions:', error);
+          completionSuggestions.classList.remove('show');
+        }
+      }
+
+      // Handle textarea input for completions
+      detailsText.addEventListener('input', function() {
+        clearTimeout(completionTimeout);
+        
+        const text = this.value.trim();
+        
+        // If user is typing, deselect all quick prompts
+        if (text && !selectedPrompts.some(p => text.includes(p))) {
+          selectedPrompts = [];
+          document.querySelectorAll('.quick-prompt-btn.selected').forEach(btn => {
+            btn.classList.remove('selected');
+          });
+        }
+        
+        // Fetch completions after 500ms of no typing
+        if (text.length >= 10) {
+          completionTimeout = setTimeout(() => {
+            fetchCompletions(text);
+          }, 500);
+        } else {
+          completionSuggestions.classList.remove('show');
+        }
+      });
+
+      // Hide completions when clicking outside
+      document.addEventListener('click', function(e) {
+        if (!completionSuggestions.contains(e.target) && e.target !== detailsText) {
+          completionSuggestions.classList.remove('show');
+        }
+      });
+
+      // Load quick prompts on page load
+      loadQuickPrompts();
+
+      // Handle continue button
+      function proceedToApp() {
+        const details = detailsText.value.trim();
+        
+        // Update focus data with details
+        focusData.details = details;
+        sessionStorage.setItem('focusSelection', JSON.stringify(focusData));
+
+        // Create text summary for the original flow
+        const summaryText = focusData.challenges.map(c => c.text).join(', ') + 
+          (details ? '. ' + details : '');
+        sessionStorage.setItem('initialText', summaryText);
+
+        // Redirect to main app
+        window.location.href = '/';
+      }
+
+      btnContinue.addEventListener('click', proceedToApp);
+      btnSkip.addEventListener('click', proceedToApp);
+
+      // Handle back button
+      btnBack.addEventListener('click', function() {
+        window.location.href = '/focus_selection.html';
+      });
+
+      // Handle logout button
+      if (btnLogout) {
+        btnLogout.addEventListener('click', function() {
+          if (confirm('Are you sure you want to logout?')) {
+            // Clear user auth
+            if (window.StressDostAuth && window.StressDostAuth.clearUser) {
+              window.StressDostAuth.clearUser();
+            }
+            // Clear all storage
+            sessionStorage.clear();
+            try {
+              localStorage.clear();
+            } catch (e) {
+              console.error('Failed to clear localStorage:', e);
+            }
+            window.location.href = '/login';
+          }
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -75,8 +75,12 @@ def _build_acadza_headers() -> Dict:
 ACADZA_HEADERS = _build_acadza_headers()
 
 
-def _local_fallback_questions(count: int = 7) -> List[Dict]:
-    """Return deterministic local questions when Acadza questions are unavailable."""
+def _local_fallback_questions(
+    count: int = 7,
+    subject: str | None = None,
+    topics: List[str] | None = None,
+) -> List[Dict]:
+    """Return local fallback questions, prioritizing selected subject/topics."""
     bank = [
         {
             "question_id": "fallback-1",
@@ -208,9 +212,30 @@ def _local_fallback_questions(count: int = 7) -> List[Dict]:
         },
     ]
 
-    # Return questions in order: Q1=Easy, Q2=Hard, Q3=Medium, Q4=Medium, Q5=Medium, Q6=Hard, Q7=Easy
+    selected_subject = (subject or "").strip().lower()
+    selected_topics = {str(t).strip().lower() for t in (topics or []) if str(t).strip()}
+
+    prioritized: list[Dict] = []
+    if selected_subject:
+        # 1) Exact subject + topic/chapter matches first
+        if selected_topics:
+            prioritized.extend(
+                q for q in bank
+                if (q.get("subject", "").strip().lower() == selected_subject)
+                and (q.get("chapter", "").strip().lower() in selected_topics)
+            )
+        # 2) Remaining same-subject questions
+        prioritized.extend(
+            q for q in bank
+            if (q.get("subject", "").strip().lower() == selected_subject) and (q not in prioritized)
+        )
+        # 3) Fill with remaining fallback bank
+        prioritized.extend(q for q in bank if q not in prioritized)
+    else:
+        prioritized = list(bank)
+
     out: List[Dict] = []
-    for idx, q in enumerate(bank[:count]):
+    for idx, q in enumerate(prioritized[:count]):
         item = dict(q)
         item["question_index"] = idx + 1
         out.append(item)
@@ -267,25 +292,25 @@ class QuestionIDLoader:
         return random.sample(self.question_ids, count)
 
     def get_test_ids(self, subject: str = None, topics: list = None, is_new_user: bool = True) -> List[str]:
-        """Get 7 unique test IDs: 2 hard + 5 medium, filtered by subject/chapter.
+        """Get 5 unique test IDs: 2 hard + 3 medium, filtered by subject/chapter.
         
         For new users (first session):
-        - Q1: Medium, Q2: Hard, Q3-Q5: Medium, Q6: Hard, Q7: Medium
+        - Q1-Q3: Medium, Q4-Q5: Hard
         
         For returning users:
         - Q1: Always Medium (never hard)
-        - Q2-Q7: Random mix of 2 hard + 4 medium
+        - Q2-Q5: Random mix of 2 hard + 2 medium
         
         Priority: 
-        1. Try to get 2 hard + 5 medium from matching chapter
+        1. Try to get 2 hard + 3 medium from matching chapter
         2. If not enough, fill from same subject
         3. If still not enough, fill from any questions
         
-        Returns list of 7 question IDs.
+        Returns list of 5 question IDs.
         """
-        TARGET = 7
+        TARGET = 5
         HARD_COUNT = 2
-        MEDIUM_COUNT = 5
+        MEDIUM_COUNT = 3
         
         if not self.enriched_data:
             return self.get_random_ids(TARGET)
@@ -407,13 +432,13 @@ class QuestionIDLoader:
         random.shuffle(selected_medium)
         
         if is_new_user:
-            # NEW USER: Fixed positions - Q2 and Q6 are hard
-            # Q1(M), Q2(H), Q3(M), Q4(M), Q5(M), Q6(H), Q7(M)
+            # NEW USER: Fixed positions - Q4 and Q5 are hard
+            # Q1(M), Q2(M), Q3(M), Q4(H), Q5(H)
             medium_idx = 0
             hard_idx = 0
             
             for i in range(TARGET):
-                if i == 1 or i == 5:  # Q2 or Q6 (0-indexed: 1 and 5)
+                if i == 3 or i == 4:  # Q4 or Q5 (0-indexed: 3 and 4)
                     if hard_idx < len(selected_hard):
                         final_questions.append(selected_hard[hard_idx])
                         hard_idx += 1
@@ -429,17 +454,15 @@ class QuestionIDLoader:
                         hard_idx += 1
             
             logger.info(
-                "NEW USER - Fixed positions: Q1=%s, Q2=%s, Q3=%s, Q4=%s, Q5=%s, Q6=%s, Q7=%s",
+                "NEW USER - Fixed positions: Q1=%s, Q2=%s, Q3=%s, Q4=%s, Q5=%s",
                 final_questions[0].get("level") if len(final_questions) > 0 else "N/A",
                 final_questions[1].get("level") if len(final_questions) > 1 else "N/A",
                 final_questions[2].get("level") if len(final_questions) > 2 else "N/A",
                 final_questions[3].get("level") if len(final_questions) > 3 else "N/A",
-                final_questions[4].get("level") if len(final_questions) > 4 else "N/A",
-                final_questions[5].get("level") if len(final_questions) > 5 else "N/A",
-                final_questions[6].get("level") if len(final_questions) > 6 else "N/A"
+                final_questions[4].get("level") if len(final_questions) > 4 else "N/A"
             )
         else:
-            # RETURNING USER: Q1 always medium, Q2-Q7 random mix
+            # RETURNING USER: Q1 always medium, Q2-Q5 random mix
             # Ensure Q1 is medium
             if selected_medium:
                 final_questions.append(selected_medium.pop(0))
@@ -478,38 +501,39 @@ class AcadzaQuestionFetcher:
     def __init__(self, api_url: str, headers: Dict):
         self.api_url = api_url
         self.headers = _build_acadza_headers()
-        self.request_timeout = 10
+        self.request_timeout = 6
+        self.retry_timeout = 4
         raw_verify = os.getenv("ACADZA_VERIFY", "true").strip().lower()
         self.verify_ssl = raw_verify not in {"0", "false", "no"}
         self.cert_path = _CERTIFI_PATH if self.verify_ssl and _CERTIFI_PATH else self.verify_ssl
+        # Persistent session with larger connection pool
+        self._session = requests.Session()
+        self._session.headers.update(self.headers)
+        self._session.verify = self.cert_path
+        # Increase pool size to handle parallel requests
+        adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
+        self._session.mount("https://", adapter)
 
-    def fetch_question(self, question_id: str) -> Optional[Dict]:
+    def fetch_question(self, question_id: str, timeout: int = None) -> Optional[Dict]:
         try:
-            payload = {}
-            headers = self.headers.copy()
-            headers["questionId"] = question_id
-
-            response = requests.post(
+            headers = {"questionId": question_id}
+            response = self._session.post(
                 self.api_url,
-                json=payload,
+                json={},
                 headers=headers,
-                timeout=self.request_timeout,
-                verify=self.cert_path,
+                timeout=timeout or self.request_timeout,
             )
 
             if response.status_code == 200:
                 data = response.json()
                 if isinstance(data, dict) and data.get("status") == "error":
-                    logger.warning("Acadza API error for %s: %s", question_id, data.get("message"))
                     return None
                 if isinstance(data, dict) and data.get("message") == "Auth failed":
                     logger.warning("Acadza API Auth failed for %s", question_id)
                     return None
-                
-                logger.info("Fetched question: %s", question_id)
                 return data
 
-            logger.warning("API returned %s for %s body=%s", response.status_code, question_id, response.text)
+            logger.warning("API returned %s for %s", response.status_code, question_id)
             return None
 
         except requests.Timeout:
@@ -523,32 +547,32 @@ class AcadzaQuestionFetcher:
             return None
 
     def fetch_multiple(self, question_ids: List[str]) -> List[Dict]:
-        """Fetch multiple questions in parallel for better performance."""
-        questions: list[Dict] = []
+        """Fetch multiple questions — sequential with short timeout to avoid pool exhaustion."""
         if not question_ids:
-            return questions
+            return []
 
-        import concurrent.futures
-        import threading
+        fetched: dict[str, Dict] = {}
+        failed_ids: list[str] = []
         
-        # Use ThreadPoolExecutor for parallel HTTP requests
-        max_workers = min(10, len(question_ids))  # Max 10 parallel requests
+        # Fetch sequentially to avoid overwhelming the API
+        for qid in question_ids:
+            data = self.fetch_question(qid, self.request_timeout)
+            if data:
+                fetched[qid] = data
+            else:
+                failed_ids.append(qid)
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all fetch tasks
-            future_to_qid = {executor.submit(self.fetch_question, qid): qid for qid in question_ids}
-            
-            # Collect results as they complete
-            for future in concurrent.futures.as_completed(future_to_qid):
-                qid = future_to_qid[future]
-                try:
-                    data = future.result()
-                    if data:
-                        questions.append(data)
-                except Exception as exc:
-                    logger.error("Question %s fetch failed: %s", qid, exc)
+        # Retry failed ones once
+        if failed_ids:
+            logger.info("Retrying %d failed fetches", len(failed_ids))
+            for qid in failed_ids:
+                data = self.fetch_question(qid, self.retry_timeout)
+                if data:
+                    fetched[qid] = data
         
-        logger.info("Fetched %s/%s questions in parallel", len(questions), len(question_ids))
+        # Preserve original order
+        questions = [fetched[qid] for qid in question_ids if qid in fetched]
+        logger.info("Fetched %s/%s questions", len(questions), len(question_ids))
         return questions
 
 
@@ -733,7 +757,7 @@ def load_test_questions():
 
     question_ids = question_loader.get_test_ids(subject=subject, topics=topics, is_new_user=is_new_user)
     if not question_ids:
-        fallback = _local_fallback_questions(count=7)
+        fallback = _local_fallback_questions(count=5, subject=subject, topics=topics)
         return jsonify(
             {
                 "status": "success",
@@ -747,7 +771,7 @@ def load_test_questions():
 
     raw_questions = acadza_fetcher.fetch_multiple(question_ids)
     if not raw_questions:
-        fallback = _local_fallback_questions(count=7)
+        fallback = _local_fallback_questions(count=5, subject=subject, topics=topics)
         return jsonify(
             {
                 "status": "success",
@@ -758,6 +782,18 @@ def load_test_questions():
                 "timestamp": datetime.utcnow().isoformat(),
             }
         )
+
+    # If we got fewer than 5, try to fetch more from the pool
+    if len(raw_questions) < 5:
+        fetched_ids = {q.get("_id") for q in raw_questions}
+        extra_ids = [qid for qid in question_loader.question_ids if qid not in fetched_ids]
+        needed = 5 - len(raw_questions)
+        if extra_ids:
+            import random as _rand
+            extra_pick = _rand.sample(extra_ids, min(needed * 2, len(extra_ids)))  # Try double to account for failures
+            extra_questions = acadza_fetcher.fetch_multiple(extra_pick)
+            raw_questions.extend(extra_questions[:needed])
+            logger.info("Backfilled %d extra questions (needed %d)", len(extra_questions[:needed]), needed)
 
     formatted = [QuestionFormatter.format_question(q, idx) for idx, q in enumerate(raw_questions)]
 
@@ -840,8 +876,8 @@ def get_trigger_plan():
     {
         "status": "success",
         "is_new_user": true,
-        "total_questions": 7,
-        "medium_count": 5,
+        "total_questions": 5,
+        "medium_count": 3,
         "hard_count": 2,
         "sequence": [
             {
