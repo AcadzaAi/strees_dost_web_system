@@ -207,18 +207,23 @@ def leaderboard():
     ).limit(50)
     entries = [_entry_payload(row) for row in db.session.execute(entries_statement).all()]
 
+    # Materialize the ranked result before selecting the caller.  Filtering in
+    # the same SELECT as the window function would make every caller rank #1.
     # The caller is ranked against all matching rows, even when they do not meet
     # the accuracy board's 20-attempt threshold.
     user_id = request.args.get("userId")
     me = None
     if user_id:
-        me_statement = _ranked_statement(aggregates, metric, require_minimum_attempts=False)
+        me_ranked = _ranked_statement(
+            aggregates,
+            metric,
+            require_minimum_attempts=False,
+        ).subquery()
         me_row = db.session.execute(
-            me_statement.where(aggregates.c.user_id == user_id)
+            select(me_ranked).where(me_ranked.c.user_id == user_id)
         ).first()
         if me_row is not None:
             me = _entry_payload(me_row)
-            entries = [entry for entry in entries if entry["userId"] != user_id]
 
     eligible = _ranked_statement(
         aggregates,
