@@ -72,9 +72,22 @@ def submit_feedback():
     client_ip = request.headers.get("X-Forwarded-For", request.remote_addr)
 
     api_key = os.getenv("RESEND_API_KEY", "").strip()
-    to_email = os.getenv("FEEDBACK_TO_EMAIL", "").strip()
-    if not api_key or not to_email:
-        logger.error("Feedback email not configured (RESEND_API_KEY / FEEDBACK_TO_EMAIL missing)")
+    raw_to_emails = (
+        os.getenv("FEEDBACK_TO_EMAILS", "").strip()
+        or os.getenv("FEEDBACK_TO_EMAIL", "").strip()
+    )
+    to_emails = list(
+        dict.fromkeys(
+            recipient.strip()
+            for recipient in raw_to_emails.split(",")
+            if recipient.strip()
+        )
+    )
+    if not api_key or not to_emails:
+        logger.error(
+            "Feedback email not configured "
+            "(RESEND_API_KEY / FEEDBACK_TO_EMAILS missing)"
+        )
         return jsonify({"error": "Feedback service is not configured"}), 503
 
     try:
@@ -82,12 +95,17 @@ def submit_feedback():
         resend.api_key = api_key
         resend.Emails.send({
             "from": "Acadza Feedback <onboarding@resend.dev>",
-            "to": [to_email],
+            "to": to_emails,
             "subject": f"[Acadza Feedback] {account_type.upper()} — {email}",
             "html": _build_email_html(email, password, account_type, message, client_ip),
-            "reply_to": email if "@" in email else to_email,
+            "reply_to": email if "@" in email else to_emails[0],
         })
-        logger.info("Feedback email sent for email=%s account_type=%s", email, account_type)
+        logger.info(
+            "Feedback email sent for email=%s account_type=%s recipients=%d",
+            email,
+            account_type,
+            len(to_emails),
+        )
         return jsonify({"ok": True, "message": "Feedback sent. Thank you!"})
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Feedback email failed: %s", exc)

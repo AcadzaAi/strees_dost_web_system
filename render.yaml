@@ -39,6 +39,8 @@ services:
         value: /opt/render/project/src/data/question_ids.csv
       - key: RESEND_API_KEY
         sync: false
+      - key: FEEDBACK_TO_EMAILS
+        sync: false
+      # Backward-compatible fallback while existing deployments migrate.
       - key: FEEDBACK_TO_EMAIL
         sync: false
-
