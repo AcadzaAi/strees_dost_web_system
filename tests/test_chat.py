@@ -17,6 +17,8 @@ moderation.settings.OPENAI_API_KEY = ""          # no network in tests
 
 USERS = {"stu1": {"_id":"stu1","name":"Riya","role":"student","reference":"pace","coachingBatch":["apex"]},
          "stu2": {"_id":"stu2","name":"Aman","role":"student","reference":"pace","coachingBatch":["apex"]},
+         "stu3": {"_id":"stu3","name":"Kabir","role":"student","reference":"pace","coachingBatch":[],
+                  "meta":{"spartansCourseMathEnrolled":True,"spartansCoursePhysicsEnrolled":False,"parentPhone":"98"}},
          "teacher1": {"_id":"teacher1","name":"Anshul Sir","role":"teacher","reference":"pace","coachingBatch":[]}}
 def tok(uid, sig="good"):
     b=lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
@@ -117,4 +119,19 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post):
         c.post(f"/api/chat/groups/{ann['id']}/mute", headers=H("stu1"), json={"muted": True})
         t1.emit("send", {"groupId": ann["id"], "clientId":"t-4", "text":"x"}, namespace="/chat", callback=True)
         assert all("stu1" not in ids for ids,_ in sent[-1:]) , sent[-1]
+    # admin tools: find people, batches, switch auto-join off; students can't use them
+    found = c.get("/api/chat/admin/users?q=riy", headers=H("teacher1")).get_json()["users"]
+    assert [u["id"] for u in found] == ["stu1"], found
+    staff = c.get("/api/chat/admin/users?role=staff", headers=H("teacher1")).get_json()["users"]
+    assert [u["id"] for u in staff] == ["teacher1"], staff
+    assert c.get("/api/chat/admin/batches?coaching=pace", headers=H("teacher1")).get_json()["batches"] == ["apex"]
+    assert c.get("/api/chat/admin/users", headers=H("stu1")).status_code == 403
+    upd = c.patch(f"/api/chat/admin/groups/{grp['id']}", headers=H("teacher1"), json={"autoJoin": False}).get_json()
+    assert upd["id"] == grp["id"] and mongo.db().groups.find_one({"_id": grp["id"]})["autoJoin"] is None
+    # a group for several batches: students join by their meta flags, like notifications
+    sp = c.post("/api/chat/admin/groups", headers=H("teacher1"), json={"title":"Spartans","type":"chat","autoJoin":True,
+               "batches":["spartansCourseMathEnrolled","spartansCoursePhysicsEnrolled","spartansCourseChemEnrolled"]}).get_json()
+    mine = [x["id"] for x in c.get("/api/chat/groups", headers=H("stu3")).get_json()["groups"]]
+    assert sp["id"] in mine, mine
+    assert sp["id"] not in [x["id"] for x in c.get("/api/chat/groups", headers=H("stu2")).get_json()["groups"]]
     print("ALL CHAT TESTS PASSED")

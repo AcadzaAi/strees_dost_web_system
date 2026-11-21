@@ -156,6 +156,20 @@ def admin_restrict(group_id, user_id):
     return jsonify({"ok": True})
 
 
+@bp.get("/admin/users")
+@require_admin
+def admin_users():
+    return jsonify({"users": service.search_users(request.args.get("q", ""), request.args.get("coaching"),
+                                                  request.args.get("role"))})
+
+
+@bp.get("/admin/batches")
+@require_admin
+def admin_batches():
+    coaching = request.args.get("coaching") or g.chat_user.coaching
+    return jsonify({"coaching": coaching, "batches": service.known_batches(coaching)})
+
+
 @bp.get("/admin/moderation")
 @require_admin
 def admin_get_rules():

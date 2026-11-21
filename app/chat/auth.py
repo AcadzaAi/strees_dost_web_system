@@ -110,12 +110,13 @@ def verify_token(raw_token: str) -> ChatUser:
     batches = data.get("coachingBatch") or []
     if isinstance(batches, str):
         batches = [batches]
+    batches = list(batches) + _meta_batches(data)
     user = ChatUser(
         id=user_id,
         name=(data.get("name") or data.get("username") or "Student").strip(),
         role=str(data.get("role") or payload.get("role") or "student"),
         coaching=str(data.get("reference") or "acadza").strip().lower() or "acadza",
-        batches=tuple(str(b).strip() for b in batches if str(b).strip()),
+        batches=tuple(dict.fromkeys(str(b).strip() for b in batches if str(b).strip())),
         is_admin=is_admin_id(user_id),
     )
     _remember(user)
@@ -124,6 +125,17 @@ def verify_token(raw_token: str) -> ChatUser:
             _cache.clear()
         _cache[key] = (now + CACHE_TTL_S, user)
     return user
+
+
+def _meta_batches(data: dict) -> list[str]:
+    """Batches the way the notification screen sees them: every meta flag set to true
+    (e.g. meta.spartansCourseMathEnrolled = true, the `value` of a batch in Firebase <brand>Batches)."""
+    out: list[str] = []
+    for key in ("meta", "userMeta"):
+        meta = data.get(key)
+        if isinstance(meta, dict):
+            out += [str(k) for k, v in meta.items() if v is True or str(v).strip().lower() == "true"]
+    return out
 
 
 def _remember(user: ChatUser) -> None:

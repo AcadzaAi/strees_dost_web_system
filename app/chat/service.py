@@ -114,6 +114,7 @@ def group_out(g: dict, member: Optional[dict] = None) -> dict:
         "unread": max(0, last_seq - read),
         "lastReadSeq": read,
         "receipts": {"deliveredSeq": int(g.get("deliveredSeq", 0)), "readSeq": int(g.get("readSeq", 0))},
+        "autoJoin": bool(g.get("autoJoin")),
         "updatedAt": int((g.get("lastMessage") or {}).get("createdAt") or g.get("createdAt") or 0),
     }
 
@@ -440,7 +441,10 @@ def create_group(admin: ChatUser, body: dict) -> dict:
     if gtype not in GROUP_TYPES:
         raise ChatError("bad_type", "type is 'announcement' or 'chat'.")
     coaching = (body.get("coaching") or admin.coaching).strip().lower()
-    batch = (body.get("batch") or "").strip() or None
+    # One batch ("batch") or several ("batches", e.g. Spartans Physics + Chemistry + Math).
+    many = [str(b).strip() for b in (body.get("batches") or []) if str(b).strip()]
+    single = (body.get("batch") or "").strip()
+    batch = many if many else (single or None)
     gid = "g_" + secrets.token_hex(8)
     doc = {
         "_id": gid, "title": title[:80], "description": (body.get("description") or "")[:300],
@@ -460,6 +464,10 @@ def update_group(group_id: str, body: dict) -> dict:
     changes = {k: body[k] for k in ("title", "description") if isinstance(body.get(k), str)}
     if body.get("type") in GROUP_TYPES:
         changes["type"] = body["type"]
+    if isinstance(body.get("autoJoin"), bool):
+        g0 = group_or_404(group_id)
+        changes["autoJoin"] = ({"coaching": g0.get("coaching"), "batch": g0.get("batch") or "*"}
+                               if body["autoJoin"] else None)
     if changes:
         db().groups.update_one({"_id": group_id}, {"$set": changes})
     g = db().groups.find_one({"_id": group_id})
@@ -516,3 +524,29 @@ def list_members(group_id: str) -> list[dict]:
                     "rollNo": m.get("rollNo"), "restrictedUntil": m.get("restrictedUntil") or 0,
                     "online": presence.is_online(m["userId"])})
     return out
+
+
+def search_users(query: str, coaching: Optional[str] = None, role: Optional[str] = None, limit: int = 30) -> list[dict]:
+    """People who have opened the chat at least once, by name or Acadza id (for adding to groups)."""
+    import re
+    q: dict = {}
+    text = (query or "").strip()
+    if text:
+        q["$or"] = [{"_id": text}, {"name": {"$regex": re.escape(text), "$options": "i"}}]
+    if coaching:
+        q["coaching"] = coaching.strip().lower()
+    if role == "staff":
+        q["role"] = {"$in": ["teacher", "admin", "faculty", "mentor"]}
+    elif role:
+        q["role"] = role
+    out = []
+    for u in db().users.find(q, projection={"name": 1, "role": 1, "coaching": 1, "batches": 1}).sort("name", 1).limit(max(1, min(limit, 100))):
+        out.append({"id": u["_id"], "name": u.get("name") or "", "role": u.get("role") or "student",
+                    "coaching": u.get("coaching"), "batches": u.get("batches") or []})
+    return out
+
+
+def known_batches(coaching: Optional[str]) -> list[str]:
+    """Batches seen among this coaching's chat users, to pick from when making a group."""
+    q = {"coaching": coaching.strip().lower()} if coaching else {}
+    return sorted(b for b in db().users.distinct("batches", q) if b)
