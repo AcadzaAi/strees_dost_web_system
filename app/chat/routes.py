@@ -92,6 +92,21 @@ def read(group_id):
     return jsonify({"ok": True, "readSeq": service.mark_read(g.chat_user, group_id, int(_body().get("seq", 0)))})
 
 
+@bp.post("/groups/<group_id>/leave")
+@require_user
+def leave(group_id):
+    service.leave_group(g.chat_user, group_id)
+    return jsonify({"ok": True})
+
+
+@bp.post("/groups/<group_id>/delivered")
+@require_user
+def delivered(group_id):
+    """The phone got the message from a notification while the chat was closed."""
+    service.mark_delivered(g.chat_user, group_id, int(_body().get("seq", 0)))
+    return jsonify({"ok": True})
+
+
 @bp.post("/groups/<group_id>/mute")
 @require_user
 def mute(group_id):
@@ -181,7 +196,12 @@ def manage_remove(group_id, user_id):
 @bp.post("/groups/<group_id>/manage/members/<user_id>/restrict")
 @require_user
 def manage_restrict(group_id, user_id):
-    until = service.restrict_member(g.chat_user, group_id, user_id, int(_body().get("minutes", 0)))
+    b = _body()
+    if b.get("everywhere"):                        # every group where I am an admin
+        service.require_group_admin(g.chat_user, group_id)
+        n = service.restrict_everywhere(g.chat_user, user_id, int(b.get("minutes", 0)))
+        return jsonify({"ok": True, "groups": n})
+    until = service.restrict_member(g.chat_user, group_id, user_id, int(b.get("minutes", 0)))
     return jsonify({"ok": True, "restrictedUntil": until})
 
 
@@ -190,6 +210,18 @@ def manage_restrict(group_id, user_id):
 def manage_role(group_id, user_id):
     service.set_member_role(g.chat_user, group_id, user_id, str(_body().get("role", "")))
     return jsonify({"ok": True})
+
+
+@bp.get("/groups/<group_id>/manage/left")
+@require_user
+def manage_left(group_id):
+    return jsonify({"people": service.left_members(g.chat_user, group_id)})
+
+
+@bp.get("/groups/<group_id>/manage/members/<user_id>")
+@require_user
+def manage_profile(group_id, user_id):
+    return jsonify(service.member_profile(g.chat_user, group_id, user_id))
 
 
 @bp.get("/groups/<group_id>/manage/sources")

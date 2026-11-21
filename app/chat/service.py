@@ -92,12 +92,20 @@ def set_avatar(user: ChatUser, avatar: str) -> str:
     if avatar not in STUDENT_AVATARS:
         raise ChatError("bad_avatar", "Pick one of the characters.")
     db().users.update_one({"_id": user.id}, {"$set": {"avatar": avatar}}, upsert=True)
+    _avatar_cache[user.id] = avatar
     return avatar
 
 
+_avatar_cache: dict[str, str] = {}     # user id -> chosen character (saves a lookup per message)
+
+
 def my_avatar(user: ChatUser) -> str:
-    doc = db().users.find_one({"_id": user.id}, projection={"avatar": 1}) or {}
-    return avatar_of("teacher" if user.is_staff else "student", doc.get("avatar"))
+    if user.is_staff:
+        return TEACHER_AVATAR
+    if user.id not in _avatar_cache:
+        doc = db().users.find_one({"_id": user.id}, projection={"avatar": 1}) or {}
+        _avatar_cache[user.id] = doc.get("avatar") or ""
+    return avatar_of("student", _avatar_cache[user.id])
 
 
 # ── shapes sent to the app ───────────────────────────────────────────────────────────────────
@@ -291,11 +299,20 @@ def group_or_404(group_id: str) -> dict:
     return g
 
 
+def _should_be_admin(user: ChatUser, g: dict, m: dict) -> bool:
+    """The creator, and teachers on CHAT_ADMIN_IDS, always run the groups they are in
+    (also fixes groups made before group admins existed)."""
+    return g.get("createdBy") == user.id or (user.is_admin and m.get("role") in ("teacher", "admin"))
+
+
 def require_group_admin(user: ChatUser, group_id: str) -> tuple[dict, dict]:
     g = group_or_404(group_id)
     if g.get("type") == "direct":
         raise ChatError("forbidden", "Direct chats have no admins.", 403)
     m = membership(group_id, user.id)
+    if m.get("role") != "admin" and _should_be_admin(user, g, m):
+        db().members.update_one({"_id": m["_id"]}, {"$set": {"role": "admin"}})
+        m["role"] = "admin"
     if m.get("role") != "admin":
         raise ChatError("forbidden", "Only the group's admins can do this.", 403)
     return g, m
@@ -316,7 +333,14 @@ def groups_for(user: ChatUser) -> list[dict]:
     members = {m["groupId"]: m for m in db().members.find({"userId": user.id, "removed": {"$ne": True}})}
     if not members:
         return []
-    groups = db().groups.find({"_id": {"$in": list(members)}})
+    groups = [g for g in db().groups.find({"_id": {"$in": list(members)}})
+              # an opened but empty direct chat is only the opener's (the app hides it too)
+              if not (g.get("type") == "direct" and not g.get("lastSeq") and g.get("createdBy") != user.id)]
+    for g in groups:                               # groups made before group admins existed
+        m = members[g["_id"]]
+        if g.get("type") != "direct" and m.get("role") != "admin" and _should_be_admin(user, g, m):
+            db().members.update_one({"_id": m["_id"]}, {"$set": {"role": "admin"}})
+            m["role"] = "admin"
     out = [group_out(g, members[g["_id"]], user.id) for g in groups]
     return sorted(out, key=lambda x: x["updatedAt"], reverse=True)
 
@@ -383,6 +407,7 @@ def _strike(user: ChatUser, group_id: str) -> None:
 
 def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
                  reply_to_seq: Optional[int] = None, origin_sid: Optional[str] = None) -> dict:
+    started = time.time()
     text = (text or "").strip()
     client_id = (client_id or "").strip()[:64] or secrets.token_hex(8)
     if not text:
@@ -393,9 +418,9 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
     g = group_or_404(group_id)
     member = membership(group_id, user.id)
 
-    existing = db().messages.find_one({"groupId": group_id, "clientId": client_id})
+    existing = db().messages.find_one({"groupId": group_id, "clientId": client_id}, projection={"_id": 1})
     if existing:                                   # a resend: the same message, not a new one
-        return message_out(existing)
+        return message_out(db().messages.find_one({"_id": existing["_id"]}))
 
     if not _can_post(g, member):
         if (member.get("restrictedUntil") or 0) > now_ms():
@@ -439,18 +464,44 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
             return message_out(won)
         raise
 
-    shown = display_name(doc["senderRole"], doc["senderName"], doc.get("rollNo"))
-    last = {"seq": seq, "text": text[:160], "senderName": shown, "senderId": user.id, "createdAt": doc["createdAt"]}
-    db().groups.update_one({"_id": group_id}, {"$set": {"lastMessage": last}})
-    db().members.update_one({"_id": member["_id"]}, {"$max": {"lastReadSeq": seq, "lastDeliveredSeq": seq}})
-
+    # Out to everyone right away; the bookkeeping below runs after the sender has its answer.
     out = message_out(doc)
+    if g.get("type") == "direct" and seq == 1:     # the first message: the chat appears for the other person
+        for other in db().members.find({"groupId": group_id, "userId": {"$ne": user.id}}, projection={"userId": 1}):
+            _join_live(other["userId"], group_id, True)
+            _emit("group_added", {"groupId": group_id}, user_room(other["userId"]))
     _emit("message", out, group_room(group_id))
-    if verdict.alert:
-        db().moderation.insert_one({"kind": "alert", "groupId": group_id, "userId": user.id, "name": user.name,
-                                    "text": text, "reasons": ["self-harm"], "createdAt": now_ms(), "seq": seq})
-    _notify(g, doc)
+
+    def after() -> None:
+        try:
+            shown = display_name(doc["senderRole"], doc["senderName"], doc.get("rollNo"))
+            last = {"seq": seq, "text": text[:160], "senderName": shown, "senderId": user.id, "createdAt": doc["createdAt"]}
+            db().groups.update_one({"_id": group_id}, {"$set": {"lastMessage": last}})
+            db().members.update_one({"_id": member["_id"]}, {"$max": {"lastReadSeq": seq, "lastDeliveredSeq": seq}})
+            if verdict.alert:
+                db().moderation.insert_one({"kind": "alert", "groupId": group_id, "userId": user.id, "name": user.name,
+                                            "text": text, "reasons": ["self-harm"], "createdAt": now_ms(), "seq": seq})
+            _notify(g, doc)
+        except Exception:  # noqa: BLE001
+            log.exception("chat: after-send work failed for %s", doc["_id"])
+
+    _background(after)
+    took = int((time.time() - started) * 1000)
+    if took > 400:
+        log.warning("chat: send took %d ms (database far from the server?)", took)
     return out
+
+
+def _background(fn) -> None:
+    """Runs fn after the current request has answered (a green thread on the server)."""
+    if _SYNC_BACKGROUND:
+        fn()
+        return
+    from ..extensions import socketio
+    socketio.start_background_task(fn)
+
+
+_SYNC_BACKGROUND = False       # tests flip this so they can check the results right away
 
 
 def _notify(g: dict, doc: dict) -> None:
@@ -508,23 +559,47 @@ def history(user: ChatUser, group_id: str, before: Optional[int] = None, after: 
 
 
 _receipt_at: dict[str, float] = {}
+_receipt_pending: set[str] = set()
+_RECEIPT_GAP_S = 0.7
 
 
 def _broadcast_receipts(group_id: str) -> None:
-    """One summary per group, at most every 1.5 s: the lowest delivered / read seq of all members."""
-    t = time.time()
-    if t - _receipt_at.get(group_id, 0) < 1.5:
+    """At most one summary per group every 0.7 s, and never a dropped one: a change inside the
+    gap goes out at its end."""
+    wait = _RECEIPT_GAP_S - (time.time() - _receipt_at.get(group_id, 0))
+    if wait <= 0 or _SYNC_BACKGROUND:
+        _send_receipts(group_id)
         return
-    _receipt_at[group_id] = t
-    agg = list(db().members.aggregate([
-        {"$match": {"groupId": group_id, "removed": {"$ne": True}}},
-        {"$group": {"_id": None, "d": {"$min": "$lastDeliveredSeq"}, "r": {"$min": "$lastReadSeq"}}},
-    ]))
-    if not agg:
+    if group_id in _receipt_pending:
         return
-    d, r = int(agg[0].get("d") or 0), int(agg[0].get("r") or 0)
-    db().groups.update_one({"_id": group_id}, {"$set": {"deliveredSeq": d, "readSeq": r}})
-    _emit("receipts", {"groupId": group_id, "deliveredSeq": d, "readSeq": r}, group_room(group_id))
+    _receipt_pending.add(group_id)
+
+    def later() -> None:
+        time.sleep(wait)
+        _receipt_pending.discard(group_id)
+        _send_receipts(group_id)
+
+    _background(later)
+
+
+def _send_receipts(group_id: str) -> None:
+    """The lowest delivered / read seq over members who have the chat app (people who never
+    opened it would keep a message at one tick for ever)."""
+    _receipt_at[group_id] = time.time()
+    try:
+        rows = list(db().members.find({"groupId": group_id, "removed": {"$ne": True}},
+                                      projection={"userId": 1, "lastDeliveredSeq": 1, "lastReadSeq": 1}))
+        if not rows:
+            return
+        with_app = {u["_id"] for u in db().users.find(
+            {"_id": {"$in": [m["userId"] for m in rows]}, "fcmTokens.0": {"$exists": True}}, projection={"_id": 1})}
+        counted = [m for m in rows if m["userId"] in with_app] or rows
+        d = min(int(m.get("lastDeliveredSeq") or 0) for m in counted)
+        r = min(int(m.get("lastReadSeq") or 0) for m in counted)
+        db().groups.update_one({"_id": group_id}, {"$set": {"deliveredSeq": d, "readSeq": r}})
+        _emit("receipts", {"groupId": group_id, "deliveredSeq": d, "readSeq": r}, group_room(group_id))
+    except Exception:  # noqa: BLE001
+        log.exception("chat: receipts failed for %s", group_id)
 
 
 def mark_read(user: ChatUser, group_id: str, seq: int) -> int:
@@ -660,7 +735,7 @@ def open_direct(user: ChatUser, other_id: str) -> dict:
                                   "lastDeliveredSeq": 0, "muted": False, "removed": False}},
                 upsert=True)
             _join_live(uid, gid, True)
-        _emit("group_added", {"groupId": gid}, user_room(other_id))
+        # The other person hears about it with the first message, not when the chat is opened.
     m = membership(gid, user.id)
     return group_out(group_or_404(gid), m, user.id)
 
@@ -777,7 +852,10 @@ def add_members(group_id: str, members: list[dict], source: str = "manual") -> i
             changes["name"] = m["name"].strip()
         if m.get("rollNo") not in (None, ""):
             changes["rollNo"] = str(m["rollNo"]).strip()
-        before = db().members.find_one({"groupId": group_id, "userId": uid}, projection={"removed": 1, "role": 1})
+        before = db().members.find_one({"groupId": group_id, "userId": uid}, projection={"removed": 1, "role": 1, "left": 1})
+        if before and before.get("left") and source != "manual":
+            continue                                    # left by themselves: only "Add back" brings them in
+        changes["left"] = False
         if before and not before.get("removed") and before.get("role") == "admin" and role != "admin":
             changes["role"] = "admin"                   # adding again never demotes an admin
         db().members.update_one(
@@ -840,6 +918,81 @@ def _remove(group_id: str, user_id: str) -> bool:
         _join_live(user_id, group_id, False)
         return True
     return False
+
+
+def leave_group(user: ChatUser, group_id: str) -> None:
+    """Anyone but the creator can leave whenever they like. Only an admin can add them back."""
+    g = group_or_404(group_id)
+    if g.get("type") == "direct":
+        raise ChatError("forbidden", "This is a private chat, not a group.", 403)
+    m = membership(group_id, user.id)
+    if g.get("createdBy") == user.id:
+        raise ChatError("creator", "You created this group. Delete it instead of leaving.", 403)
+    db().members.update_one({"_id": m["_id"]}, {"$set": {"left": True, "leftAt": now_ms()}})
+    _remove(group_id, user.id)
+    system_message(group_id, f"{_person(m, user.name or 'A student')} left the group")
+
+
+def left_members(user: ChatUser, group_id: str) -> list[dict]:
+    """People who left by themselves, newest first, for the admins' "Left the group" list."""
+    require_group_admin(user, group_id)
+    docs = list(db().members.find({"groupId": group_id, "left": True, "removed": True}).sort("leftAt", -1))
+    avatars = _avatars(m["userId"] for m in docs)
+    return [{"userId": m["userId"], "name": m.get("name") or "", "role": m.get("role") or "student",
+             "rollNo": m.get("rollNo"), "leftAt": int(m.get("leftAt") or 0),
+             "avatar": avatar_of(m.get("role"), avatars.get(m["userId"]))} for m in docs]
+
+
+def member_profile(user: ChatUser, group_id: str, user_id: str) -> dict:
+    """What an admin sees on tapping a member: who they are, which groups they are in, how they
+    came in, and whether they are paused."""
+    g, _ = require_group_admin(user, group_id)
+    m = db().members.find_one({"groupId": group_id, "userId": user_id})
+    if not m:
+        raise ChatError("not_member", "That person isn't in this group.", 404)
+    person = db().users.find_one({"_id": user_id}) or {}
+    mine = {x["groupId"]: x for x in db().members.find({"userId": user.id, "removed": {"$ne": True}},
+                                                         projection={"groupId": 1, "role": 1})}
+    groups = []
+    theirs = list(db().members.find({"userId": user_id, "removed": {"$ne": True}},
+                                    projection={"groupId": 1, "role": 1, "restrictedUntil": 1}))
+    titles = {x["_id"]: x for x in db().groups.find({"_id": {"$in": [t["groupId"] for t in theirs]}, "type": {"$ne": "direct"}},
+                                                    projection={"title": 1, "type": 1, "memberCount": 1})}
+    for t in theirs:
+        gd = titles.get(t["groupId"])
+        if not gd:
+            continue
+        groups.append({"id": gd["_id"], "title": gd.get("title") or "", "type": gd.get("type", "chat"),
+                       "memberCount": int(gd.get("memberCount") or 0), "role": t.get("role", "student"),
+                       "iAmIn": gd["_id"] in mine, "iAmAdmin": (mine.get(gd["_id"]) or {}).get("role") == "admin",
+                       "pausedUntil": int(t.get("restrictedUntil") or 0)})
+    groups.sort(key=lambda x: (x["id"] != group_id, x["title"].lower()))
+    last = db().messages.find_one({"groupId": group_id, "senderId": user_id, "type": {"$ne": "system"}},
+                                  sort=[("seq", -1)], projection={"createdAt": 1})
+    return {
+        "userId": user_id, "name": m.get("name") or person.get("name") or "", "role": m.get("role", "student"),
+        "rollNo": m.get("rollNo"), "avatar": avatar_of(m.get("role"), person.get("avatar")),
+        "coaching": person.get("coaching") or "", "batches": person.get("batches") or [],
+        "usesApp": bool(person.get("fcmTokens")), "online": presence.is_online(user_id),
+        "joinedAt": int(m.get("joinedAt") or 0), "sources": m.get("sources") or [],
+        "isCreator": user_id == g.get("createdBy"), "removed": bool(m.get("removed")), "left": bool(m.get("left")),
+        "restrictedUntil": int(m.get("restrictedUntil") or 0),
+        "messageCount": db().messages.count_documents({"groupId": group_id, "senderId": user_id, "type": {"$ne": "system"},
+                                                       "deletedAt": {"$exists": False}}),
+        "lastMessageAt": int((last or {}).get("createdAt") or 0),
+        "groups": groups,
+    }
+
+
+def restrict_everywhere(user: ChatUser, user_id: str, minutes: int) -> int:
+    """Pauses a student in every group where I am an admin and they are a member. Returns how many."""
+    mine = [m["groupId"] for m in db().members.find({"userId": user.id, "role": "admin", "removed": {"$ne": True}},
+                                                     projection={"groupId": 1})]
+    theirs = [m["groupId"] for m in db().members.find({"userId": user_id, "groupId": {"$in": mine}, "role": "student",
+                                                       "removed": {"$ne": True}}, projection={"groupId": 1})]
+    for gid in theirs:
+        restrict_member(user, gid, user_id, minutes)
+    return len(theirs)
 
 
 def set_member_role(user: ChatUser, group_id: str, user_id: str, role: str) -> None:

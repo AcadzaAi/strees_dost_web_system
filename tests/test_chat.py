@@ -12,7 +12,8 @@ from app.chat import mongo
 mongo.use_database(mongomock.MongoClient().db)   # in-memory MongoDB
 from app import create_app
 from app.extensions import socketio
-from app.chat import moderation
+from app.chat import moderation, service as _svc
+_svc._SYNC_BACKGROUND = True                     # after-send work runs inline so tests can check it
 moderation.settings.OPENAI_API_KEY = ""          # no network in tests
 
 USERS = {"stu1": {"_id":"stu1","name":"Riya","role":"student","reference":"pace","coachingBatch":["apex"]},
@@ -253,3 +254,56 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post):
     assert c.delete(f"/api/chat/groups/{i2['id']}/manage", headers=H("teacher1")).status_code == 200
     assert i2["id"] not in [x["id"] for x in c.get("/api/chat/groups", headers=H("stu4")).get_json()["groups"]]
     print("ALL CHAT TESTS PASSED")
+
+# ── speed fixes: delivered from a notification, receipts count only people with the app ──
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post):
+    c = app.test_client(); H=lambda u: {"Authorization": "Bearer "+tok(u)}
+    gq = c.post("/api/chat/admin/groups", headers=H("teacher1"), json={"title":"Receipts","type":"chat","batch":"none-x"}).get_json()
+    c.post(f"/api/chat/groups/{gq['id']}/manage/members", headers=H("teacher1"), json={"members":[{"userId":"stu1"},{"userId":"stu3"}]})
+    mongo.db().users.update_one({"_id":"stu1"},{"$set":{"fcmTokens":[{"token":"x1"}]}}, upsert=True)
+    mongo.db().users.update_one({"_id":"teacher1"},{"$set":{"fcmTokens":[{"token":"x2"}]}}, upsert=True)
+    mongo.db().users.update_one({"_id":"stu3"},{"$set":{"fcmTokens":[]}}, upsert=True)
+    with mock.patch("app.chat.push.send_to_users"):
+        sent = c.post(f"/api/chat/groups/{gq['id']}/messages", headers=H("teacher1"), json={"clientId":"rq-1","text":"hello"}).get_json()["message"]
+    assert mongo.db().groups.find_one({"_id": gq["id"]})["lastMessage"]["text"]=="hello"
+    r = c.post(f"/api/chat/groups/{gq['id']}/delivered", headers=H("stu1"), json={"seq": sent["seq"]})
+    assert r.status_code==200
+    gdoc = mongo.db().groups.find_one({"_id": gq["id"]})
+    assert gdoc["deliveredSeq"]==sent["seq"], gdoc     # stu3 (no app) does not hold it back
+    print("SPEED FIX TESTS PASSED")
+
+# ── empty direct chats, leaving, the left list, member profile, pause everywhere ──
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users"):
+    c = app.test_client(); H=lambda u: {"Authorization": "Bearer "+tok(u)}
+    gz = c.post("/api/chat/admin/groups", headers=H("teacher1"), json={"title":"Leavers","type":"chat","batch":"none-z"}).get_json()
+    gy = c.post("/api/chat/admin/groups", headers=H("teacher1"), json={"title":"Second","type":"chat","batch":"none-y"}).get_json()
+    for gg in (gz, gy):
+        c.post(f"/api/chat/groups/{gg['id']}/manage/members", headers=H("teacher1"), json={"members":[{"userId":"stu1"},{"userId":"teacher2","role":"teacher"}]})
+    # student opens the teacher chat but sends nothing: the teacher must not see it
+    mongo.db().groups.delete_many({"_id": {"$regex": "^dm_.*teacher2"}}); mongo.db().members.delete_many({"groupId": {"$regex": "^dm_.*teacher2"}})
+    dm = c.post("/api/chat/direct", headers=H("stu1"), json={"userId":"teacher2"}).get_json()
+    ids = lambda u: {x["id"] for x in c.get("/api/chat/groups", headers=H(u)).get_json()["groups"]}
+    assert dm["id"] not in ids("teacher2") and dm["id"] in ids("stu1")
+    c.post(f"/api/chat/groups/{dm['id']}/messages", headers=H("stu1"), json={"clientId":"dm-1","text":"Maam, a doubt"})
+    assert dm["id"] in ids("teacher2")
+    # profile
+    pr = c.get(f"/api/chat/groups/{gz['id']}/manage/members/stu1", headers=H("teacher1")).get_json()
+    assert pr["name"]=="Riya" and {x["title"] for x in pr["groups"]} >= {"Leavers","Second"}, pr
+    assert c.get(f"/api/chat/groups/{gz['id']}/manage/members/stu1", headers=H("stu1")).status_code==403
+    # pause everywhere I am admin
+    r = c.post(f"/api/chat/groups/{gz['id']}/manage/members/stu1/restrict", headers=H("teacher1"), json={"minutes":60,"everywhere":True}).get_json()
+    assert r["groups"] >= 2, r
+    # creator can't leave; student can
+    assert c.post(f"/api/chat/groups/{gz['id']}/leave", headers=H("teacher1")).status_code==403
+    assert c.post(f"/api/chat/groups/{gz['id']}/leave", headers=H("stu1")).status_code==200
+    assert gz["id"] not in ids("stu1")
+    left = c.get(f"/api/chat/groups/{gz['id']}/manage/left", headers=H("teacher1")).get_json()["people"]
+    assert [x["userId"] for x in left]==["stu1"]
+    # a bulk add does not bring them back; "Add back" (one by one) does
+    c.post(f"/api/chat/groups/{gz['id']}/manage/members", headers=H("teacher1"), json={"members":[{"userId":"stu1"}],"source":"batch:apex"})
+    assert gz["id"] not in ids("stu1")
+    c.post(f"/api/chat/groups/{gz['id']}/manage/members", headers=H("teacher1"), json={"members":[{"userId":"stu1"}],"source":"manual"})
+    assert gz["id"] in ids("stu1")
+    assert c.get(f"/api/chat/groups/{gz['id']}/manage/left", headers=H("teacher1")).get_json()["people"]==[]
+    print("LEAVE / PROFILE / DM TESTS PASSED")
+
