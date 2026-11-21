@@ -66,6 +66,13 @@ def sender_label(role: str, roll_no: Optional[str]) -> str:
     return f"Roll {roll_no}" if roll_no else ""
 
 
+def display_name(role: str, name: str, roll_no: Optional[str]) -> str:
+    """How a person shows to others: students by roll number, teachers and admins by name."""
+    if role == "student" and roll_no:
+        return f"Roll {roll_no}"
+    return name or "Member"
+
+
 def message_out(m: dict) -> dict:
     deleted = bool(m.get("deletedAt"))
     return {
@@ -265,7 +272,8 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
             return message_out(won)
         raise
 
-    last = {"seq": seq, "text": text[:160], "senderName": doc["senderName"], "senderId": user.id, "createdAt": doc["createdAt"]}
+    shown = display_name(doc["senderRole"], doc["senderName"], doc.get("rollNo"))
+    last = {"seq": seq, "text": text[:160], "senderName": shown, "senderId": user.id, "createdAt": doc["createdAt"]}
     db().groups.update_one({"_id": group_id}, {"$set": {"lastMessage": last}})
     db().members.update_one({"_id": member["_id"]}, {"$max": {"lastReadSeq": seq, "lastDeliveredSeq": seq}})
 
@@ -289,6 +297,7 @@ def _notify(g: dict, doc: dict) -> None:
     if not recipients:
         return
     label = sender_label(doc["senderRole"], doc.get("rollNo"))
+    shown = display_name(doc["senderRole"], doc["senderName"], doc.get("rollNo"))
     push.send_to_users(recipients, {
         "type": "chat_message",
         "groupId": g["_id"],
@@ -297,12 +306,12 @@ def _notify(g: dict, doc: dict) -> None:
         "seq": str(doc["seq"]),
         "messageId": doc["_id"],
         "senderId": doc["senderId"],
-        "senderName": doc["senderName"],
+        "senderName": shown,
         "senderLabel": label,
         "text": doc["text"][:300],
         "createdAt": str(doc["createdAt"]),
         "title": g.get("title", ""),
-        "body": f"{doc['senderName']}: {doc['text'][:200]}",
+        "body": f"{shown}: {doc['text'][:200]}",
     })
 
 

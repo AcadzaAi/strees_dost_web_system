@@ -98,8 +98,9 @@ def on_delivered(data):
 def on_typing(data):
     user = _user()
     gid = str(data.get("groupId", ""))
-    service.membership(gid, user.id)
-    emit("typing", {"groupId": gid, "userId": user.id, "name": user.name, "typing": bool(data.get("typing"))},
+    m = service.membership(gid, user.id)
+    name = service.display_name(m.get("role", "student"), m.get("name") or user.name, m.get("rollNo"))
+    emit("typing", {"groupId": gid, "userId": user.id, "name": name, "typing": bool(data.get("typing"))},
          to=service.group_room(gid), skip_sid=request.sid)
     return {"ok": True}
 
