@@ -170,6 +170,15 @@ def admin_batches():
     return jsonify({"coaching": coaching, "batches": service.known_batches(coaching)})
 
 
+@bp.post("/admin/batch-members")
+@require_admin
+def admin_batch_members():
+    b = _body()
+    return jsonify(service.members_of_batches(request.headers.get("Authorization", ""),
+                                              [str(x) for x in (b.get("userIds") or [])],
+                                              [str(x) for x in (b.get("batches") or [])]))
+
+
 @bp.get("/admin/moderation")
 @require_admin
 def admin_get_rules():

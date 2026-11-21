@@ -445,12 +445,16 @@ def create_group(admin: ChatUser, body: dict) -> dict:
     many = [str(b).strip() for b in (body.get("batches") or []) if str(b).strip()]
     single = (body.get("batch") or "").strip()
     batch = many if many else (single or None)
+    # Every reference this admin's notifications reach (e.g. ANSHUL + 99+JEE): students of all of
+    # them can join, like a notification goes to all of them.
+    coachings = list(dict.fromkeys(
+        [coaching] + [str(c).strip().lower() for c in (body.get("coachings") or []) if str(c).strip()]))
     gid = "g_" + secrets.token_hex(8)
     doc = {
         "_id": gid, "title": title[:80], "description": (body.get("description") or "")[:300],
-        "type": gtype, "coaching": coaching, "batch": batch,
-        # Auto-join: every student of this coaching (and batch, or "*" for all) joins on their own.
-        "autoJoin": {"coaching": coaching, "batch": batch or "*"} if body.get("autoJoin") else None,
+        "type": gtype, "coaching": coaching, "coachings": coachings, "batch": batch,
+        # Auto-join: every student of these coachings (and batches, or "*" for all) joins on their own.
+        "autoJoin": {"coaching": coachings, "batch": batch or "*"} if body.get("autoJoin") else None,
         "createdBy": admin.id, "createdAt": now_ms(), "lastSeq": 0, "lastMessage": None,
         "memberCount": 0, "deliveredSeq": 0, "readSeq": 0,
     }
@@ -466,7 +470,7 @@ def update_group(group_id: str, body: dict) -> dict:
         changes["type"] = body["type"]
     if isinstance(body.get("autoJoin"), bool):
         g0 = group_or_404(group_id)
-        changes["autoJoin"] = ({"coaching": g0.get("coaching"), "batch": g0.get("batch") or "*"}
+        changes["autoJoin"] = ({"coaching": g0.get("coachings") or g0.get("coaching"), "batch": g0.get("batch") or "*"}
                                if body["autoJoin"] else None)
     if changes:
         db().groups.update_one({"_id": group_id}, {"$set": changes})
@@ -550,3 +554,45 @@ def known_batches(coaching: Optional[str]) -> list[str]:
     """Batches seen among this coaching's chat users, to pick from when making a group."""
     q = {"coaching": coaching.strip().lower()} if coaching else {}
     return sorted(b for b in db().users.distinct("batches", q) if b)
+
+
+BATCH_CACHE_S = 12 * 3600
+
+
+def members_of_batches(admin_token: str, user_ids: list[str], batches: list[str]) -> dict:
+    """Which of these people are in any of these batches (their meta flags, like notifications).
+    Asks Acadza for each person once and remembers the answer for 12 hours."""
+    from concurrent.futures import ThreadPoolExecutor
+    from .auth import acadza_details, batches_of
+
+    wanted = {b for b in batches if b}
+    ids = list(dict.fromkeys(u for u in user_ids if u))[:3000]
+    now = now_ms()
+    known = {u["_id"]: u for u in db().users.find(
+        {"_id": {"$in": ids}, "acadzaBatchesAt": {"$gt": now - BATCH_CACHE_S * 1000}},
+        projection={"acadzaBatches": 1})}
+    todo = [u for u in ids if u not in known]
+
+    def fetch(uid: str):
+        data = acadza_details(admin_token, uid)
+        return uid, data
+
+    failed = 0
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        for uid, data in pool.map(fetch, todo):
+            if data is None:
+                failed += 1
+                continue
+            found = batches_of(data)
+            known[uid] = {"acadzaBatches": found}
+            db().users.update_one(
+                {"_id": uid},
+                {"$set": {"acadzaBatches": found, "acadzaBatchesAt": now},
+                 "$setOnInsert": {"name": (data.get("name") or data.get("username") or "").strip(),
+                                  "role": str(data.get("role") or "student"),
+                                  "coaching": str(data.get("reference") or "").strip().lower(),
+                                  "batches": found, "fcmTokens": [], "strikes": []}},
+                upsert=True,
+            )
+    matched = [u for u in ids if wanted & set((known.get(u) or {}).get("acadzaBatches") or [])]
+    return {"userIds": matched, "checked": len(ids), "failed": failed}

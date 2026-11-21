@@ -19,6 +19,8 @@ USERS = {"stu1": {"_id":"stu1","name":"Riya","role":"student","reference":"pace"
          "stu2": {"_id":"stu2","name":"Aman","role":"student","reference":"pace","coachingBatch":["apex"]},
          "stu3": {"_id":"stu3","name":"Kabir","role":"student","reference":"pace","coachingBatch":[],
                   "meta":{"spartansCourseMathEnrolled":True,"spartansCoursePhysicsEnrolled":False,"parentPhone":"98"}},
+         "stu4": {"_id":"stu4","name":"Isha","role":"student","reference":"99+JEE","coachingBatch":[],
+                  "meta":{"ioqmJuniorCourseEnrolled":True}},
          "teacher1": {"_id":"teacher1","name":"Anshul Sir","role":"teacher","reference":"pace","coachingBatch":[]}}
 def tok(uid, sig="good"):
     b=lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
@@ -135,4 +137,13 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post):
     mine = [x["id"] for x in c.get("/api/chat/groups", headers=H("stu3")).get_json()["groups"]]
     assert sp["id"] in mine, mine
     assert sp["id"] not in [x["id"] for x in c.get("/api/chat/groups", headers=H("stu2")).get_json()["groups"]]
+    # which students of a list are in a batch (their meta flags, asked from Acadza)
+    with mock.patch("app.chat.auth.requests.post", side_effect=fake_post):
+        r = c.post("/api/chat/admin/batch-members", headers=H("teacher1"),
+                   json={"userIds": ["stu1", "stu2", "stu3"], "batches": ["spartansCourseMathEnrolled"]}).get_json()
+    assert r["userIds"] == ["stu3"], r
+    # a group across references (ANSHUL-style pace + 99+JEE): students of both join by batch
+    io = c.post("/api/chat/admin/groups", headers=H("teacher1"), json={"title":"IOQM Jr","type":"chat","autoJoin":True,
+               "batches":["ioqmJuniorCourseEnrolled"], "coachings":["PACE","99+JEE"]}).get_json()
+    assert io["id"] in [x["id"] for x in c.get("/api/chat/groups", headers=H("stu4")).get_json()["groups"]]
     print("ALL CHAT TESTS PASSED")

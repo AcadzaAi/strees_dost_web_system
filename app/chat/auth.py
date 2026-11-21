@@ -177,3 +177,29 @@ def require_admin(fn: Callable) -> Callable:
 
 def current_user() -> Optional[ChatUser]:
     return getattr(g, "chat_user", None)
+
+
+def acadza_details(raw_token: str, user_id: str) -> Optional[dict]:
+    """Another person's Acadza record, asked with the caller's token (admins only use this)."""
+    try:
+        resp = requests.post(
+            f"{settings.ACADZA_API_BASE}/user/details",
+            json={"userid": user_id},
+            headers={"Authorization": f"Bearer {_strip_bearer(raw_token)}", "Content-Type": "application/json"},
+            timeout=8,
+        )
+    except requests.RequestException:
+        return None
+    if resp.status_code != 200:
+        return None
+    body = resp.json() or {}
+    data = body.get("data") if isinstance(body.get("data"), dict) else body
+    return data if isinstance(data, dict) and str(data.get("_id") or "") == user_id else None
+
+
+def batches_of(data: dict) -> list[str]:
+    """coachingBatch plus every meta flag that is true, as auto-join sees them."""
+    batches = data.get("coachingBatch") or []
+    if isinstance(batches, str):
+        batches = [batches]
+    return list(dict.fromkeys(str(b).strip() for b in list(batches) + _meta_batches(data) if str(b).strip()))
