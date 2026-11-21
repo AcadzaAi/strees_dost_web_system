@@ -44,3 +44,12 @@ services:
       # Backward-compatible fallback while existing deployments migrate.
       - key: FEEDBACK_TO_EMAIL
         sync: false
+      # Chat (off until MONGODB_URI is set)
+      - key: MONGODB_URI
+        sync: false
+      - key: CHAT_DB_NAME
+        value: acadza_chat
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: CHAT_ADMIN_IDS
+        sync: false

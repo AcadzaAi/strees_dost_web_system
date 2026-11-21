@@ -22,6 +22,7 @@ from .config import Config
 from .extensions import db, migrate, socketio, limiter
 from .db.sqlite_schema_fix import ensure_sessions_academic_columns
 from .realtime import socket_events  # noqa: F401
+from .chat import init_chat
 
 
 def create_app():
@@ -52,6 +53,8 @@ def create_app():
     app.register_blueprint(focus_prompts_bp)
     app.register_blueprint(leaderboard_bp)
     init_question_service(app)
+    # Group chat for the student app: on only when MONGODB_URI is set.
+    init_chat(app)
 
     return app
 
