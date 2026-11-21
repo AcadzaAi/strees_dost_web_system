@@ -137,13 +137,29 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post):
     mine = [x["id"] for x in c.get("/api/chat/groups", headers=H("stu3")).get_json()["groups"]]
     assert sp["id"] in mine, mine
     assert sp["id"] not in [x["id"] for x in c.get("/api/chat/groups", headers=H("stu2")).get_json()["groups"]]
-    # which students of a list are in a batch (their meta flags, asked from Acadza)
-    with mock.patch("app.chat.auth.requests.post", side_effect=fake_post):
-        r = c.post("/api/chat/admin/batch-members", headers=H("teacher1"),
-                   json={"userIds": ["stu1", "stu2", "stu3"], "batches": ["spartansCourseMathEnrolled"]}).get_json()
-    assert r["userIds"] == ["stu3"], r
+    # students of a batch, from their own meta flags (instant lookup)
+    r = c.get("/api/chat/admin/users?role=student&batches=spartansCourseMathEnrolled,titanCourseMathEnrolled&coachings=pace,99%2BJEE",
+              headers=H("teacher1")).get_json()["users"]
+    assert [u["id"] for u in r] == ["stu3"], r
     # a group across references (ANSHUL-style pace + 99+JEE): students of both join by batch
     io = c.post("/api/chat/admin/groups", headers=H("teacher1"), json={"title":"IOQM Jr","type":"chat","autoJoin":True,
                "batches":["ioqmJuniorCourseEnrolled"], "coachings":["PACE","99+JEE"]}).get_json()
     assert io["id"] in [x["id"] for x in c.get("/api/chat/groups", headers=H("stu4")).get_json()["groups"]]
+    # roster: the whole coaching with meta flags, so students who never opened the app show up too
+    def fake_roster(url, params=None, json=None, headers=None, timeout=None):
+        if url.endswith("/user/details"):          # requests.post is one function for both
+            return fake_post(url, json=json, headers=headers, timeout=timeout)
+        users = [{"_id": "old1", "name": "Old Student", "role": "student", "reference": "99+JEE",
+                  "meta": {"titanCourseMathEnrolled": True, "batch": "JEE"}},
+                 {"_id": "old2", "name": "Other", "role": "student", "reference": "99+JEE",
+                  "meta": {"titanCourseMathEnrolled": False}}]
+        return R(200, {"users": users if params["page"] == 1 else [], "totalPages": 1})
+    with mock.patch("app.chat.roster.requests.post", side_effect=fake_roster), \
+         mock.patch("app.chat.roster.socketio.start_background_task", side_effect=lambda fn, *a: fn(*a)):
+        r = c.post("/api/chat/admin/roster/sync", headers=H("teacher1"), json={"coachings": ["99+JEE"]}).get_json()
+    assert r["started"] == ["99+JEE"] and r["status"]["99+JEE"]["state"] == "done", r
+    assert r["status"]["99+JEE"]["withMeta"] == 2
+    found = c.get("/api/chat/admin/users?role=student&batches=titanCourseMathEnrolled&coachings=99%2BJEE",
+                  headers=H("teacher1")).get_json()["users"]
+    assert [u["id"] for u in found] == ["old1"], found
     print("ALL CHAT TESTS PASSED")

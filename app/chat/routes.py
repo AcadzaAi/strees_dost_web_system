@@ -159,8 +159,12 @@ def admin_restrict(group_id, user_id):
 @bp.get("/admin/users")
 @require_admin
 def admin_users():
-    return jsonify({"users": service.search_users(request.args.get("q", ""), request.args.get("coaching"),
-                                                  request.args.get("role"))})
+    def _csv(name):
+        return [x.strip() for x in (request.args.get(name) or "").split(",") if x.strip()]
+    batches = _csv("batches")
+    return jsonify({"users": service.search_users(
+        request.args.get("q", ""), request.args.get("coaching"), request.args.get("role"),
+        limit=2000 if batches else 30, batches=batches, coachings=_csv("coachings"))})
 
 
 @bp.get("/admin/batches")
@@ -170,13 +174,22 @@ def admin_batches():
     return jsonify({"coaching": coaching, "batches": service.known_batches(coaching)})
 
 
-@bp.post("/admin/batch-members")
+@bp.post("/admin/roster/sync")
 @require_admin
-def admin_batch_members():
+def admin_roster_sync():
+    from . import roster
     b = _body()
-    return jsonify(service.members_of_batches(request.headers.get("Authorization", ""),
-                                              [str(x) for x in (b.get("userIds") or [])],
-                                              [str(x) for x in (b.get("batches") or [])]))
+    coachings = [str(c) for c in (b.get("coachings") or [g.chat_user.coaching]) if str(c).strip()]
+    started = roster.start(request.headers.get("Authorization", ""), coachings, force=bool(b.get("force")))
+    return jsonify({"started": started, "status": roster.status(coachings)})
+
+
+@bp.get("/admin/roster/status")
+@require_admin
+def admin_roster_status():
+    from . import roster
+    coachings = [c.strip() for c in (request.args.get("coachings") or g.chat_user.coaching).split(",") if c.strip()]
+    return jsonify({"status": roster.status(coachings)})
 
 
 @bp.get("/admin/moderation")
