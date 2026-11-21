@@ -175,5 +175,16 @@ def require_admin(fn: Callable) -> Callable:
     return wrapper
 
 
+def require_staff(fn: Callable) -> Callable:
+    """Teachers (group admins who aren't on the chat-admin list still manage their groups)."""
+    @wraps(fn)
+    @require_user
+    def wrapper(*args, **kwargs):
+        if not g.chat_user.is_staff:
+            return jsonify({"error": "forbidden"}), 403
+        return fn(*args, **kwargs)
+    return wrapper
+
+
 def current_user() -> Optional[ChatUser]:
     return getattr(g, "chat_user", None)

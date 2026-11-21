@@ -8,7 +8,7 @@ from __future__ import annotations
 from flask import Blueprint, g, jsonify, request
 
 from . import service
-from .auth import require_admin, require_user
+from .auth import require_admin, require_staff, require_user
 from .mongo import db
 from .moderation import DEFAULT_RULES
 from .service import ChatError
@@ -37,7 +37,25 @@ def _body() -> dict:
 def me():
     u = g.chat_user
     return jsonify({"id": u.id, "name": u.name, "role": u.role, "coaching": u.coaching,
-                    "isAdmin": u.is_admin, "isStaff": u.is_staff})
+                    "isAdmin": u.is_admin, "isStaff": u.is_staff, "avatar": service.my_avatar(u)})
+
+
+@bp.post("/me/avatar")
+@require_user
+def set_avatar():
+    return jsonify({"ok": True, "avatar": service.set_avatar(g.chat_user, str(_body().get("avatar", "")))})
+
+
+@bp.get("/contacts")
+@require_user
+def contacts():
+    return jsonify({"contacts": service.contacts(g.chat_user)})
+
+
+@bp.post("/direct")
+@require_user
+def open_direct():
+    return jsonify(service.open_direct(g.chat_user, str(_body().get("userId", ""))))
 
 
 @bp.get("/groups")
@@ -50,7 +68,7 @@ def groups():
 @require_user
 def group(group_id):
     m = service.membership(group_id, g.chat_user.id)
-    return jsonify(service.group_out(service.group_or_404(group_id), m))
+    return jsonify(service.group_out(service.group_or_404(group_id), m, g.chat_user.id))
 
 
 @bp.get("/groups/<group_id>/messages")
@@ -115,7 +133,7 @@ def remove_device():
 @require_admin
 def admin_groups():
     q = {"coaching": request.args["coaching"]} if request.args.get("coaching") else {}
-    return jsonify({"groups": [service.group_out(x) for x in db().groups.find(q).sort("createdAt", -1)]})
+    return jsonify({"groups": [service.group_out(x) for x in db().groups.find({**q, "type": {"$ne": "direct"}}).sort("createdAt", -1)]})
 
 
 @bp.post("/admin/groups")
@@ -124,40 +142,88 @@ def admin_create_group():
     return jsonify(service.create_group(g.chat_user, _body())), 201
 
 
-@bp.patch("/admin/groups/<group_id>")
-@require_admin
-def admin_update_group(group_id):
-    return jsonify(service.update_group(group_id, _body()))
+# ── group admins: /groups/<id>/manage ────────────────────────────────────────────────────────
+
+@bp.patch("/groups/<group_id>/manage")
+@require_user
+def manage_update(group_id):
+    return jsonify(service.update_group(g.chat_user, group_id, _body()))
 
 
-@bp.get("/admin/groups/<group_id>/members")
-@require_admin
-def admin_members(group_id):
-    return jsonify({"members": service.list_members(group_id)})
-
-
-@bp.post("/admin/groups/<group_id>/members")
-@require_admin
-def admin_add_members(group_id):
-    return jsonify({"ok": True, "added": service.add_members(group_id, _body().get("members") or [])})
-
-
-@bp.delete("/admin/groups/<group_id>/members/<user_id>")
-@require_admin
-def admin_remove_member(group_id, user_id):
-    service.remove_member(group_id, user_id)
+@bp.delete("/groups/<group_id>/manage")
+@require_user
+def manage_delete(group_id):
+    service.delete_group(g.chat_user, group_id)
     return jsonify({"ok": True})
 
 
-@bp.post("/admin/groups/<group_id>/members/<user_id>/restrict")
-@require_admin
-def admin_restrict(group_id, user_id):
-    service.restrict_member(group_id, user_id, int(_body().get("minutes", 0)))
+@bp.get("/groups/<group_id>/manage/members")
+@require_user
+def manage_members(group_id):
+    return jsonify({"members": service.list_members(g.chat_user, group_id)})
+
+
+@bp.post("/groups/<group_id>/manage/members")
+@require_user
+def manage_add(group_id):
+    b = _body()
+    added = service.admin_add_members(g.chat_user, group_id, b.get("members") or [], str(b.get("source") or "manual"))
+    return jsonify({"ok": True, "added": added})
+
+
+@bp.delete("/groups/<group_id>/manage/members/<user_id>")
+@require_user
+def manage_remove(group_id, user_id):
+    service.remove_member(g.chat_user, group_id, user_id)
     return jsonify({"ok": True})
+
+
+@bp.post("/groups/<group_id>/manage/members/<user_id>/restrict")
+@require_user
+def manage_restrict(group_id, user_id):
+    until = service.restrict_member(g.chat_user, group_id, user_id, int(_body().get("minutes", 0)))
+    return jsonify({"ok": True, "restrictedUntil": until})
+
+
+@bp.post("/groups/<group_id>/manage/members/<user_id>/role")
+@require_user
+def manage_role(group_id, user_id):
+    service.set_member_role(g.chat_user, group_id, user_id, str(_body().get("role", "")))
+    return jsonify({"ok": True})
+
+
+@bp.get("/groups/<group_id>/manage/sources")
+@require_user
+def manage_sources(group_id):
+    return jsonify({"sources": service.sources(g.chat_user, group_id)})
+
+
+@bp.post("/groups/<group_id>/manage/sources/remove")
+@require_user
+def manage_remove_source(group_id):
+    return jsonify({"ok": True, **service.remove_source(g.chat_user, group_id, str(_body().get("source", "")))})
+
+
+@bp.post("/groups/<group_id>/manage/import")
+@require_user
+def manage_import(group_id):
+    return jsonify({"ok": True, "added": service.import_group(g.chat_user, group_id, str(_body().get("fromGroupId", "")))})
+
+
+@bp.get("/groups/<group_id>/manage/candidates")
+@require_user
+def manage_candidates(group_id):
+    return jsonify({"students": service.candidates(g.chat_user, group_id)})
+
+
+@bp.get("/manage/my-groups")
+@require_staff
+def manage_my_groups():
+    return jsonify({"groups": service.admin_groups_of(g.chat_user)})
 
 
 @bp.get("/admin/users")
-@require_admin
+@require_staff
 def admin_users():
     def _csv(name):
         return [x.strip() for x in (request.args.get(name) or "").split(",") if x.strip()]
@@ -168,14 +234,14 @@ def admin_users():
 
 
 @bp.get("/admin/batches")
-@require_admin
+@require_staff
 def admin_batches():
     coaching = request.args.get("coaching") or g.chat_user.coaching
     return jsonify({"coaching": coaching, "batches": service.known_batches(coaching)})
 
 
 @bp.post("/admin/roster/sync")
-@require_admin
+@require_staff
 def admin_roster_sync():
     from . import roster
     b = _body()
@@ -185,7 +251,7 @@ def admin_roster_sync():
 
 
 @bp.get("/admin/roster/status")
-@require_admin
+@require_staff
 def admin_roster_status():
     from . import roster
     coachings = [c.strip() for c in (request.args.get("coachings") or g.chat_user.coaching).split(",") if c.strip()]
