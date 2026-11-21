@@ -530,21 +530,28 @@ def list_members(group_id: str) -> list[dict]:
     return out
 
 
-def search_users(query: str, coaching: Optional[str] = None, role: Optional[str] = None, limit: int = 30) -> list[dict]:
-    """People who have opened the chat at least once, by name or Acadza id (for adding to groups)."""
+def search_users(query: str, coaching: Optional[str] = None, role: Optional[str] = None, limit: int = 30,
+                 batches: Optional[list[str]] = None, coachings: Optional[list[str]] = None) -> list[dict]:
+    """People who have opened the app since the chat came (each one's own Acadza record, incl. the
+    batch flags in their meta), by name / id, batch and coaching. Indexed: instant for any size."""
     import re
     q: dict = {}
     text = (query or "").strip()
     if text:
         q["$or"] = [{"_id": text}, {"name": {"$regex": re.escape(text), "$options": "i"}}]
+    wanted = [c.strip().lower() for c in (coachings or []) if c and c.strip()]
     if coaching:
-        q["coaching"] = coaching.strip().lower()
+        wanted.append(coaching.strip().lower())
+    if wanted:
+        q["coaching"] = {"$in": list(dict.fromkeys(wanted))}
+    if batches:
+        q["batches"] = {"$in": [b for b in batches if b]}
     if role == "staff":
         q["role"] = {"$in": ["teacher", "admin", "faculty", "mentor"]}
     elif role:
         q["role"] = role
     out = []
-    for u in db().users.find(q, projection={"name": 1, "role": 1, "coaching": 1, "batches": 1}).sort("name", 1).limit(max(1, min(limit, 100))):
+    for u in db().users.find(q, projection={"name": 1, "role": 1, "coaching": 1, "batches": 1}).sort("name", 1).limit(max(1, min(limit, 2000))):
         out.append({"id": u["_id"], "name": u.get("name") or "", "role": u.get("role") or "student",
                     "coaching": u.get("coaching"), "batches": u.get("batches") or []})
     return out
@@ -554,45 +561,3 @@ def known_batches(coaching: Optional[str]) -> list[str]:
     """Batches seen among this coaching's chat users, to pick from when making a group."""
     q = {"coaching": coaching.strip().lower()} if coaching else {}
     return sorted(b for b in db().users.distinct("batches", q) if b)
-
-
-BATCH_CACHE_S = 12 * 3600
-
-
-def members_of_batches(admin_token: str, user_ids: list[str], batches: list[str]) -> dict:
-    """Which of these people are in any of these batches (their meta flags, like notifications).
-    Asks Acadza for each person once and remembers the answer for 12 hours."""
-    from concurrent.futures import ThreadPoolExecutor
-    from .auth import acadza_details, batches_of
-
-    wanted = {b for b in batches if b}
-    ids = list(dict.fromkeys(u for u in user_ids if u))[:3000]
-    now = now_ms()
-    known = {u["_id"]: u for u in db().users.find(
-        {"_id": {"$in": ids}, "acadzaBatchesAt": {"$gt": now - BATCH_CACHE_S * 1000}},
-        projection={"acadzaBatches": 1})}
-    todo = [u for u in ids if u not in known]
-
-    def fetch(uid: str):
-        data = acadza_details(admin_token, uid)
-        return uid, data
-
-    failed = 0
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        for uid, data in pool.map(fetch, todo):
-            if data is None:
-                failed += 1
-                continue
-            found = batches_of(data)
-            known[uid] = {"acadzaBatches": found}
-            db().users.update_one(
-                {"_id": uid},
-                {"$set": {"acadzaBatches": found, "acadzaBatchesAt": now},
-                 "$setOnInsert": {"name": (data.get("name") or data.get("username") or "").strip(),
-                                  "role": str(data.get("role") or "student"),
-                                  "coaching": str(data.get("reference") or "").strip().lower(),
-                                  "batches": found, "fcmTokens": [], "strikes": []}},
-                upsert=True,
-            )
-    matched = [u for u in ids if wanted & set((known.get(u) or {}).get("acadzaBatches") or [])]
-    return {"userIds": matched, "checked": len(ids), "failed": failed}

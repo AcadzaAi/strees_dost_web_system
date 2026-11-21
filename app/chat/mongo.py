@@ -56,6 +56,9 @@ def ensure_indexes() -> None:
     d.members.create_index([("userId", ASCENDING), ("removed", ASCENDING)])
     d.groups.create_index([("autoJoin.coaching", ASCENDING), ("autoJoin.batch", ASCENDING)])
     d.groups.create_index([("coaching", ASCENDING)])
+    # Admin "students of a batch": batch flags and coaching of everyone who opened the app.
+    d.users.create_index([("batches", ASCENDING)])
+    d.users.create_index([("coaching", ASCENDING), ("role", ASCENDING)])
     d.reports.create_index([("createdAt", DESCENDING)])
     d.moderation.create_index([("createdAt", DESCENDING)])
     log.info("chat: indexes ready")
