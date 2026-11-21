@@ -5,7 +5,7 @@
 """
 import os, json, base64, time
 os.environ.setdefault("OPENAI_API_KEY", "test-not-used")   # stress-dost imports OpenAI at startup
-os.environ["MONGODB_URI"] = "mongodb://fake"; os.environ["CHAT_ADMIN_IDS"] = "teacher1"
+os.environ["MONGODB_URI"] = "mongodb://fake"; os.environ["CHAT_ADMIN_IDS"] = "teacher1,stu2"   # stu2 is listed but a student: never admin
 import mongomock
 from unittest import mock
 from app.chat import mongo
@@ -126,6 +126,7 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post):
     assert [u["id"] for u in staff] == ["teacher1"], staff
     assert c.get("/api/chat/admin/batches?coaching=pace", headers=H("teacher1")).get_json()["batches"] == ["apex"]
     assert c.get("/api/chat/admin/users", headers=H("stu1")).status_code == 403
+    assert c.get("/api/chat/admin/users", headers=H("stu2")).status_code == 403   # on the list, but a student
     upd = c.patch(f"/api/chat/admin/groups/{grp['id']}", headers=H("teacher1"), json={"autoJoin": False}).get_json()
     assert upd["id"] == grp["id"] and mongo.db().groups.find_one({"_id": grp["id"]})["autoJoin"] is None
     # a group for several batches: students join by their meta flags, like notifications

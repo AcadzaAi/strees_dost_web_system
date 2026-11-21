@@ -111,13 +111,15 @@ def verify_token(raw_token: str) -> ChatUser:
     if isinstance(batches, str):
         batches = [batches]
     batches = list(batches) + _meta_batches(data)
+    role = str(data.get("role") or payload.get("role") or "student")
     user = ChatUser(
         id=user_id,
         name=(data.get("name") or data.get("username") or "Student").strip(),
-        role=str(data.get("role") or payload.get("role") or "student"),
+        role=role,
         coaching=str(data.get("reference") or "acadza").strip().lower() or "acadza",
         batches=tuple(dict.fromkeys(str(b).strip() for b in batches if str(b).strip())),
-        is_admin=is_admin_id(user_id),
+        # Admins: only teachers, and only the ones on the admin list.
+        is_admin=role.lower() in STAFF_ROLES and is_admin_id(user_id),
     )
     _remember(user)
     with _cache_lock:
