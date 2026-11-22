@@ -505,13 +505,17 @@ _SYNC_BACKGROUND = False       # tests flip this so they can check the results r
 
 
 def _notify(g: dict, doc: dict) -> None:
-    recipients = [
-        m["userId"] for m in db().members.find(
-            {"groupId": g["_id"], "removed": {"$ne": True}, "muted": {"$ne": True}, "userId": {"$ne": doc["senderId"]}},
-            projection={"userId": 1},
-        )
-        if not presence.is_viewing(m["userId"], g["_id"])
-    ]
+    recipients, muted, viewing = [], 0, 0
+    for m in db().members.find({"groupId": g["_id"], "removed": {"$ne": True}, "userId": {"$ne": doc["senderId"]}},
+                               projection={"userId": 1, "muted": 1}):
+        if m.get("muted"):
+            muted += 1
+        elif presence.is_viewing(m["userId"], g["_id"]):
+            viewing += 1                           # the chat is open on their phone: no notification
+        else:
+            recipients.append(m["userId"])
+    if muted or viewing:
+        log.info("chat push %s: skipped %d muted, %d with the chat open", g["_id"], muted, viewing)
     if not recipients:
         return
     label = sender_label(doc["senderRole"], doc.get("rollNo"))
@@ -529,6 +533,8 @@ def _notify(g: dict, doc: dict) -> None:
         "senderId": doc["senderId"],
         "senderName": doc["senderName"] if direct else shown,
         "senderLabel": "" if direct else label,
+        "senderAvatar": doc.get("senderAvatar") or "",
+        "senderRole": doc.get("senderRole") or "student",
         "text": doc["text"][:300],
         "createdAt": str(doc["createdAt"]),
         "title": title,
@@ -837,11 +843,12 @@ def _is_teacher(user_id: str) -> bool:
                                   "removed": {"$ne": True}}, projection={"_id": 1}) is not None
 
 
-def add_members(group_id: str, members: list[dict], source: str = "manual") -> int:
+def add_members(group_id: str, members: list[dict], source: str = "manual", added_by: Optional[str] = None) -> int:
     """Adds people (or changes the role / roll number of people already in). `source` records how
     they came in (manual, batch:<value>, group:<id>, auto, creator) so admins can see and undo it."""
-    group_or_404(group_id)
+    g = group_or_404(group_id)
     added = 0
+    newly: list[str] = []
     for m in members:
         uid = str(m.get("userId") or "").strip()
         if not uid:
@@ -866,10 +873,17 @@ def add_members(group_id: str, members: list[dict], source: str = "manual") -> i
         )
         if before is None or before.get("removed"):
             added += 1
+            newly.append(uid)
             _join_live(uid, group_id, True)
             _emit("group_added", {"groupId": group_id}, user_room(uid))
     if added:
         db().groups.update_one({"_id": group_id}, {"$inc": {"memberCount": added}})
+    if newly and added_by and g.get("type") != "direct":
+        # "Anshul Sir added you to Titan": everyone just added hears it on their phone.
+        title = g.get("title", "")
+        body = f"{added_by} added you to {title}. Tap to open the group."
+        push.send_to_users(newly, {"type": "chat_admin", "kind": "added", "groupId": group_id, "groupTitle": title,
+                                   "title": title, "body": body, "text": body})
     return added
 
 
@@ -883,7 +897,7 @@ def admin_add_members(user: ChatUser, group_id: str, members: list[dict], source
         elif m.get("role") == "admin":
             m["role"] = "teacher"
         clean.append(m)
-    added = add_members(group_id, clean, source=source or "manual")
+    added = add_members(group_id, clean, source=source or "manual", added_by=_who(user, me))
     if added:
         label = _source_label(source)
         system_message(group_id, f"{_who(user, me)} added {added} {'person' if added == 1 else 'people'}"
@@ -1103,7 +1117,7 @@ def import_group(user: ChatUser, group_id: str, from_group_id: str) -> int:
     membership(from_group_id, user.id)                 # only from groups you are in yourself
     students = [{"userId": m["userId"], "name": m.get("name") or "", "role": "student", "rollNo": m.get("rollNo")}
                 for m in db().members.find({"groupId": from_group_id, "removed": {"$ne": True}, "role": "student"})]
-    added = add_members(group_id, students, source=f"group:{from_group_id}")
+    added = add_members(group_id, students, source=f"group:{from_group_id}", added_by=_who(user, me))
     system_message(group_id, f"{_who(user, me)} added {added} student{'s' if added != 1 else ''} "
                              f"from {src.get('title', 'another group')}")
     return added

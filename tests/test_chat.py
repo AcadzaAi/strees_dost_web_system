@@ -307,3 +307,13 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     assert c.get(f"/api/chat/groups/{gz['id']}/manage/left", headers=H("teacher1")).get_json()["people"]==[]
     print("LEAVE / PROFILE / DM TESTS PASSED")
 
+# ── "X added you to Y" reaches the people added ──
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users") as sent:
+    c = app.test_client(); H=lambda u: {"Authorization": "Bearer "+tok(u)}
+    ga = c.post("/api/chat/admin/groups", headers=H("teacher1"), json={"title":"Added Note","type":"chat","batch":"none-a"}).get_json()
+    sent.reset_mock()
+    c.post(f"/api/chat/groups/{ga['id']}/manage/members", headers=H("teacher1"), json={"members":[{"userId":"stu2"}]})
+    notes = [call.args for call in sent.call_args_list if call.args[1].get("kind")=="added"]
+    assert notes and notes[0][0]==["stu2"] and "added you to Added Note" in notes[0][1]["body"], sent.call_args_list
+    print("ADDED NOTE TEST PASSED")
+

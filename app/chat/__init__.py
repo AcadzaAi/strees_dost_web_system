@@ -29,6 +29,9 @@ def init_chat(app: Flask) -> None:
         log.exception("chat: could not reach MongoDB at startup")
     log.info("chat: on (db=%s, push=%s)", settings.CHAT_DB_NAME, bool(settings.FIREBASE_SERVICE_ACCOUNT_JSON))
     _keep_awake()
+    if not app.testing:
+        from . import push
+        push.warm_up()
 
 
 _awake_started = False
