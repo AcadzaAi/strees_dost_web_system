@@ -16,7 +16,7 @@ from pymongo import UpdateOne
 
 from ..extensions import socketio
 from . import settings
-from .auth import _meta_batches, _strip_bearer
+from .auth import _meta_batches, _strip_bearer, contact_of
 from .mongo import db
 
 log = logging.getLogger(__name__)
@@ -85,6 +85,7 @@ def _sync(token: str, coaching: str) -> None:
                     "role": str(u.get("role") or "student"),
                     "coaching": str(u.get("reference") or coaching).strip().lower(),
                     "rosterAt": int(time.time() * 1000),
+                    **contact_of(u),
                 }
                 if isinstance(u.get("meta"), dict) or u.get("coachingBatch"):
                     with_meta += 1

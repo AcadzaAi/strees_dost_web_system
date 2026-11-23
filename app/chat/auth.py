@@ -121,7 +121,7 @@ def verify_token(raw_token: str) -> ChatUser:
         # Admins: only teachers, and only the ones on the admin list.
         is_admin=role.lower() in STAFF_ROLES and is_admin_id(user_id),
     )
-    _remember(user)
+    _remember(user, contact_of(data))
     with _cache_lock:
         if len(_cache) > 20_000:
             _cache.clear()
@@ -140,13 +140,30 @@ def _meta_batches(data: dict) -> list[str]:
     return out
 
 
-def _remember(user: ChatUser) -> None:
-    """Keeps the users collection in step with Acadza (name, role, batches)."""
+def contact_of(data: dict) -> dict:
+    """The phone numbers on an Acadza account, when there are any (teachers and admins see a
+    student's on their profile, to copy). Only filled-in ones, so an empty value never wipes one."""
+    def clean(v) -> str:
+        v = str(v or "").strip()
+        return v if sum(ch.isdigit() for ch in v) >= 6 else ""
+    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+    out = {}
+    phone = clean(data.get("phone") or data.get("mobile") or data.get("phoneNumber"))
+    parent = clean(meta.get("parentPhone") or data.get("parentPhone") or meta.get("parentMobile"))
+    if phone:
+        out["phone"] = phone
+    if parent:
+        out["parentPhone"] = parent
+    return out
+
+
+def _remember(user: ChatUser, contact: Optional[dict] = None) -> None:
+    """Keeps the users collection in step with Acadza (name, role, batches, phone numbers)."""
     db().users.update_one(
         {"_id": user.id},
         {
             "$set": {"name": user.name, "role": user.role, "coaching": user.coaching,
-                     "batches": list(user.batches), "lastSeenAt": int(time.time() * 1000)},
+                     "batches": list(user.batches), "lastSeenAt": int(time.time() * 1000), **(contact or {})},
             "$setOnInsert": {"fcmTokens": [], "strikes": []},
         },
         upsert=True,
