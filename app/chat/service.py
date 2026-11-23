@@ -79,6 +79,16 @@ def avatar_of(role: Optional[str], chosen: Optional[str]) -> str:
     return chosen if chosen in STUDENT_AVATARS else ""
 
 
+def _contact_cards(user_ids) -> dict[str, dict]:
+    """Name and phone from the users collection, for lists admins see (a member saved without a
+    name still shows who they are). One query."""
+    ids = list({u for u in user_ids if u and u != "system"})
+    if not ids:
+        return {}
+    return {u["_id"]: {"name": u.get("name") or "", "phone": u.get("phone") or ""}
+            for u in db().users.find({"_id": {"$in": ids}}, projection={"name": 1, "phone": 1})}
+
+
 def _avatars(user_ids) -> dict[str, str]:
     ids = list({u for u in user_ids if u and u != "system"})
     if not ids:
@@ -510,7 +520,10 @@ def list_requests(user: ChatUser, group_id: str) -> list[dict]:
     require_group_admin(user, group_id)
     docs = list(db().join_requests.find({"groupId": group_id, "status": "pending"}).sort("at", 1))
     avatars = _avatars(d["userId"] for d in docs)
-    return [{"userId": d["userId"], "name": d.get("name") or "", "rollNo": d.get("rollNo"), "at": int(d.get("at") or 0),
+    cards = _contact_cards(d["userId"] for d in docs)
+    return [{"userId": d["userId"], "name": d.get("name") or (cards.get(d["userId"]) or {}).get("name") or "",
+             "phone": (cards.get(d["userId"]) or {}).get("phone", ""),
+             "rollNo": d.get("rollNo"), "at": int(d.get("at") or 0),
              "note": d.get("note") or "", "batches": d.get("batches") or [],
              "avatar": avatar_of("student", avatars.get(d["userId"]))} for d in docs]
 
@@ -1694,7 +1707,10 @@ def left_members(user: ChatUser, group_id: str) -> list[dict]:
     require_group_admin(user, group_id)
     docs = list(db().members.find({"groupId": group_id, "left": True, "removed": True}).sort("leftAt", -1))
     avatars = _avatars(m["userId"] for m in docs)
-    return [{"userId": m["userId"], "name": m.get("name") or "", "role": m.get("role") or "student",
+    cards = _contact_cards(m["userId"] for m in docs)
+    return [{"userId": m["userId"], "name": m.get("name") or (cards.get(m["userId"]) or {}).get("name") or "",
+             "phone": (cards.get(m["userId"]) or {}).get("phone", "") if (m.get("role") or "student") == "student" else "",
+             "role": m.get("role") or "student",
              "rollNo": m.get("rollNo"), "leftAt": int(m.get("leftAt") or 0),
              "avatar": avatar_of(m.get("role"), avatars.get(m["userId"]))} for m in docs]
 
@@ -1806,9 +1822,12 @@ def list_members(user: ChatUser, group_id: str) -> list[dict]:
     g, _ = require_group_admin(user, group_id)
     docs = list(db().members.find({"groupId": group_id, "removed": {"$ne": True}}))
     avatars = _avatars(m["userId"] for m in docs)
+    cards = _contact_cards(m["userId"] for m in docs)
     out = []
     for m in docs:
-        out.append({"userId": m["userId"], "name": m.get("name"), "role": m.get("role"),
+        card = cards.get(m["userId"]) or {}
+        out.append({"userId": m["userId"], "name": m.get("name") or card.get("name") or "", "role": m.get("role"),
+                    "phone": card.get("phone", "") if m.get("role", "student") == "student" else "",
                     "rollNo": m.get("rollNo"), "restrictedUntil": m.get("restrictedUntil") or 0,
                     "online": presence.is_online(m["userId"]), "sources": m.get("sources") or [],
                     "isCreator": m["userId"] == g.get("createdBy"),
@@ -1890,12 +1909,12 @@ def candidates(user: ChatUser, group_id: str) -> list[dict]:
         q["batches"] = {"$in": batches}
     in_group = {m["userId"] for m in db().members.find({"groupId": group_id}, projection={"userId": 1})}
     out = []
-    for u in db().users.find(q, projection={"name": 1, "avatar": 1, "lastSeenAt": 1}).limit(5000):
+    for u in db().users.find(q, projection={"name": 1, "avatar": 1, "lastSeenAt": 1, "phone": 1}).limit(5000):
         if u["_id"] in in_group:
             continue
-        out.append({"id": u["_id"], "name": u.get("name") or "", "role": "student",
+        out.append({"id": u["_id"], "name": u.get("name") or "", "role": "student", "phone": u.get("phone") or "",
                     "avatar": avatar_of("student", u.get("avatar")), "usesApp": bool(u.get("lastSeenAt"))})
-    out.sort(key=lambda x: (not x["usesApp"], (x["name"] or "").lower()))
+    out.sort(key=lambda x: (not x["usesApp"], not x["name"], (x["name"] or "").lower()))   # nameless last
     return out
 
 
@@ -1920,6 +1939,9 @@ def search_users(query: str, coaching: Optional[str] = None, role: Optional[str]
     text = (query or "").strip()
     if text:
         q["$or"] = [{"_id": text}, {"name": {"$regex": re.escape(text), "$options": "i"}}]
+        digits = re.sub(r"\D", "", text)
+        if len(digits) >= 4:                           # typing part of a phone number finds them too
+            q["$or"].append({"phone": {"$regex": re.escape(digits)}})
     wanted = [c.strip().lower() for c in (coachings or []) if c and c.strip()]
     if coaching:
         wanted.append(coaching.strip().lower())
@@ -1932,12 +1954,14 @@ def search_users(query: str, coaching: Optional[str] = None, role: Optional[str]
     elif role:
         q["role"] = role
     out = []
-    for u in db().users.find(q, projection={"name": 1, "role": 1, "coaching": 1, "batches": 1, "avatar": 1}) \
+    for u in db().users.find(q, projection={"name": 1, "role": 1, "coaching": 1, "batches": 1, "avatar": 1, "phone": 1}) \
             .sort("name", 1).limit(max(1, min(limit, 2000))):
         r = u.get("role") or "student"
         out.append({"id": u["_id"], "name": u.get("name") or "", "role": r,
+                    "phone": (u.get("phone") or "") if r.lower() not in STAFF_ROLES else "",
                     "coaching": u.get("coaching"), "batches": u.get("batches") or [],
                     "avatar": avatar_of("teacher" if r.lower() in STAFF_ROLES else "student", u.get("avatar"))})
+    out.sort(key=lambda x: (not x["name"], x["name"].lower()))           # people without a name last
     return out
 
 

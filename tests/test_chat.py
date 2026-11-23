@@ -649,3 +649,23 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     m = c.post(f"/api/chat/groups/{gl['id']}/messages", headers=H("teacher2"), json={"clientId":"ln-5","text":"link soon"}).get_json()["message"]
     assert c.patch(f"/api/chat/groups/{gl['id']}/messages/{m['seq']}", headers=H("teacher2"), json={"text":"https://x.com"}).status_code == 422
     print("ADMIN LINKS TESTS PASSED")
+
+# ── Add people: name, else phone; search by phone; no one shows as an id ──
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users"):
+    c = app.test_client(); H=lambda u: {"Authorization": "Bearer "+tok(u)}
+    mongo.db().users.update_one({"_id": "nameless1"}, {"$set": {"role": "student", "coaching": "pace", "phone": "9123456789",
+                                                                "batches": ["apex"], "name": ""}}, upsert=True)
+    found = c.get("/api/chat/admin/users?q=345678", headers=H("teacher1")).get_json()["users"]
+    assert any(u["id"] == "nameless1" and u["phone"] == "9123456789" for u in found), found
+    allp = c.get("/api/chat/admin/users?q=", headers=H("teacher1")).get_json()["users"]
+    has_name = [bool(u["name"]) for u in allp]
+    assert allp and has_name == sorted(has_name, reverse=True), has_name        # everyone with a name first
+    riya = [u for u in allp if u["id"] == "stu1"]
+    assert riya and riya[0]["phone"] == "9876543210"
+    teachers = [u for u in allp if u["role"] == "teacher"]
+    assert all(t["phone"] == "" for t in teachers)                       # teachers' numbers never listed
+    gp2 = c.post("/api/chat/admin/groups", headers=H("teacher1"), json={"title":"Phones 2","type":"chat","batch":"none-p2"}).get_json()
+    c.post(f"/api/chat/groups/{gp2['id']}/manage/members", headers=H("teacher1"), json={"members":[{"userId":"nameless1"},{"userId":"stu1"}]})
+    mem = {m["userId"]: m for m in c.get(f"/api/chat/groups/{gp2['id']}/manage/members", headers=H("teacher1")).get_json()["members"]}
+    assert mem["nameless1"]["phone"] == "9123456789" and mem["stu1"]["phone"] == "9876543210", mem
+    print("ADD PEOPLE NAME / PHONE TESTS PASSED")
