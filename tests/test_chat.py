@@ -243,7 +243,7 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post):
     assert r["removed"] == 1
     assert "stu3" not in [m["userId"] for m in c.get(f"/api/chat/groups/{io['id']}/manage/members", headers=H("teacher1")).get_json()["members"]]
 
-    # ── new students: auto-add off -> listed as waiting and the admins are told ──
+    # ── new students: auto-add off -> listed under New students (no notification) ──
     t = c.post("/api/chat/admin/groups", headers=H("teacher1"), json={"title": "Titan Maths", "type": "chat", "autoJoin": False,
                "batches": ["titanCourseMathEnrolled"], "coachings": ["99+JEE"]}).get_json()
     cand = c.get(f"/api/chat/groups/{t['id']}/manage/candidates", headers=H("teacher1")).get_json()["students"]
@@ -253,7 +253,7 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post):
     sent = []
     with mock.patch("app.chat.push.send_to_users", side_effect=lambda ids, data: sent.append((list(ids), data))):
         c.get("/api/chat/groups", headers=H("stu4"))
-    assert any(d["type"] == "chat_admin" and "IOQM Doubts" in d["body"] and ids == ["teacher1"] for ids, d in sent), sent
+    assert not any("not in the group yet" in d.get("body", "") for ids, d in sent), sent     # no notification for this
     assert i2["id"] not in [x["id"] for x in c.get("/api/chat/groups", headers=H("stu4")).get_json()["groups"]]
     added = c.post(f"/api/chat/groups/{i2['id']}/manage/members", headers=H("teacher1"),
                    json={"members": [{"userId": "stu4", "name": "Isha"}], "source": "batch:ioqmJuniorCourseEnrolled"}).get_json()["added"]

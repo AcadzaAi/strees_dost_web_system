@@ -413,10 +413,11 @@ def sync_auto_groups(user: ChatUser) -> None:
             except DuplicateKeyError:
                 pass
         else:
-            # Auto-add is off: the admins see the student under "New students" and get told once.
+            # Auto-add is off: the admins see the student under "New students" in Group settings.
+            # No notification for this: every student who merely opens the chat would send one.
+            # Admins are told when a student actually asks to join (join requests).
             try:
                 db().candidates_seen.insert_one({"_id": f"{g['_id']}:{user.id}", "at": now_ms()})
-                _admin_notice(g["_id"], "waiting")
             except DuplicateKeyError:
                 pass
 
