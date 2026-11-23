@@ -10,6 +10,7 @@ App → server (all reply through the ack callback):
   typing    {groupId, typing}
   viewing   {groupId | null}     the chat on screen: no notifications for it
   react     {groupId, seq, emoji}    emoji "" takes my reaction back
+  alive     {}                       answers {ok}: the connection still works
 Server → app:
   message, message_deleted, message_edited, reaction, receipts, typing, group_added, group_removed, group_updated
 """
@@ -94,6 +95,13 @@ def on_edit(data):
 def on_react(data):
     out = service.react(_user(), str(data.get("groupId", "")), int(data.get("seq", 0)), data.get("emoji"))
     return {"ok": True, **out}
+
+
+@socketio.on("alive", namespace=NS)
+@_safe
+def on_alive(data):
+    """The app checks the connection still works after the phone slept (answers at once)."""
+    return {"ok": True}
 
 
 @socketio.on("read", namespace=NS)

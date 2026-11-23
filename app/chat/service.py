@@ -566,10 +566,15 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
     if len(text) > settings.MAX_TEXT_LENGTH:
         raise ChatError("too_long", f"Messages can be up to {settings.MAX_TEXT_LENGTH} characters.")
 
-    g = group_or_404(group_id)
-    member = membership(group_id, user.id)
-
-    existing = db().messages.find_one({"groupId": group_id, "clientId": client_id}, projection={"_id": 1})
+    # The lookups don't depend on each other: one trip to the database instead of four in a row.
+    g, member, existing, reply_doc, avatar = _together(
+        lambda: group_or_404(group_id),
+        lambda: membership(group_id, user.id),
+        lambda: db().messages.find_one({"groupId": group_id, "clientId": client_id}, projection={"_id": 1}),
+        lambda: db().messages.find_one({"groupId": group_id, "seq": int(reply_to_seq)}) if reply_to_seq else None,
+        lambda: my_avatar(user),
+    )
+    looked = time.time()
     if existing:                                   # a resend: the same message, not a new one
         return message_out(db().messages.find_one({"_id": existing["_id"]}))
     attached = _clean_media(user, member, group_id, media_in)
@@ -594,15 +599,15 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
         raise ChatError("blocked", verdict.message, 422)
 
     reply = None
-    if reply_to_seq:
-        r = db().messages.find_one({"groupId": group_id, "seq": int(reply_to_seq)})
-        if r and not r.get("deletedAt") and r.get("type") != "system":
+    if reply_doc:
+        r = reply_doc
+        if not r.get("deletedAt") and r.get("type") != "system":
             reply = {"seq": r["seq"],
                      "senderName": display_name(r.get("senderRole", "student"), r.get("senderName", ""), r.get("rollNo")),
                      "text": ((r.get("text") or "") or media.label(r.get("media")))[:160]}
 
-    avatar = my_avatar(user)
     seq = next_seq(group_id)
+    numbered = time.time()
     doc = {
         "_id": f"{group_id}-{seq}",
         "groupId": group_id, "seq": seq, "clientId": client_id,
@@ -618,21 +623,26 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
         _add_stored(attached["size"])
         db().media_pending.delete_one({"_id": attached["key"]})
         db().media_stats.update_one({"_id": _month_key()}, {"$inc": {"bytes": attached["size"]}}, upsert=True)
-    try:
-        db().messages.insert_one(doc)
-    except DuplicateKeyError:                      # two resends raced: return the one that won
-        won = db().messages.find_one({"groupId": group_id, "clientId": client_id})
-        if won:
-            return message_out(won)
-        raise
 
-    # Out to everyone right away; the bookkeeping below runs after the sender has its answer.
     out = message_out(doc)
     if g.get("type") == "direct" and seq == 1:     # the first message: the chat appears for the other person
         for other in db().members.find({"groupId": group_id, "userId": {"$ne": user.id}}, projection={"userId": 1}):
             _join_live(other["userId"], group_id, True)
             _emit("group_added", {"groupId": group_id}, user_room(other["userId"]))
-    _emit("message", out, group_room(group_id))
+    # Everyone else gets it now, while it is being saved: they don't wait for the write.
+    _emit("message", out, group_room(group_id), skip_sid=origin_sid)
+    try:
+        db().messages.insert_one(doc)
+    except Exception as exc:
+        # Not saved: take back what was shown under this number (a retry comes with a new one,
+        # and phones keep one copy per clientId, so nothing doubles).
+        _emit("message_deleted", {"groupId": group_id, "seq": seq, "id": doc["_id"], "byAdmin": False}, group_room(group_id))
+        if isinstance(exc, DuplicateKeyError):     # two resends raced: return the one that won
+            won = db().messages.find_one({"groupId": group_id, "clientId": client_id})
+            if won:
+                return message_out(won)
+        raise
+    saved = time.time()
 
     def notify_now() -> None:
         # The notification goes out first and on its own, so nothing else can hold it back or
@@ -667,9 +677,40 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
     _background(notify_now)
     _background(after)
     took = int((time.time() - started) * 1000)
-    if took > 400:
-        log.warning("chat: send took %d ms (database far from the server?)", took)
+    if took > 300:
+        # Where the time went, so a slow database (or one far from the server) shows in the logs.
+        log.warning("chat: send took %d ms (lookups %d, number %d, save %d) - is MongoDB in the same region as the server?",
+                    took, int((looked - started) * 1000), int((numbered - looked) * 1000), int((saved - numbered) * 1000))
     return out
+
+
+def _together(*fns):
+    """Runs independent database lookups at the same time (green threads on the server), so they
+    cost one round trip instead of one each. Results in order; the first error is raised."""
+    if not _SYNC_BACKGROUND:
+        try:
+            import eventlet
+            from eventlet import patcher
+            if patcher.is_monkey_patched("socket"):
+                def guarded(fn):
+                    # Errors come back as values: raised here, not printed by eventlet as crashes.
+                    def run():
+                        try:
+                            return True, fn()
+                        except Exception as exc:  # noqa: BLE001
+                            return False, exc
+                    return run
+                pile = eventlet.GreenPile(len(fns))
+                for fn in fns:
+                    pile.spawn(guarded(fn))
+                results = list(pile)
+                for ok, value in results:
+                    if not ok:
+                        raise value
+                return [value for _, value in results]
+        except ImportError:
+            pass
+    return [fn() for fn in fns]
 
 
 def _background(fn) -> None:
