@@ -74,14 +74,14 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post):
     a4 = t1.emit("send", {"groupId": ann["id"], "clientId":"t-1", "text":"Test on Sunday 9 AM"}, namespace="/chat", callback=True)
     assert a4["ok"] and a4["message"]["sender"]["label"]=="Admin" and a4["message"]["sender"]["avatar"]=="teacher"
     # moderation rules, each on its own (students)
-    for text in ["you are a chutiya","join allen instead","call me 98765 43210","see www.example.com",
+    for text in ["you are a chutiya","join allen instead","call me 98765 43210","join chat.whatsapp.com/AbC123",
                  "join my telegram group","f u c k this","FUUUUCK","ch*tiya hai tu".replace("*","u")]:
         v = moderation.check(text, is_staff=False)
         assert not v.allowed, (text, v)
     assert moderation.check("join allen instead", is_staff=True).allowed      # staff may name coachings
     assert moderation.check("Mujhe Q5 mein doubt hai, integration by parts", is_staff=False).allowed
     # other coachings, phone numbers, links: stopped every time, but never a pause
-    for i,text in enumerate(["join allen instead","call me 98765 43210","see www.example.com","join allen instead"]):
+    for i,text in enumerate(["join allen instead","call me 98765 43210","t.me/freenotes","join allen instead"]):
         r = s2.emit("send", {"groupId": grp["id"], "clientId":f"m-{i}", "text":text}, namespace="/chat", callback=True)
         assert not r["ok"] and r["error"]=="blocked", (text, r)
     assert not mongo.db().members.find_one({"groupId": grp["id"], "userId": "stu2"}).get("restrictedUntil")
@@ -635,7 +635,25 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     assert c.get(f"/api/chat/groups/{gp['id']}/manage/members/teacher2", headers=H("teacher1")).get_json()["phone"] == ""
     print("CONTACT DETAILS TESTS PASSED")
 
-# ── links: admins only (groups and private chats), students and other teachers can't ──
+# ── links: by default everyone may send them (not WhatsApp/Telegram invites); Firebase can make them admins-only ──
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users"):
+    _svc._rate.clear()
+    c = app.test_client(); H=lambda u: {"Authorization": "Bearer "+tok(u)}
+    ge = c.post("/api/chat/admin/groups", headers=H("teacher1"), json={"title":"Links open","type":"chat","batch":"none-ke"}).get_json()
+    c.post(f"/api/chat/groups/{ge['id']}/manage/members", headers=H("teacher1"), json={"members":[{"userId":"stu1"}]})
+    mongo.db().members.update_many({}, {"$unset": {"restrictedUntil": ""}})
+    for i, ok_link in enumerate(["notes: https://drive.google.com/file/d/abc", "youtube.com/watch?v=xyz", "zoom.us/j/123"]):
+        r = c.post(f"/api/chat/groups/{ge['id']}/messages", headers=H("stu1"), json={"clientId": f"le-{i}", "text": ok_link})
+        assert r.status_code == 200, (ok_link, r.get_json())
+    for i, bad in enumerate(["join https://chat.whatsapp.com/Kx12", "wa.me/919876543210", "t.me/jeeleaks", "insta pe aao instagram.com/riya"]):
+        r = c.post(f"/api/chat/groups/{ge['id']}/messages", headers=H("stu1"), json={"clientId": f"lb-{i}", "text": bad})
+        assert r.status_code == 422, (bad, r.get_json())
+    assert not mongo.db().members.find_one({"groupId": ge["id"], "userId": "stu1"}).get("restrictedUntil")   # never a pause for these
+    assert c.post(f"/api/chat/groups/{ge['id']}/messages", headers=H("stu1"), json={"clientId": "lp", "text": "pornhub.com"}).status_code == 422
+
+# ── links: admins only (Firebase links = "admins"), students and other teachers can't ──
+_cfg.set_for_tests({"moderation": {"links": "admins"}})
+moderation._rules_cache = (0.0, moderation.DEFAULT_RULES)
 with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users"):
     _svc._rate.clear()                                # earlier sections used up the per-minute budget
     c = app.test_client(); H=lambda u: {"Authorization": "Bearer "+tok(u)}
@@ -660,6 +678,8 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     m = c.post(f"/api/chat/groups/{gl['id']}/messages", headers=H("teacher2"), json={"clientId":"ln-5","text":"link soon"}).get_json()["message"]
     assert c.patch(f"/api/chat/groups/{gl['id']}/messages/{m['seq']}", headers=H("teacher2"), json={"text":"https://x.com"}).status_code == 422
     print("ADMIN LINKS TESTS PASSED")
+_cfg.set_for_tests({})
+moderation._rules_cache = (0.0, moderation.DEFAULT_RULES)
 
 # ── Add people: name, else phone; search by phone; no one shows as an id ──
 with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users"):
@@ -768,7 +788,37 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
         m = send_photo("scan-off", ok_jpg)
     assert not mongo.db().messages.find_one({"_id": m["id"]}).get("deletedAt")
     _cfg.set_for_tests({"media": {"scan": {"images": True, "documents": True}}})
+    # a photo sent as a "document" with a made-up type is still checked as a photo
+    # student documents: PDF / Word / PowerPoint / Excel only
+    for name, mime in (("clip.mp4", "video/mp4"), ("app.apk", "application/vnd.android.package-archive"), ("x.zip", "application/zip")):
+        r = c.post(f"/api/chat/groups/{gs['id']}/media/upload", headers=H("stu2"), json={"kind":"file","mime":mime,"size":1000,"name":name})
+        assert r.status_code == 403, (name, r.get_json())
+    assert c.post(f"/api/chat/groups/{gs['id']}/media/upload", headers=H("stu2"),
+                  json={"kind":"file","mime":"application/msword","size":1000,"name":"notes.docx"}).status_code == 200
+    assert c.post(f"/api/chat/groups/{gs['id']}/media/upload", headers=H("teacher1"),
+                  json={"kind":"file","mime":"video/mp4","size":1000,"name":"lecture.mp4"}).status_code == 200    # teachers: any file
     print("PHOTO / PDF CHECK TESTS PASSED")
+
+# what a file really is, from its first bytes
+assert _scan.sniff(b"%PDF-1.7 ...") == "pdf" and _scan.sniff(b"\xff\xd8\xff\xe0") == "image"
+assert _scan.sniff(b"\x89PNG\r\n\x1a\n") == "image" and _scan.sniff(b"GIF89a") == "image_other"
+assert _scan.sniff(b"\x00\x00\x00\x18ftypheic") == "image_other" and _scan.sniff(b"PK\x03\x04") == "other"
+import io as _io
+from PIL import Image as _Image
+_buf = _io.BytesIO(); _Image.new("RGB", (64, 64), (200, 100, 50)).save(_buf, "JPEG"); _jpg = _buf.getvalue()
+_g = _io.BytesIO(); _Image.new("RGB", (64, 64), (10, 200, 50)).save(_g, "GIF"); _gif = _g.getvalue()
+with mock.patch.object(_media, "enabled", return_value=True), mock.patch.object(_media, "head", side_effect=lambda k, n=32: _jpg[:n]), \
+     mock.patch.object(_media, "read", return_value=_jpg), mock.patch.object(_scan, "_image_hits", return_value=["female_breast_exposed"]):
+    r = _scan.check_media({"kind": "file", "key": "g/x/a.bin", "mime": "application/octet-stream", "name": "a.bin"}, strict=True)
+    assert not r.allowed and r.reasons == ["nudity:female_breast_exposed"], r
+with mock.patch.object(_media, "enabled", return_value=True), mock.patch.object(_media, "head", side_effect=lambda k, n=32: _gif[:n]), \
+     mock.patch.object(_media, "read", return_value=_gif), mock.patch.object(_scan, "_image_hits", return_value=["female_breast_exposed"]):
+    assert not _scan.check_media({"kind": "image", "key": "g/x/a.gif", "mime": "image/gif"}).allowed     # GIF frames checked
+with mock.patch.object(_media, "enabled", return_value=True), mock.patch.object(_media, "head", side_effect=lambda k, n=32: b"\x00\x00\x00\x18ftypheic"), \
+     mock.patch.object(_media, "read", return_value=b"\x00\x00\x00\x18ftypheic" + b"\x00" * 100):
+    assert not _scan.check_media({"kind": "image", "key": "g/x/a.heic", "mime": "image/heic"}, strict=True).allowed   # can't check: out (student)
+    assert _scan.check_media({"kind": "image", "key": "g/x/a.heic", "mime": "image/heic"}, strict=False).allowed
+assert not moderation.is_explicit(["unchecked"])           # no pause for that
 
 # ── text: Hindi script, hidden letters, Firebase word lists, self-harm alerts, no false alarms ──
 def _blocked(t, staff=False):
@@ -926,7 +976,7 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     mongo.db().members.update_many({}, {"$unset": {"restrictedUntil": ""}}); _svc._rate.clear()
     # stu1 (has a phone) was added by hand to several groups: OTP needed
     st = c.get("/api/chat/me", headers=D("stu1", "phoneA-1234")).get_json()["verify"]
-    assert st == {"required": True, "reason": "first_add", "phone": "••••••3210"}, st
+    assert st["required"] and st["reason"] == "first_add" and st["phone"] == "••••••3210" and st["message"], st
     r = c.get("/api/chat/groups", headers=D("stu1", "phoneA-1234"))
     assert r.status_code == 403 and r.get_json()["error"] == "verify_phone"
     # teachers never
@@ -979,3 +1029,20 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
         assert c.post("/api/chat/verify/send", headers=D("stu2", "aman-phone1")).get_json() == {"required": False}
     assert c.get("/api/chat/groups", headers=D("stu2", "aman-phone1")).status_code == 200
 print("PHONE CHECK TESTS PASSED")
+
+# ── Firebase switches for everyone: chat closed, app build too old ──
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users"):
+    c = app.test_client()
+    T = lambda u, client="1": {"Authorization": "Bearer "+tok(u), "X-Chat-Device": "tphone-123", "X-Chat-Client": client}
+    _cfg.set_for_tests({"service": {"open": False, "closedMessage": "Back at 6 PM"}})
+    r = c.get("/api/chat/groups", headers=T("teacher1"))
+    assert r.status_code == 403 and r.get_json()["reason"] == "closed" and r.get_json()["message"] == "Back at 6 PM"
+    assert c.get("/api/chat/me", headers=T("teacher1")).get_json()["verify"]["reason"] == "closed"
+    s_closed = socketio.test_client(app, namespace="/chat", auth={"token": tok("teacher1"), "device": "tphone-123", "client": 1})
+    assert not s_closed.is_connected("/chat")
+    _cfg.set_for_tests({"service": {"minClientVersion": 2}})
+    assert c.get("/api/chat/groups", headers=T("teacher1", "1")).get_json()["reason"] == "update_app"
+    assert c.get("/api/chat/groups", headers=T("teacher1", "2")).status_code == 200
+    _cfg.set_for_tests({})
+    assert c.get("/api/chat/groups", headers=T("teacher1", "")).status_code == 200      # off by default
+print("SWITCHES TESTS PASSED")
