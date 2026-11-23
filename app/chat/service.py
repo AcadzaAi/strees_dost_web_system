@@ -348,6 +348,9 @@ def group_out(g: dict, member: Optional[dict] = None, viewer: Optional[str] = No
         "lastReadSeq": read,
         "receipts": {"deliveredSeq": int(g.get("deliveredSeq", 0)), "readSeq": int(g.get("readSeq", 0))},
         "autoJoin": _auto(g),
+        "joinRequests": bool(g.get("joinRequests")),
+        # Admins see how many students are waiting for an answer.
+        "requestCount": int(g.get("pendingRequests") or 0) if m.get("role") == "admin" else 0,
         "updatedAt": int((g.get("lastMessage") or {}).get("createdAt") or g.get("createdAt") or 0),
         "peer": None,
     }
@@ -395,6 +398,7 @@ def sync_auto_groups(user: ChatUser) -> None:
                     "lastDeliveredSeq": 0, "muted": False, "removed": False, "sources": ["auto"],
                 })
                 db().groups.update_one({"_id": g["_id"]}, {"$inc": {"memberCount": 1}})
+                _close_requests(g["_id"], [user.id])
                 _admin_notice(g["_id"], "joined")
             except DuplicateKeyError:
                 pass
@@ -405,6 +409,132 @@ def sync_auto_groups(user: ChatUser) -> None:
                 _admin_notice(g["_id"], "waiting")
             except DuplicateKeyError:
                 pass
+
+
+# ── asking to join ───────────────────────────────────────────────────────────────────────────
+# A group with "Let students ask to join" on shows up for the students it is made for (its
+# coaching and batches) who aren't in it, under "Groups you can join". A request goes to the
+# group's admins as a notification; they approve or decline it in Group settings, Requests to join.
+
+REQUEST_AGAIN_AFTER_MS = 24 * 3600 * 1000      # after a "no", a student can ask again a day later
+
+
+def _request_id(group_id: str, user_id: str) -> str:
+    return f"{group_id}:{user_id}"
+
+
+def discover_groups(user: ChatUser) -> list[dict]:
+    """Groups this student may ask to join: made for their coaching and batches, asking switched
+    on, and they aren't in it (people who left or were removed can ask to come back)."""
+    if user.is_staff:
+        return []
+    found = [g for g in _groups_matching(user)]
+    ids = [g["_id"] for g in found]
+    if not ids:
+        return []
+    groups = list(db().groups.find({"_id": {"$in": ids}, "joinRequests": True, "type": {"$ne": "direct"}},
+                                   projection={"title": 1, "description": 1, "memberCount": 1, "type": 1}))
+    if not groups:
+        return []
+    inside = {m["groupId"] for m in db().members.find(
+        {"userId": user.id, "groupId": {"$in": [g["_id"] for g in groups]}, "removed": {"$ne": True}}, projection={"groupId": 1})}
+    asked = {r["groupId"]: r for r in db().join_requests.find(
+        {"userId": user.id, "groupId": {"$in": [g["_id"] for g in groups]}}, projection={"groupId": 1, "status": 1})}
+    out = []
+    for g in groups:
+        if g["_id"] in inside:
+            continue
+        r = asked.get(g["_id"]) or {}
+        out.append({"id": g["_id"], "title": g.get("title", ""), "description": g.get("description", ""),
+                    "type": g.get("type", "chat"), "memberCount": int(g.get("memberCount") or 0),
+                    "requested": r.get("status") == "pending"})
+    return sorted(out, key=lambda x: x["title"].lower())
+
+
+def request_join(user: ChatUser, group_id: str) -> dict:
+    g = group_or_404(group_id)
+    if not g.get("joinRequests") or g.get("type") == "direct":
+        raise ChatError("closed", "This group isn't taking requests right now.", 403)
+    if user.is_staff or group_id not in {x["_id"] for x in _groups_matching(user)}:
+        raise ChatError("not_for_you", "This group is for other batches.", 403)
+    if db().members.find_one({"groupId": group_id, "userId": user.id, "removed": {"$ne": True}}, projection={"_id": 1}):
+        raise ChatError("already_in", "You're already in this group.", 409)
+    rid = _request_id(group_id, user.id)
+    old = db().join_requests.find_one({"_id": rid}) or {}
+    if old.get("status") == "pending":
+        return {"ok": True, "requested": True}
+    if old.get("status") == "rejected" and now_ms() - int(old.get("answeredAt") or 0) < REQUEST_AGAIN_AFTER_MS:
+        raise ChatError("wait", "An admin said no to your last request. You can ask again tomorrow.", 429)
+    before = db().members.find_one({"groupId": group_id, "userId": user.id}, projection={"left": 1, "removed": 1, "rollNo": 1}) or {}
+    note = "left" if before.get("left") else ("removed" if before.get("removed") else "")
+    db().join_requests.update_one({"_id": rid}, {"$set": {
+        "groupId": group_id, "userId": user.id, "name": user.name, "rollNo": before.get("rollNo"),
+        "batches": list(user.batches)[:5], "note": note, "status": "pending", "at": now_ms(),
+    }}, upsert=True)
+    db().groups.update_one({"_id": group_id}, {"$inc": {"pendingRequests": 1}})
+    _tell_admins_about_requests(g, f"{user.name or 'A student'} asked to join {g.get('title', '')}. Tap to see the request.")
+    return {"ok": True, "requested": True}
+
+
+def cancel_request(user: ChatUser, group_id: str) -> dict:
+    res = db().join_requests.delete_one({"_id": _request_id(group_id, user.id), "status": "pending"})
+    if res.deleted_count:
+        db().groups.update_one({"_id": group_id}, {"$inc": {"pendingRequests": -1}})
+        g = db().groups.find_one({"_id": group_id})
+        if g:
+            _tell_admins_about_requests(g, None)
+    return {"ok": True, "requested": False}
+
+
+def _close_requests(group_id: str, user_ids: list[str]) -> None:
+    res = db().join_requests.update_many({"groupId": group_id, "userId": {"$in": list(user_ids)}, "status": "pending"},
+                                         {"$set": {"status": "approved", "answeredAt": now_ms()}})
+    if res.modified_count:
+        db().groups.update_one({"_id": group_id}, {"$inc": {"pendingRequests": -res.modified_count}})
+
+
+def _tell_admins_about_requests(g: dict, body: Optional[str]) -> None:
+    """The admins' screens update at once; with [body], their phones get a notification that
+    opens the requests."""
+    admins = [m["userId"] for m in db().members.find({"groupId": g["_id"], "role": "admin", "removed": {"$ne": True}},
+                                                     projection={"userId": 1})]
+    for uid in admins:
+        _emit("group_updated", {"groupId": g["_id"]}, user_room(uid))
+    if body and admins:
+        title = g.get("title", "")
+        push.send_to_users(admins, {"type": "chat_admin", "kind": "join_request", "groupId": g["_id"], "groupTitle": title,
+                                    "title": title, "body": body, "text": body})
+
+
+def list_requests(user: ChatUser, group_id: str) -> list[dict]:
+    require_group_admin(user, group_id)
+    docs = list(db().join_requests.find({"groupId": group_id, "status": "pending"}).sort("at", 1))
+    avatars = _avatars(d["userId"] for d in docs)
+    return [{"userId": d["userId"], "name": d.get("name") or "", "rollNo": d.get("rollNo"), "at": int(d.get("at") or 0),
+             "note": d.get("note") or "", "batches": d.get("batches") or [],
+             "avatar": avatar_of("student", avatars.get(d["userId"]))} for d in docs]
+
+
+def answer_requests(user: ChatUser, group_id: str, user_ids: list[str], approve: bool) -> int:
+    """Approve (they're added and told "X added you") or decline (they can ask again tomorrow)."""
+    require_group_admin(user, group_id)
+    ids = [str(u) for u in user_ids if str(u).strip()]
+    docs = list(db().join_requests.find({"groupId": group_id, "userId": {"$in": ids}, "status": "pending"}))
+    if not docs:
+        return 0
+    if approve:
+        admin_add_members(user, group_id, [{"userId": d["userId"], "name": d.get("name") or "", "role": "student",
+                                            "rollNo": d.get("rollNo")} for d in docs], source="request")
+    db().join_requests.update_many({"_id": {"$in": [d["_id"] for d in docs]}},
+                                   {"$set": {"status": "approved" if approve else "rejected", "answeredAt": now_ms(),
+                                             "answeredBy": user.id}})
+    db().groups.update_one({"_id": group_id}, {"$inc": {"pendingRequests": -len(docs)}})
+    g = db().groups.find_one({"_id": group_id})
+    if g:
+        _tell_admins_about_requests(g, None)
+    for d in docs:                                  # their "Groups you can join" list updates too
+        _emit("group_updated", {"groupId": group_id}, user_room(d["userId"]))
+    return len(docs)
 
 
 def _admin_notice(group_id: str, kind: str) -> None:
@@ -1371,6 +1501,7 @@ def create_group(admin: ChatUser, body: dict) -> dict:
         "type": gtype, "coaching": coaching, "coachings": coachings, "batch": batch or None,
         "match": {"coaching": coachings, "batch": batch or ["*"]},
         "autoJoin": bool(body.get("autoJoin")),
+        "joinRequests": bool(body.get("joinRequests")),
         "createdBy": admin.id, "createdAt": now_ms(), "lastSeq": 0, "lastMessage": None,
         "memberCount": 0, "deliveredSeq": 0, "readSeq": 0,
     }
@@ -1394,6 +1525,10 @@ def update_group(user: ChatUser, group_id: str, body: dict) -> dict:
     if isinstance(body.get("autoJoin"), bool) and body["autoJoin"] != _auto(g):
         changes["autoJoin"] = body["autoJoin"]
         if not g.get("match"):
+            changes["match"] = _match(g) or {"coaching": [g.get("coaching")], "batch": ["*"]}
+    if isinstance(body.get("joinRequests"), bool) and body["joinRequests"] != bool(g.get("joinRequests")):
+        changes["joinRequests"] = body["joinRequests"]
+        if not g.get("match") and "match" not in changes:
             changes["match"] = _match(g) or {"coaching": [g.get("coaching")], "batch": ["*"]}
     if changes:
         db().groups.update_one({"_id": group_id}, {"$set": changes})
@@ -1451,8 +1586,8 @@ def add_members(group_id: str, members: list[dict], source: str = "manual", adde
         if m.get("rollNo") not in (None, ""):
             changes["rollNo"] = str(m["rollNo"]).strip()
         before = db().members.find_one({"groupId": group_id, "userId": uid}, projection={"removed": 1, "role": 1, "left": 1})
-        if before and before.get("left") and source != "manual":
-            continue                                    # left by themselves: only "Add back" brings them in
+        if before and before.get("left") and source not in ("manual", "request"):
+            continue                                    # left by themselves: only "Add back" (or their own request) brings them in
         changes["left"] = False
         if before and not before.get("removed") and before.get("role") == "admin" and role != "admin":
             changes["role"] = "admin"                   # adding again never demotes an admin
@@ -1469,6 +1604,8 @@ def add_members(group_id: str, members: list[dict], source: str = "manual", adde
             _emit("group_added", {"groupId": group_id}, user_room(uid))
     if added:
         db().groups.update_one({"_id": group_id}, {"$inc": {"memberCount": added}})
+    if newly and source != "request":
+        _close_requests(group_id, newly)            # in by another way: nothing left to answer
     if newly and added_by and g.get("type") != "direct":
         # "Anshul Sir added you to Titan": everyone just added hears it on their phone.
         title = g.get("title", "")
@@ -1502,6 +1639,8 @@ def _source_label(source: str) -> str:
         return f"from {src.get('title') or 'another group'}"
     if source.startswith("batch:"):
         return "from a batch"
+    if source == "request":
+        return "who asked to join"
     return ""
 
 
