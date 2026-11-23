@@ -688,3 +688,184 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     got = c.get("/api/chat/admin/users", headers=H("teacher1"), query_string={"q": "Neha", "within": "pace"}).get_json()["users"]
     assert any(u["id"] == "teacher2" for u in got), got
     print("SEARCH BY NAME / PHONE / ID TESTS PASSED")
+
+# ── photos and PDFs: nudity / vulgar words found after delivery → taken down (real model, real PDFs) ──
+from app.chat import media_scan as _scan
+import numpy as _np, cv2 as _cv2
+
+def _tiny_pdf(text):
+    content = ("BT /F1 24 Tf 72 720 Td (%s) Tj ET" % text).encode()
+    objs = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+            b"<< /Length %d >>\nstream\n" % len(content) + content + b"\nendstream",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    out, offs = b"%PDF-1.4\n", []
+    for i, o in enumerate(objs, 1):
+        offs.append(len(out)); out += b"%d 0 obj\n" % i + o + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1) + b"".join(b"%010d 00000 n \n" % o for o in offs)
+    return out + b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF" % (len(objs) + 1, xref)
+
+assert _scan._detector is None, "the model loads only when the first file arrives"
+clean = _np.full((900, 700, 3), 235, _np.uint8); _cv2.putText(clean, "Q5: integrate x^2", (40, 200), _cv2.FONT_HERSHEY_SIMPLEX, 1.2, (20, 20, 20), 2)
+ok_jpg = _cv2.imencode(".jpg", clean)[1].tobytes()
+r = _scan.check_image(ok_jpg); assert r.allowed and r.checked, r
+assert _scan._detector is not None
+assert _scan.check_image(b"not an image").checked is False            # unreadable: let through, not a crash
+bad_word = moderation.rules()["bannedWords"][0]
+assert _scan.check_pdf(_tiny_pdf("Chapter 4 notes, integration by parts")).allowed
+r = _scan.check_pdf(_tiny_pdf("notes " + bad_word)); assert not r.allowed and any(x.startswith("pdf_text") for x in r.reasons), r
+assert _scan.check_pdf(b"%PDF-1.4 broken").checked is False
+
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users") as pushed, \
+     mock.patch.object(_media, "enabled", return_value=True), mock.patch.object(_media, "delete") as deleted, \
+     mock.patch.object(_media, "upload_link", return_value="https://r2/up"):
+    _svc._rate.clear()
+    c = app.test_client(); H=lambda u: {"Authorization": "Bearer "+tok(u)}
+    gs = c.post("/api/chat/admin/groups", headers=H("teacher1"), json={"title":"Scan","type":"chat","batch":"none-s"}).get_json()
+    c.post(f"/api/chat/groups/{gs['id']}/manage/members", headers=H("teacher1"), json={"members":[{"userId":"stu1"},{"userId":"stu2"}]})
+    def send_photo(cid, data):
+        t = c.post(f"/api/chat/groups/{gs['id']}/media/upload", headers=H("stu1"), json={"kind":"image","mime":"image/jpeg","size":len(data)}).get_json()
+        with mock.patch.object(_media, "read", return_value=data):
+            return c.post(f"/api/chat/groups/{gs['id']}/messages", headers=H("stu1"),
+                          json={"clientId":cid,"media":{"kind":"image","key":t["key"],"mime":"image/jpeg","size":len(data)}}).get_json()["message"]
+    m = send_photo("scan-ok", ok_jpg)
+    assert not mongo.db().messages.find_one({"_id": m["id"]}).get("deletedAt"), "a clean photo stays"
+    pushed.reset_mock()
+    with mock.patch.object(_scan, "_image_hits", return_value=["female_breast_exposed"]):
+        m = send_photo("scan-bad", ok_jpg)
+    doc = mongo.db().messages.find_one({"_id": m["id"]})
+    assert doc.get("deletedAt") and doc.get("deletedBy") == "moderation", doc
+    assert deleted.called, "the file is removed from storage"
+    assert any(x.args[1].get("type") == "chat_retract" for x in pushed.call_args_list), "pulled from notifications"
+    assert mongo.db().moderation.find_one({"groupId": gs["id"], "reasons": "nudity:female_breast_exposed"})
+    # a vulgar PDF sent as a file is taken down too (real PDF, real reader)
+    pdf = _tiny_pdf("free notes " + bad_word)
+    # (stu1 is paused now: the takedown was one strike too many, which is the point)
+    assert mongo.db().members.find_one({"groupId": gs["id"], "userId": "stu1"}).get("restrictedUntil", 0) > 0
+    t = c.post(f"/api/chat/groups/{gs['id']}/media/upload", headers=H("stu2"), json={"kind":"file","mime":"application/pdf","size":len(pdf),"name":"n.pdf"}).get_json()
+    assert "key" in t, t
+    with mock.patch.object(_media, "read", return_value=pdf):
+        m = c.post(f"/api/chat/groups/{gs['id']}/messages", headers=H("stu2"),
+                   json={"clientId":"scan-pdf","media":{"kind":"file","key":t["key"],"mime":"application/pdf","size":len(pdf),"name":"n.pdf"}}).get_json()["message"]
+    assert mongo.db().messages.find_one({"_id": m["id"]}).get("deletedAt"), "vulgar PDF taken down"
+    # switched off from Firebase: nothing is checked
+    _cfg.set_for_tests({"media": {"scan": {"images": False, "documents": False}}})
+    mongo.db().members.update_many({"groupId": gs["id"]}, {"$unset": {"restrictedUntil": ""}})
+    mongo.db().users.update_many({}, {"$unset": {"strikes": ""}})
+    with mock.patch.object(_scan, "_image_hits", return_value=["female_breast_exposed"]):
+        m = send_photo("scan-off", ok_jpg)
+    assert not mongo.db().messages.find_one({"_id": m["id"]}).get("deletedAt")
+    _cfg.set_for_tests({"media": {"scan": {"images": True, "documents": True}}})
+    print("PHOTO / PDF CHECK TESTS PASSED")
+
+# ── text: Hindi script, hidden letters, Firebase word lists, self-harm alerts, no false alarms ──
+def _blocked(t, staff=False):
+    return not moderation.check(t, is_staff=staff, ai=False).allowed
+for bad in ("तू मादरचोद है", "भोसड़ीके", "भोसडीके", "गाँड", "f*ck you", "ch#tiya", "b**ch", "bh@dwa", "teri maa ki", "send boobs pic"):
+    assert _blocked(bad), bad
+for fine in ("chod do yaar, kal karte hain", "आज का होमवर्क क्या है?", "sin^2x + cos^2x = 1", "2*3=6 and 4#5", "Q*5 doubt",
+             "visible to the naked eye", "Gandhi ji was born in 1869", "integration by parts", "bcc lattice and fcc",
+             "Mahatma Gandhi", "class at 5", "the cocktail party effect"):
+    assert not _blocked(fine), fine
+moderation._rules_cache = (0.0, moderation.DEFAULT_RULES)
+_cfg.set_for_tests({"moderation": {"extraWords": ["ullu"], "allowWords": ["harami"]}})
+moderation._rules_cache = (0.0, moderation.DEFAULT_RULES)
+assert _blocked("tu ullu hai") and not _blocked("harami"), "Firebase lists apply"
+_cfg.set_for_tests({"moderation": {"extraWords": {"0": "gadha"}}})            # as the Firebase console stores lists
+moderation._rules_cache = (0.0, moderation.DEFAULT_RULES)
+assert _blocked("tu gadha hai")
+_cfg.set_for_tests({"moderation": {"extraWords": [], "allowWords": []}})
+moderation._rules_cache = (0.0, moderation.DEFAULT_RULES)
+assert _blocked("harami")
+v = moderation.check("I want to die, nothing matters", is_staff=False, ai=False)
+assert v.allowed and v.alert, v                       # goes through, admins alerted
+assert moderation.check("मैं आत्महत्या करना चाहता हूँ", is_staff=False, ai=False).alert
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users") as pushed:
+    _svc._rate.clear()
+    mongo.db().users.update_many({}, {"$unset": {"strikes": ""}})
+    c = app.test_client(); H=lambda u: {"Authorization": "Bearer "+tok(u)}
+    ga = c.post("/api/chat/admin/groups", headers=H("teacher1"), json={"title":"Care","type":"chat","batch":"none-c"}).get_json()
+    c.post(f"/api/chat/groups/{ga['id']}/manage/members", headers=H("teacher1"), json={"members":[{"userId":"stu2"}]})
+    r = c.post(f"/api/chat/groups/{ga['id']}/messages", headers=H("stu2"), json={"clientId":"care-1","text":"i want to die"})
+    assert r.status_code == 200
+    alerts = [x for x in pushed.call_args_list if x.args[1].get("kind") == "alert"]
+    assert alerts and alerts[0].args[0] == ["teacher1"] and "may need help" in alerts[0].args[1]["body"], alerts
+    r = c.post(f"/api/chat/groups/{ga['id']}/messages", headers=H("stu2"), json={"clientId":"care-2","text":"तू चूतिया है"})
+    assert r.status_code == 422, r.get_json()
+print("TEXT CHECK TESTS PASSED")
+
+# ── AI check with Groq: batches, take-down, alerts, learning, fallback between models, daily limit ──
+from app.chat import ai_review, settings as _settings
+class _Resp:
+    def __init__(self, status, body=None, headers=None):
+        self.status_code, self._b, self.headers, self.text = status, body or {}, headers or {}, json.dumps(body or {})
+    def json(self): return self._b
+def _answer(content, tokens=900):
+    return _Resp(200, {"choices": [{"message": {"content": content}}], "usage": {"total_tokens": tokens}})
+_settings.GROQ_API_KEY = "test-groq"
+ai_review._usage.update({"day": "", "models": {}}); ai_review._blocked_until.clear(); ai_review._next_at.clear()
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users") as pushed:
+    _svc._rate.clear(); mongo.db().users.update_many({}, {"$unset": {"strikes": ""}})
+    mongo.db().members.update_many({}, {"$unset": {"restrictedUntil": ""}})
+    c = app.test_client(); H=lambda u: {"Authorization": "Bearer "+tok(u)}
+    gx = c.post("/api/chat/admin/groups", headers=H("teacher1"), json={"title":"AIQ","type":"chat","batch":"none-x"}).get_json()
+    c.post(f"/api/chat/groups/{gx['id']}/manage/members", headers=H("teacher1"), json={"members":[{"userId":"stu2"}]})
+    texts = ["kal ka test kitne baje hai", "send me ur pic without clothes", "cant take this anymore, ending it tonight", "ok"]
+    for i, t in enumerate(texts):
+        assert c.post(f"/api/chat/groups/{gx['id']}/messages", headers=H("stu2"), json={"clientId": f"gq-{i}", "text": t}).status_code == 200
+    assert len(ai_review._queue) == 3, "ok is too short to spend the allowance on"
+    c.post(f"/api/chat/groups/{gx['id']}/messages", headers=H("teacher1"), json={"clientId": "gq-t", "text": "teachers are not queued"})
+    assert len(ai_review._queue) == 3
+    seen = []
+    def groq(url, headers=None, json=None, timeout=None):
+        seen.append(json)
+        if json["model"] == "openai/gpt-oss-safeguard-20b":
+            return _Resp(429, {"error": "slow down"}, {"retry-after": "30"})          # first model busy: next one
+        return _answer('{"flag":[{"n":2,"type":"sexual","term":"pic without clothes"}],"alert":[3]}')
+    pushed.reset_mock()
+    with mock.patch("app.chat.ai_review.requests.post", side_effect=groq):
+        assert ai_review.flush(force=True) == 0                 # 429: nothing lost, back in the queue
+        assert len(ai_review._queue) == 3
+        assert ai_review.flush(force=True) == 3
+    assert [s["model"] for s in seen] == ["openai/gpt-oss-safeguard-20b", "openai/gpt-oss-20b"]
+    sent = __import__("json").loads(seen[1]["messages"][1]["content"])
+    assert [m["n"] for m in sent] == [1, 2, 3] and sent[1]["text"] == texts[1]
+    m = {d["clientId"]: d for d in mongo.db().messages.find({"groupId": gx["id"]})}
+    assert not m["gq-0"].get("deletedAt") and m["gq-1"].get("deletedBy") == "moderation" and not m["gq-2"].get("deletedAt")
+    assert mongo.db().ai_terms.find_one({"_id": "pic without clothes"})["count"] == 1
+    alerts = [x for x in pushed.call_args_list if x.args[1].get("kind") == "alert"]
+    assert alerts and "may need help" in alerts[0].args[1]["body"], pushed.call_args_list
+    assert any(x.args[1].get("type") == "chat_retract" for x in pushed.call_args_list)
+    st = c.get("/api/chat/admin/ai-check", headers=H("teacher1")).get_json()
+    assert st["days"][0]["checked"] == 3 and st["days"][0]["models"]["openai/gpt-oss-20b"]["tok"] == 900, st
+    assert st["words"][0]["term"] == "pic without clothes"
+    assert c.get("/api/chat/admin/ai-check", headers=H("stu2")).status_code == 403
+    # a message edited after sending: the old flagged text isn't acted on
+    c.post(f"/api/chat/groups/{gx['id']}/messages", headers=H("stu2"), json={"clientId": "gq-e", "text": "something rude here"})
+    seq = mongo.db().messages.find_one({"clientId": "gq-e"})["seq"]
+    c.patch(f"/api/chat/groups/{gx['id']}/messages/{seq}", headers=H("stu2"), json={"text": "sorry, fixed it"})
+    ai_review._next_at.clear()
+    with mock.patch("app.chat.ai_review.requests.post", return_value=_answer('{"flag":[{"n":1,"type":"abuse","term":"rude"}],"alert":[]}')):
+        ai_review.flush(force=True)
+    e = mongo.db().messages.find_one({"clientId": "gq-e"})
+    assert not e.get("deletedAt") and e["text"] == "sorry, fixed it", e
+    # every model used up today: messages keep flowing, counted as word-list only
+    for mname in ai_review.LIMITS:
+        ai_review._usage["models"][mname] = {"req": 1000, "tok": 0}
+    c.post(f"/api/chat/groups/{gx['id']}/messages", headers=H("stu2"), json={"clientId": "gq-u", "text": "hello everyone there"})
+    with mock.patch("app.chat.ai_review.requests.post") as never:
+        ai_review.flush(force=True)
+        never.assert_not_called()
+    assert not ai_review._queue
+    assert mongo.db().ai_stats.find_one({"_id": f"day:{ai_review._today()}"})["unchecked"] >= 1
+    # Firebase can switch it off
+    _cfg.set_for_tests({"aiCheck": {"enabled": False}})
+    ai_review.submit("some long message here", lambda v, t: None)
+    assert not ai_review._queue
+    _cfg.set_for_tests({})
+    # a model that answers with prose around the JSON, or rubbish
+    assert ai_review._parse('Sure! {"flag":[],"alert":[]}') == {"flag": [], "alert": []}
+    assert ai_review._parse("no idea") is None
+_settings.GROQ_API_KEY = ""
+print("GROQ AI CHECK TESTS PASSED")
