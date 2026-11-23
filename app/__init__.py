@@ -31,7 +31,10 @@ def create_app():
 
     db.init_app(app)
     migrate.init_app(app, db)
-    socketio.init_app(app, cors_allowed_origins=app.config["SOCKETIO_CORS_ALLOWED_ORIGINS"])
+    # Pings every 10 s (default 25 s, timeout 20 s): a phone whose connection died (network
+    # switch, lift, tunnel) is noticed in about 20 s instead of 45, and reconnects sooner.
+    socketio.init_app(app, cors_allowed_origins=app.config["SOCKETIO_CORS_ALLOWED_ORIGINS"],
+                      ping_interval=10, ping_timeout=10)
     limiter.init_app(app)
 
     # Dev-time safety: if a persistent SQLite file exists, ensure optional columns
