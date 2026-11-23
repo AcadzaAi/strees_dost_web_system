@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from flask import Blueprint, g, jsonify, request
 
-from . import ai_review, chatconfig, service
+from . import ai_review, chatconfig, service, verify
 from .auth import require_admin, require_staff, require_user
 from .mongo import db
 from .moderation import DEFAULT_RULES
@@ -38,7 +38,27 @@ def me():
     u = g.chat_user
     return jsonify({"id": u.id, "name": u.name, "role": u.role, "coaching": u.coaching,
                     "isAdmin": u.is_admin, "isStaff": u.is_staff, "avatar": service.my_avatar(u),
-                    "config": chatconfig.public()})
+                    "config": chatconfig.public(), "verify": verify.status(u, verify.clean_device(g.chat_device))})
+
+
+# ── phone check (students: first add from the app, and every new phone) ──
+
+@bp.get("/verify")
+@require_user
+def verify_status():
+    return jsonify(verify.status(g.chat_user, verify.clean_device(g.chat_device)))
+
+
+@bp.post("/verify/send")
+@require_user
+def verify_start():
+    return jsonify(verify.start(g.chat_user, verify.clean_device(g.chat_device)))
+
+
+@bp.post("/verify/check")
+@require_user
+def verify_finish():
+    return jsonify(verify.finish(g.chat_user, verify.clean_device(g.chat_device), str(_body().get("otp", ""))))
 
 
 @bp.post("/me/avatar")
@@ -229,7 +249,8 @@ def report(group_id, seq):
 @require_user
 def add_device():
     b = _body()
-    service.register_device(g.chat_user, b.get("token", ""), b.get("platform", "android"))
+    service.register_device(g.chat_user, b.get("token", ""), b.get("platform", "android"),
+                            verify.clean_device(g.chat_device))
     return jsonify({"ok": True})
 
 

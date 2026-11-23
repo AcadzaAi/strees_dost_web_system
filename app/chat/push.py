@@ -100,8 +100,11 @@ def send_to_users(user_ids: Iterable[str], data: dict[str, str], priority: str =
                 return
             targets: list[tuple[str, str]] = []
             found = set()
-            for user in db().users.find({"_id": {"$in": ids}}, projection={"fcmTokens": 1}):
+            for user in db().users.find({"_id": {"$in": ids}}, projection={"fcmTokens": 1, "verifiedDevice": 1}):
+                phone = (user.get("verifiedDevice") or {}).get("id")
                 for entry in user.get("fcmTokens") or []:
+                    if isinstance(entry, dict) and phone and entry.get("device") and entry["device"] != phone:
+                        continue                   # a phone that isn't the student's verified one
                     tok = entry.get("token") if isinstance(entry, dict) else entry
                     if tok:
                         targets.append((user["_id"], tok))

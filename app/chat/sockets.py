@@ -23,13 +23,24 @@ from flask import request
 from flask_socketio import ConnectionRefusedError, emit, join_room
 
 from ..extensions import socketio
-from . import presence, service
+from . import presence, service, verify
 from .auth import AuthError, verify_token
 from .service import NS, ChatError
 
 log = logging.getLogger(__name__)
 
 _users: dict[str, object] = {}       # sid -> ChatUser
+_devices: dict[str, str] = {}        # sid -> phone (device id)
+
+
+def drop_other_phones(user_id: str, device: str) -> None:
+    """The student verified another phone: this one is switched off at once."""
+    for sid, u in list(_users.items()):
+        if getattr(u, "id", None) == user_id and _devices.get(sid) != device:
+            try:
+                socketio.server.disconnect(sid, namespace=NS)
+            except Exception:  # noqa: BLE001
+                log.exception("chat: could not disconnect %s", sid)
 
 
 def _user():
@@ -60,7 +71,12 @@ def on_connect(auth=None):
         user = verify_token(token)
     except AuthError as exc:
         raise ConnectionRefusedError({"error": "unauthorized", "reason": str(exc)})
+    device = verify.clean_device((auth or {}).get("device") if isinstance(auth, dict) else request.args.get("device"))
+    need = verify.needs(user, device)
+    if need is not None:
+        raise ConnectionRefusedError(need.to_dict())
     _users[request.sid] = user
+    _devices[request.sid] = device
     was_online = presence.is_online(user.id)
     presence.connected(request.sid, user.id)
     service.sync_auto_groups(user)
@@ -82,6 +98,7 @@ def on_connect(auth=None):
 @socketio.on("disconnect", namespace=NS)
 def on_disconnect(*_args):
     _users.pop(request.sid, None)
+    _devices.pop(request.sid, None)
     user_id = presence.disconnected(request.sid)
     if user_id and not presence.is_online(user_id):
         def gone() -> None:
