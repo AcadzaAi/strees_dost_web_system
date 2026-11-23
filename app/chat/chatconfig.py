@@ -42,6 +42,8 @@ DEFAULTS: dict[str, Any] = {
         },
         # Students may send these kinds (teachers always may).
         "studentsCanSend": {"image": True, "audio": True, "file": True},
+        # The documents students may send (teachers any file). No videos, apps or zips.
+        "studentFileTypes": ["pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "txt"],
         # Nudity check after delivery, on our own server (photos, and the first pages of PDFs).
         # strictness: 1 = normal; higher catches more (and flags more by mistake), lower fewer.
         "scan": {"images": True, "documents": True, "documentPages": 5, "strictness": 1.0},
@@ -50,7 +52,9 @@ DEFAULTS: dict[str, Any] = {
     # muteMinutes: an explicit message or photo (sexual, abusive) pauses that student in the group
     # for this long; group admins can lift it. Other blocked things (links, other coachings) never mute.
     "moderation": {"extraWords": [], "extraHindiWords": [], "extraCompetitors": [], "allowWords": [],
-                   "extraEmojis": [], "muteMinutes": 20},
+                   "extraEmojis": [], "muteMinutes": 20,
+                   # links: "everyone" may send links, or only "admins" (group admins).
+                   "links": "everyone"},
     # AI check of students' messages a few seconds after delivery (Groq, free; needs GROQ_API_KEY).
     # batchSize: messages per request. waitSeconds: how long to gather a batch before checking.
     # models: Groq models in order of use (the next one takes over when one's daily allowance ends).
@@ -60,6 +64,11 @@ DEFAULTS: dict[str, Any] = {
     # on every new phone (not for groups filled from the coaching's batches). allowWithoutPhone:
     # an account with no phone number can't get an OTP, so it is let in (and logged).
     "security": {"phoneCheck": True, "allowWithoutPhone": True},
+    # The whole chat, for everyone: open false = closed (students and teachers see closedMessage,
+    # nothing is sent or received); minClientVersion: app builds whose chat is older than this are
+    # asked to update (the app reports its chat version; 1 = the first release).
+    "service": {"open": True, "closedMessage": "Chat is paused for a short while. Please check back soon.",
+                "minClientVersion": 0},
     "messages": {
         # Your own message can be edited for this long after sending.
         "editMinutes": 60,
