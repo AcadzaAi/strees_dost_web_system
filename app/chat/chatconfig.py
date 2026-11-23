@@ -42,7 +42,17 @@ DEFAULTS: dict[str, Any] = {
         },
         # Students may send these kinds (teachers always may).
         "studentsCanSend": {"image": True, "audio": True, "file": True},
+        # Nudity check after delivery, on our own server (photos, and the first pages of PDFs).
+        # strictness: 1 = normal; higher catches more (and flags more by mistake), lower fewer.
+        "scan": {"images": True, "documents": True, "documentPages": 5, "strictness": 1.0},
     },
+    # Words admins add (or un-block) without a deploy: Firebase chatConfig/moderation.
+    "moderation": {"extraWords": [], "extraHindiWords": [], "extraCompetitors": [], "allowWords": []},
+    # AI check of students' messages a few seconds after delivery (Groq, free; needs GROQ_API_KEY).
+    # batchSize: messages per request. waitSeconds: how long to gather a batch before checking.
+    # models: Groq models in order of use (the next one takes over when one's daily allowance ends).
+    "aiCheck": {"enabled": True, "batchSize": 25, "waitSeconds": 5,
+                "models": ["openai/gpt-oss-safeguard-20b", "openai/gpt-oss-20b", "openai/gpt-oss-120b"]},
     "messages": {
         # Your own message can be edited for this long after sending.
         "editMinutes": 60,
