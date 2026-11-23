@@ -61,6 +61,12 @@ DEFAULT_RULES = {
         "motion iit", "motion kota", "fiitjee", "resonance", "narayana", "sri chaitanya",
         "byjus", "byju's", "infinity learn", "embibe", "doubtnut", "apni kaksha",
     ],
+    # Always blocked, whatever is around them (skin tones don't matter).
+    "bannedEmojis": ["🖕", "🔞"],
+    # Fine alone (a fruit, sweat, a cheeky tongue); two of them together, or one with a "flirty"
+    # face, read as sexual and are blocked.
+    "suggestiveEmojis": ["🍆", "🍑", "💦", "👅", "🫦"],
+    "suggestiveFaces": ["🥵", "😩", "😏", "🤤", "👄", "😈"],
     "blockLinksForStudents": True,
     "blockPhonesForStudents": True,
     "useAiModeration": True,
@@ -121,6 +127,7 @@ def rules() -> dict:
     merged["bannedWords"] = [w for w in list(merged.get("bannedWords", [])) + words(fb.get("extraWords")) if w.lower() not in allow]
     merged["bannedWordsHindi"] = [w for w in list(merged.get("bannedWordsHindi", [])) + words(fb.get("extraHindiWords")) if w not in allow]
     merged["competitors"] = list(merged.get("competitors", [])) + words(fb.get("extraCompetitors"))
+    merged["bannedEmojis"] = list(merged.get("bannedEmojis", [])) + words(fb.get("extraEmojis"))
     _rules_cache = (time.time(), merged)
     return merged
 
@@ -183,6 +190,45 @@ def _has_term(norm: str, squeezed: str, term: str) -> bool:
     return len(term_n) >= 4 and re.search(rf"\b{re.escape(_collapse(term_n))}\b", _collapse(squeezed)) is not None
 
 
+_EMOJI_MODS = re.compile("[\U0001F3FB-\U0001F3FF\uFE0E\uFE0F\u200D]")
+
+
+def _plain_emoji(text: str) -> str:
+    """Skin tones and joiners off: "🖕🏽" is "🖕"."""
+    return _EMOJI_MODS.sub("", text or "")
+
+
+def emoji_hit(text: str, *, reaction: bool = False) -> bool:
+    """Explicit emoji. 💀, 😂, 🍑 alone are fine; 🖕 never; 🍆💦, 🍑😏, 👉👌 are sexual.
+    A reaction is one emoji on someone else's message, so a suggestive one alone counts there."""
+    r = rules()
+    t = _plain_emoji(text)
+    if any(_plain_emoji(e) in t for e in r.get("bannedEmojis", []) if e):
+        return True
+    if "👉👌" in t or "👌👈" in t:
+        return True
+    suggestive = {e for e in (_plain_emoji(x) for x in r.get("suggestiveEmojis", [])) if e and e in t}
+    if reaction:
+        return bool(suggestive)
+    faces = any(_plain_emoji(f) in t for f in r.get("suggestiveFaces", []) if f)
+    return len(suggestive) >= 2 or (len(suggestive) == 1 and faces)
+
+
+# Reasons that count as explicit (sexual / abusive). Only these mute a student; links, phone
+# numbers, other coachings' names are stopped but never punished.
+_EXPLICIT_AI = ("sexual", "abuse", "hate")
+
+
+def is_explicit(reasons) -> bool:
+    for r in reasons or []:
+        r = str(r)
+        if r in ("abusive", "emoji", "pdf_text:abusive", "pdf_text:emoji") or r.startswith("nudity:"):
+            return True
+        if r.startswith("ai:") and r[3:].split("/")[0] in _EXPLICIT_AI:
+            return True
+    return False
+
+
 def has_link(text: str) -> bool:
     return bool(_URL.search(text or ""))
 
@@ -200,6 +246,8 @@ def check(text: str, *, is_staff: bool, ai: bool = True, can_link: Optional[bool
             or any(_deva(w) in deva for w in r.get("bannedWordsHindi", []) if w) \
             or _masked_hit(text, r.get("bannedWords", [])):
         reasons.append("abusive")
+    if emoji_hit(text):
+        reasons.append("emoji")
     if is_staff and can_link is False and r.get("blockLinksForStudents", True) and _URL.search(text):
         reasons.append("link_admin")                   # a teacher who isn't an admin
     if not is_staff:
