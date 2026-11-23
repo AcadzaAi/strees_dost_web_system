@@ -495,3 +495,58 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     total = _sv.recount_storage()
     assert total == mongo.db().media_stats.find_one({"_id":"storage"})["bytes"] and total < 999_999_999 and total >= 90000+120000
     print("CAPTION / REACTION / STORAGE GUARD TESTS PASSED")
+
+# ── delivered / read per person ("Message info"), second tick after being offline, online / last seen ──
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users") as pushed:
+    c = app.test_client(); H=lambda u: {"Authorization": "Bearer "+tok(u)}
+    gi = c.post("/api/chat/admin/groups", headers=H("teacher1"), json={"title":"Info","type":"chat","batch":"none-i"}).get_json()
+    c.post(f"/api/chat/groups/{gi['id']}/manage/members", headers=H("teacher1"), json={"members":[{"userId":"stu1"},{"userId":"stu2"},{"userId":"stu4"}]})
+    for u in ("stu1", "stu2"):                    # stu1 and stu2 have the app; stu4 never opened it
+        mongo.db().users.update_one({"_id": u}, {"$set": {"fcmTokens": [{"token": "tok-"+u}]}}, upsert=True)
+    mongo.db().users.update_one({"_id": "stu4"}, {"$set": {"fcmTokens": []}}, upsert=True)
+    m = c.post(f"/api/chat/groups/{gi['id']}/messages", headers=H("teacher1"), json={"clientId":"inf-1","text":"Test tomorrow"}).get_json()["message"]
+    c.post(f"/api/chat/groups/{gi['id']}/delivered", headers=H("stu1"), json={"seq": m["seq"]})
+    c.post(f"/api/chat/groups/{gi['id']}/read", headers=H("stu1"), json={"seq": m["seq"]})
+    info = c.get(f"/api/chat/groups/{gi['id']}/messages/{m['seq']}/info", headers=H("teacher1")).get_json()
+    assert [x["userId"] for x in info["read"]]==["stu1"] and info["read"][0]["at"] >= m["createdAt"], info
+    assert {x["userId"] for x in info["waiting"]}=={"stu2","stu4"} and not info["delivered"]
+    assert [x["hasApp"] for x in info["waiting"]]==[True, False], info["waiting"]      # with the app first
+    # only the sender may look
+    assert c.get(f"/api/chat/groups/{gi['id']}/messages/{m['seq']}/info", headers=H("stu1")).status_code==403
+    # stu2 was offline (no notification got through); opening the app = connected: second tick
+    from app.chat import presence as _pres
+    for sid in list(_pres._user_sids.get("stu2", ())):         # stu2's phones from earlier tests: gone
+        _pres.disconnected(sid)
+    s2 = socketio.test_client(app, namespace="/chat", auth={"token": tok("stu2")})
+    info = c.get(f"/api/chat/groups/{gi['id']}/messages/{m['seq']}/info", headers=H("teacher1")).get_json()
+    assert [x["userId"] for x in info["delivered"]]==["stu2"] and info["delivered"][0]["at"] > 0, info
+    # a later message: delivered time is per message, not just the latest
+    m2 = c.post(f"/api/chat/groups/{gi['id']}/messages", headers=H("teacher1"), json={"clientId":"inf-2","text":"Bring the DPP"}).get_json()["message"]
+    c.post(f"/api/chat/groups/{gi['id']}/delivered", headers=H("stu2"), json={"seq": m2["seq"]})
+    log_ = mongo.db().members.find_one({"groupId": gi["id"], "userId": "stu2"})["deliveredLog"]
+    assert len(log_) == 2 and log_[-1][0] == m2["seq"], log_
+    # receipts summary only waits for people with the app (stu4 never had it)
+    assert mongo.db().groups.find_one({"_id": gi["id"]})["deliveredSeq"] >= m["seq"]
+    # people added after a message never count as "waiting" for it
+    mongo.db().members.update_one({"groupId": gi["id"], "userId": "stu4"}, {"$set": {"joinedAt": m2["createdAt"] + 60_000}})
+    info2 = c.get(f"/api/chat/groups/{gi['id']}/messages/{m2['seq']}/info", headers=H("teacher1")).get_json()
+    assert "stu4" not in {x["userId"] for x in info2["waiting"]}
+    # online / last seen in a direct chat
+    dm = c.post("/api/chat/direct", headers=H("teacher1"), json={"userId": "stu2"}).get_json()
+    dmid = dm.get("id") or dm.get("group", {}).get("id")
+    pr = c.get(f"/api/chat/groups/{dmid}/presence", headers=H("teacher1")).get_json()
+    assert pr["online"] and pr["userId"]=="stu2", pr
+    t1 = socketio.test_client(app, namespace="/chat", auth={"token": tok("teacher1")}); t1.get_received("/chat")
+    s2.disconnect(namespace="/chat")
+    ev = [e for e in t1.get_received("/chat") if e["name"]=="presence"]
+    got = (ev[0]["args"][0] if isinstance(ev[0]["args"], list) else ev[0]["args"]) if ev else {}
+    assert got.get("userId")=="stu2" and got.get("online") is False and got.get("lastSeen", 0) > 0, ev
+    pr = c.get(f"/api/chat/groups/{dmid}/presence", headers=H("teacher1")).get_json()
+    assert not pr["online"] and pr["lastSeen"] > 0
+    # silent pushes go at normal priority
+    pushed.reset_mock()
+    with mock.patch("app.chat.moderation.ai_check", return_value=moderation.Verdict(allowed=False, reasons=["ai:x"])):
+        c.post(f"/api/chat/groups/{gi['id']}/messages", headers=H("stu1"), json={"clientId":"inf-3","text":"nasty"})
+    retract = [x for x in pushed.call_args_list if x.args[1].get("type")=="chat_retract"]
+    assert retract and retract[0].kwargs.get("priority")=="normal", retract
+    print("MESSAGE INFO / SECOND TICK / ONLINE TESTS PASSED")
