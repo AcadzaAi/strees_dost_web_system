@@ -140,11 +140,15 @@ def _masked_hit(text: str, terms: list[str]) -> bool:
     singles = [normalize(t) for t in terms if " " not in t.strip()]
     singles = [t for t in singles if len(t) >= 4]
     for token in re.findall(r"[a-z0-9@$!" + re.escape(_MASK) + r"]{4,}", text.lower()):
-        hidden = sum(ch in _MASK for ch in token)
         letters = sum(ch.isalpha() for ch in token)
-        if not hidden or hidden > 3 or letters < 2:
+        if letters < 2:
             continue
-        pattern = "".join("[a-z]?" if ch in _MASK else re.escape(ch) for ch in token.translate(_LEET))
+        # "c___hu__tiya": each run of symbols hides up to 2 letters (or none), at most 3 runs.
+        parts = re.split("([" + re.escape(_MASK) + "]+)", token.translate(_LEET))
+        runs = [x for x in parts if x and x[0] in _MASK]
+        if not runs or len(runs) > 3:
+            continue
+        pattern = "".join("[a-z]{0,2}" if (x and x[0] in _MASK) else re.escape(x) for x in parts)
         if any(re.fullmatch(pattern, t) for t in singles):
             return True
     return False
