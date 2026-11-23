@@ -72,10 +72,22 @@ def belongs_to(key: str, group_id: str) -> bool:
     return isinstance(key, str) and key.startswith(f"g/{group_id}/") and ".." not in key and len(key) < 300
 
 
-def upload_link(key: str, mime: str) -> str:
-    """A PUT link the phone uploads to; the Content-Type must match."""
+def upload_link(key: str, mime: str, size: int) -> str:
+    """A PUT link the phone uploads to. Type and exact size are part of the signature, so a
+    bigger file than the one allowed is refused by storage itself."""
     return _s3().generate_presigned_url(
-        "put_object", Params={"Bucket": R2_BUCKET, "Key": key, "ContentType": mime}, ExpiresIn=UPLOAD_LINK_S)
+        "put_object", Params={"Bucket": R2_BUCKET, "Key": key, "ContentType": mime, "ContentLength": int(size)},
+        ExpiresIn=UPLOAD_LINK_S)
+
+
+def delete_many(keys: list[str]) -> None:
+    """Up to 1000 files per call."""
+    for i in range(0, len(keys), 1000):
+        chunk = [{"Key": k} for k in keys[i:i + 1000]]
+        try:
+            _s3().delete_objects(Bucket=R2_BUCKET, Delete={"Objects": chunk, "Quiet": True})
+        except Exception:  # noqa: BLE001
+            log.warning("media: could not delete %d files", len(chunk))
 
 
 _link_cache: dict[str, tuple[str, float]] = {}

@@ -29,7 +29,7 @@ from typing import Any, Optional
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
-from . import media, moderation, presence, push, settings
+from . import chatconfig, media, moderation, presence, push, settings
 from .auth import STAFF_ROLES, ChatUser
 from .mongo import db, next_seq
 
@@ -149,34 +149,91 @@ def message_out(m: dict, avatars: Optional[dict] = None) -> dict:
         "createdAt": m["createdAt"],
         "deleted": deleted,
         "deletedByAdmin": deleted and m.get("deletedBy") not in (None, m["senderId"]),
-        "media": None if deleted else _media_out(m.get("media")),
+        "media": None if deleted else _media_out(m.get("media"), m.get("createdAt") or 0),
+        "editedAt": int(m.get("editedAt") or 0) if not deleted else 0,
     }
 
 
-def _media_out(md: Optional[dict]) -> Optional[dict]:
+def _media_out(md: Optional[dict], created_at: int = 0) -> Optional[dict]:
     if not md or not md.get("key"):
         return None
     out = {k: md.get(k) for k in ("kind", "key", "mime", "size", "name", "width", "height", "durationMs")}
-    out["url"] = media.download_link(md["key"]) if media.enabled() else ""
+    out["gzip"] = bool(md.get("gzip"))
+    days = int(chatconfig.media()["retentionDays"])
+    out["expiresAt"] = int(created_at) + days * 86_400_000 if created_at and days > 0 else 0
+    out["expired"] = bool(md.get("expired")) or (out["expiresAt"] > 0 and out["expiresAt"] < now_ms())
+    out["url"] = "" if out["expired"] or not media.enabled() else media.download_link(md["key"])
     return out
 
 
-def _clean_media(group_id: str, raw) -> Optional[dict]:
-    """The file a message points at, checked: right group, allowed kind, within the size limit."""
+def _limit_bytes(kind: str) -> int:
+    """The size limit for one file of this kind, from chatConfig (never above the hard ceiling)."""
+    c = chatconfig.media()
+    by_kind = {"image": int(c["image"]["maxKB"]) * 1024, "audio": int(c["audio"]["maxKB"]) * 1024,
+               "file": int(float(c["file"]["maxMB"]) * 1024 * 1024)}
+    return min(by_kind.get(kind, 0), media.KINDS[kind]["max"])
+
+
+def _size_text(n: int) -> str:
+    return f"{n // 1024} KB" if n < 1024 * 1024 else f"{n / (1024 * 1024):.0f} MB"
+
+
+def _day_key(user_id: str) -> str:
+    # Days run on India time, so "today's limit" resets at midnight IST.
+    return f"{user_id}:{time.strftime('%Y-%m-%d', time.gmtime(time.time() + 5.5 * 3600))}"
+
+
+def _usage_today(user_id: str) -> dict:
+    return db().media_usage.find_one({"_id": _day_key(user_id)}) or {}
+
+
+def _stored_bytes() -> int:
+    return int((db().media_stats.find_one({"_id": "storage"}) or {}).get("bytes") or 0)
+
+
+def _add_stored(delta: int) -> None:
+    if delta:
+        db().media_stats.update_one({"_id": "storage"}, {"$inc": {"bytes": int(delta)}}, upsert=True)
+
+
+def _check_media_allowed(user: ChatUser, member: dict, kind: str, size: int) -> None:
+    """Every rule from chatConfig, with a reason the person can understand."""
+    c = chatconfig.media()
+    if not c["enabled"] or not media.enabled():
+        raise ChatError("media_off", "Sending photos and files is switched off right now.", 503)
+    rule = media.KINDS.get(kind)
+    if not rule:
+        raise ChatError("bad_media", "Pick a photo, a voice note or a document.")
+    staff = member.get("role") in STAFF_MEMBER_ROLES or user.is_staff
+    if not staff and not c["studentsCanSend"].get(kind, True):
+        what = {"image": "photos", "audio": "voice notes", "file": "documents"}[kind]
+        raise ChatError("not_allowed", f"Students can't send {what} right now.", 403)
+    top = _limit_bytes(kind)
+    if size <= 0 or size > top:
+        raise ChatError("too_big", f"This file is too big. The limit is {_size_text(top)}.", 400)
+    cap = c["daily"]["teacher" if staff else "student"]
+    used = _usage_today(user.id)
+    if int(used.get("count") or 0) + 1 > int(cap["count"]):
+        raise ChatError("daily_limit", f"You can send {int(cap['count'])} files a day. Try again tomorrow.", 429)
+    if int(used.get("bytes") or 0) + size > int(float(cap["mb"]) * 1024 * 1024):
+        raise ChatError("daily_limit", f"You can send {cap['mb']} MB of files a day. Try again tomorrow.", 429)
+    if _stored_bytes() + size > float(c["storageLimitGB"]) * 1024 ** 3:
+        raise ChatError("storage_full", "File storage is full for now. Older files are cleared every day; try later.", 507)
+
+
+def _clean_media(user: ChatUser, member: dict, group_id: str, raw) -> Optional[dict]:
+    """The file a message points at, checked: right group, allowed kind, within every limit."""
     if not raw:
         return None
-    if not media.enabled():
-        raise ChatError("media_off", "Sending photos and files is not switched on yet.", 503)
     if not isinstance(raw, dict):
         raise ChatError("bad_media", "That file could not be sent.")
     kind = raw.get("kind")
-    rule = media.KINDS.get(kind)
     key = raw.get("key")
-    if not rule or not media.belongs_to(key, group_id):
+    if kind not in media.KINDS or not media.belongs_to(key, group_id):
         raise ChatError("bad_media", "That file could not be sent.")
     size = int(raw.get("size") or 0)
-    if size <= 0 or size > rule["max"]:
-        raise ChatError("too_big", f"Files can be up to {rule['max'] // (1024 * 1024)} MB.")
+    _check_media_allowed(user, member, kind, size)
+
     def num(name, top):
         try:
             v = int(raw.get(name) or 0)
@@ -185,13 +242,13 @@ def _clean_media(group_id: str, raw) -> Optional[dict]:
         return max(0, min(v, top))
     return {"kind": kind, "key": key, "mime": str(raw.get("mime") or "")[:80], "size": size,
             "name": str(raw.get("name") or "")[:120], "width": num("width", 20000), "height": num("height", 20000),
-            "durationMs": num("durationMs", 3 * 3600 * 1000)}
+            "durationMs": num("durationMs", 3 * 3600 * 1000), "gzip": bool(raw.get("gzip")) and kind == "file"}
 
 
 def request_upload(user: ChatUser, group_id: str, body: dict) -> dict:
     """A short-lived link to upload one file to R2 for this group (only if I may post here)."""
     if not media.enabled():
-        raise ChatError("media_off", "Sending photos and files is not switched on yet.", 503)
+        raise ChatError("media_off", "Sending photos and files is switched off right now.", 503)
     g = group_or_404(group_id)
     member = membership(group_id, user.id)
     if not _can_post(g, member):
@@ -206,10 +263,9 @@ def request_upload(user: ChatUser, group_id: str, body: dict) -> dict:
     if rule["mimes"] and mime not in rule["mimes"]:
         raise ChatError("bad_media", "That kind of file can't be sent here.")
     size = int(body.get("size") or 0)
-    if size <= 0 or size > rule["max"]:
-        raise ChatError("too_big", f"Files can be up to {rule['max'] // (1024 * 1024)} MB.")
+    _check_media_allowed(user, member, kind, size)
     key = media.key_for(group_id, mime, str(body.get("name") or ""))
-    return {"key": key, "uploadUrl": media.upload_link(key, mime), "method": "PUT",
+    return {"key": key, "uploadUrl": media.upload_link(key, mime, size), "method": "PUT",
             "headers": {"Content-Type": mime}, "expiresIn": media.UPLOAD_LINK_S}
 
 
@@ -472,8 +528,7 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
     started = time.time()
     text = (text or "").strip()
     client_id = (client_id or "").strip()[:64] or secrets.token_hex(8)
-    attached = _clean_media(group_id, media_in)
-    if not text and not attached:
+    if not text and not media_in:
         raise ChatError("empty", "Type a message first.")
     if len(text) > settings.MAX_TEXT_LENGTH:
         raise ChatError("too_long", f"Messages can be up to {settings.MAX_TEXT_LENGTH} characters.")
@@ -484,6 +539,7 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
     existing = db().messages.find_one({"groupId": group_id, "clientId": client_id}, projection={"_id": 1})
     if existing:                                   # a resend: the same message, not a new one
         return message_out(db().messages.find_one({"_id": existing["_id"]}))
+    attached = _clean_media(user, member, group_id, media_in)
 
     if not _can_post(g, member):
         if (member.get("restrictedUntil") or 0) > now_ms():
@@ -523,6 +579,10 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
     }
     if attached:
         doc["media"] = attached
+        # Counts towards today's limit and the storage total.
+        db().media_usage.update_one({"_id": _day_key(user.id)},
+                                    {"$inc": {"count": 1, "bytes": attached["size"]}, "$set": {"at": now_ms()}}, upsert=True)
+        _add_stored(attached["size"])
     try:
         db().messages.insert_one(doc)
     except DuplicateKeyError:                      # two resends raced: return the one that won
@@ -582,6 +642,11 @@ _SYNC_BACKGROUND = False       # tests flip this so they can check the results r
 def _take_down(user: ChatUser, group_id: str, doc: dict, reasons: list) -> None:
     """The AI check flagged a delivered message: gone for everyone, logged, and a strike."""
     db().messages.update_one({"_id": doc["_id"]}, {"$set": {"deletedAt": now_ms(), "deletedBy": "moderation"}})
+    md = doc.get("media") or {}
+    if md.get("key") and not md.get("expired"):
+        _add_stored(-int(md.get("size") or 0))
+        if media.enabled():
+            media.delete(md["key"])
     g = db().groups.find_one({"_id": group_id}, projection={"lastMessage": 1}) or {}
     if (g.get("lastMessage") or {}).get("seq") == doc["seq"]:
         db().groups.update_one({"_id": group_id}, {"$set": {"lastMessage.text": "This message was deleted"}})
@@ -730,10 +795,94 @@ def delete_message(user: ChatUser, group_id: str, seq: int) -> dict:
         db().groups.update_one({"_id": group_id}, {"$set": {"lastMessage.text": "This message was deleted"}})
     payload = {"groupId": group_id, "seq": int(seq), "id": msg["_id"], "byAdmin": msg["senderId"] != user.id}
     _emit("message_deleted", payload, group_room(group_id))
-    key = (msg.get("media") or {}).get("key")
-    if key and media.enabled():                    # the photo / voice note goes too, not just the bubble
-        _background(lambda: media.delete(key))
+    md = msg.get("media") or {}
+    key = md.get("key")
+    if key and not md.get("expired"):
+        _add_stored(-int(md.get("size") or 0))
+        if media.enabled():                        # the photo / voice note goes too, not just the bubble
+            _background(lambda: media.delete(key))
     return payload
+
+
+def edit_message(user: ChatUser, group_id: str, seq: int, text: str) -> dict:
+    """Your own message (or a file's caption), within chatConfig.messages.editMinutes. Everyone
+    sees the new text with "edited"."""
+    member = membership(group_id, user.id)
+    text = (text or "").strip()
+    msg = db().messages.find_one({"groupId": group_id, "seq": int(seq)})
+    if not msg or msg.get("type") == "system" or msg.get("deletedAt"):
+        raise ChatError("no_message", "That message is gone.", 404)
+    if msg["senderId"] != user.id:
+        raise ChatError("forbidden", "You can only edit your own messages.", 403)
+    window = chatconfig.edit_minutes()
+    if now_ms() - int(msg["createdAt"]) > window * 60_000:
+        span = f"{window // 60} hour{'s' if window // 60 != 1 else ''}" if window % 60 == 0 else f"{window} minutes"
+        raise ChatError("edit_window", f"Messages can only be edited within {span} of sending.", 403)
+    if not text and not msg.get("media"):
+        raise ChatError("empty", "A message can't be empty. Delete it instead.")
+    if len(text) > settings.MAX_TEXT_LENGTH:
+        raise ChatError("too_long", f"Messages can be up to {settings.MAX_TEXT_LENGTH} characters.")
+    if text == (msg.get("text") or ""):
+        return message_out(msg)
+    g = group_or_404(group_id)
+    if not _can_post(g, member):
+        raise ChatError("read_only", "You can't send messages here right now.", 403)
+    is_staff = member.get("role") in STAFF_MEMBER_ROLES or user.is_staff
+    verdict = moderation.check(text, is_staff=is_staff, ai=False) if text else moderation.Verdict(allowed=True)
+    if not verdict.allowed:
+        _strike(user, group_id)
+        raise ChatError("blocked", verdict.message, 422)
+    at = now_ms()
+    db().messages.update_one({"_id": msg["_id"]}, {"$set": {"text": text, "editedAt": at}, "$push": {
+        "edits": {"$each": [{"text": msg.get("text") or "", "at": at}], "$slice": -10}}})
+    msg.update({"text": text, "editedAt": at})
+    last = (db().groups.find_one({"_id": group_id}, projection={"lastMessage": 1}) or {}).get("lastMessage") or {}
+    if last.get("seq") == int(seq):
+        preview = (media.label(msg.get("media")) + (" " + text if text else "")) if msg.get("media") else text
+        db().groups.update_one({"_id": group_id}, {"$set": {"lastMessage.text": preview[:160]}})
+    out = message_out(msg)
+    _emit("message_edited", {"groupId": group_id, "seq": int(seq), "text": text, "editedAt": at}, group_room(group_id))
+    if text and not is_staff:
+        def later() -> None:
+            v = moderation.ai_check(text)
+            if not v.allowed:
+                _take_down(user, group_id, msg, v.reasons)
+        _background(later)
+    return out
+
+
+def sweep_expired_media(limit: int = 500) -> int:
+    """Removes files older than chatConfig.media.retentionDays from storage; their messages then
+    show "expired". Runs every few hours. Returns how many were removed."""
+    days = int(chatconfig.media()["retentionDays"])
+    if days <= 0:
+        return 0
+    cutoff = now_ms() - days * 86_400_000
+    docs = list(db().messages.find(
+        {"media.key": {"$exists": True}, "media.expired": {"$ne": True}, "createdAt": {"$lt": cutoff}},
+        projection={"media": 1, "deletedAt": 1}).limit(limit))
+    if not docs:
+        return 0
+    if media.enabled():
+        media.delete_many([d["media"]["key"] for d in docs])
+    freed = sum(int(d["media"].get("size") or 0) for d in docs if not d.get("deletedAt"))
+    db().messages.update_many({"_id": {"$in": [d["_id"] for d in docs]}}, {"$set": {"media.expired": True}})
+    _add_stored(-freed)
+    log.info("chat: removed %d expired files (%d MB)", len(docs), freed // (1024 * 1024))
+    return len(docs)
+
+
+def start_media_sweeper() -> None:
+    def loop() -> None:
+        while True:
+            try:
+                while sweep_expired_media() >= 500:       # a big backlog: keep going
+                    pass
+            except Exception:  # noqa: BLE001
+                log.exception("chat: expired-file sweep failed")
+            time.sleep(3 * 3600)
+    from ..extensions import socketio
+    socketio.start_background_task(loop)
 
 
 def report_message(user: ChatUser, group_id: str, seq: int, reason: str) -> None:
@@ -923,6 +1072,10 @@ def delete_group(user: ChatUser, group_id: str) -> None:
     if g.get("type") == "direct" or g.get("createdBy") != user.id:
         raise ChatError("forbidden", "Only the person who created the group can delete it.", 403)
     ids = [m["userId"] for m in db().members.find({"groupId": group_id}, projection={"userId": 1})]
+    kept = sum(int((m.get("media") or {}).get("size") or 0) for m in db().messages.find(
+        {"groupId": group_id, "media.key": {"$exists": True}, "media.expired": {"$ne": True}, "deletedAt": {"$exists": False}},
+        projection={"media.size": 1}))
+    _add_stored(-kept)
     db().messages.delete_many({"groupId": group_id})
     db().members.delete_many({"groupId": group_id})
     db().groups.delete_one({"_id": group_id})

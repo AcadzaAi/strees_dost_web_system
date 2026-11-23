@@ -81,6 +81,13 @@ def on_send(data):
     return {"ok": True, "message": msg}
 
 
+@socketio.on("edit", namespace=NS)
+@_safe
+def on_edit(data):
+    msg = service.edit_message(_user(), str(data.get("groupId", "")), int(data.get("seq", 0)), str(data.get("text", "")))
+    return {"ok": True, "message": msg}
+
+
 @socketio.on("read", namespace=NS)
 @_safe
 def on_read(data):

@@ -30,8 +30,9 @@ def init_chat(app: Flask) -> None:
     log.info("chat: on (db=%s, push=%s)", settings.CHAT_DB_NAME, bool(settings.FIREBASE_SERVICE_ACCOUNT_JSON))
     _keep_awake()
     if not app.testing:
-        from . import push
+        from . import push, service
         push.warm_up()
+        service.start_media_sweeper()      # files older than chatConfig.media.retentionDays
 
 
 _awake_started = False

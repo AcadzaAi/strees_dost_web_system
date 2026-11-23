@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from flask import Blueprint, g, jsonify, request
 
-from . import service
+from . import chatconfig, service
 from .auth import require_admin, require_staff, require_user
 from .mongo import db
 from .moderation import DEFAULT_RULES
@@ -37,7 +37,8 @@ def _body() -> dict:
 def me():
     u = g.chat_user
     return jsonify({"id": u.id, "name": u.name, "role": u.role, "coaching": u.coaching,
-                    "isAdmin": u.is_admin, "isStaff": u.is_staff, "avatar": service.my_avatar(u)})
+                    "isAdmin": u.is_admin, "isStaff": u.is_staff, "avatar": service.my_avatar(u),
+                    "config": chatconfig.public()})
 
 
 @bp.post("/me/avatar")
@@ -91,6 +92,21 @@ def send(group_id):
 @require_user
 def read(group_id):
     return jsonify({"ok": True, "readSeq": service.mark_read(g.chat_user, group_id, int(_body().get("seq", 0)))})
+
+
+@bp.patch("/groups/<group_id>/messages/<int:seq>")
+@require_user
+def edit(group_id, seq):
+    msg = service.edit_message(g.chat_user, group_id, seq, str(_body().get("text", "")))
+    return jsonify({"ok": True, "message": msg})
+
+
+@bp.get("/config")
+@require_user
+def config():
+    """Limits from Firebase chatConfig, so the app compresses and warns with the same numbers."""
+    from . import chatconfig
+    return jsonify(chatconfig.public())
 
 
 @bp.post("/groups/<group_id>/media/upload")

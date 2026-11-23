@@ -369,3 +369,51 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     assert not [c_ for c_ in pushed.call_args_list if c_.args[1].get("type")=="chat_message"], "flagged messages are never notified"
     print("AI AFTER-DELIVERY TEST PASSED")
 
+# ── limits from Firebase chatConfig, storage budget, expiry sweep, editing ──
+from app.chat import chatconfig as _cfg
+_cfg.set_for_tests({"media": {"image": {"maxKB": 500}, "daily": {"student": {"count": 2, "mb": 1}},
+                              "studentsCanSend": {"file": False}, "storageLimitGB": 9, "retentionDays": 21},
+                    "messages": {"editMinutes": 60}})
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users"), \
+     mock.patch.object(_media, "delete"), mock.patch.object(_media, "delete_many") as swept:
+    c = app.test_client(); H=lambda u: {"Authorization": "Bearer "+tok(u)}
+    gl2 = c.post("/api/chat/admin/groups", headers=H("teacher1"), json={"title":"Limits","type":"chat","batch":"none-l"}).get_json()
+    c.post(f"/api/chat/groups/{gl2['id']}/manage/members", headers=H("teacher1"), json={"members":[{"userId":"stu4"}]})
+    cfg = c.get("/api/chat/config", headers=H("stu4")).get_json()
+    assert cfg["media"]["image"]["maxKB"]==500 and cfg["messages"]["editMinutes"]==60
+    assert c.get("/api/chat/me", headers=H("stu4")).get_json()["config"]["media"]["daily"]["student"]["count"]==2
+    up = lambda kind, mime, size, who="stu4": c.post(f"/api/chat/groups/{gl2['id']}/media/upload", headers=H(who), json={"kind":kind,"mime":mime,"size":size})
+    r = up("image","image/jpeg",600*1024); assert r.status_code==400 and r.get_json()["error"]=="too_big", r.get_json()
+    r = up("file","application/pdf",1000); assert r.status_code==403 and r.get_json()["error"]=="not_allowed"
+    assert up("file","application/pdf",1000,"teacher1").status_code==200          # teachers always may
+    sent=[]
+    for i in range(2):
+        t = up("image","image/jpeg",100*1024).get_json()
+        sent.append(c.post(f"/api/chat/groups/{gl2['id']}/messages", headers=H("stu4"),
+                           json={"clientId":f"lim-{i}","media":{"kind":"image","key":t["key"],"mime":"image/jpeg","size":100*1024}}).get_json()["message"])
+    r = up("image","image/jpeg",100*1024); assert r.status_code==429 and r.get_json()["error"]=="daily_limit", r.get_json()
+    # storage budget
+    before = mongo.db().media_stats.find_one({"_id":"storage"})["bytes"]
+    mongo.db().media_stats.update_one({"_id":"storage"}, {"$set":{"bytes": int(9*1024**3)}})
+    r = up("image","image/jpeg",10,"teacher1"); assert r.status_code==507 and r.get_json()["error"]=="storage_full"
+    mongo.db().media_stats.update_one({"_id":"storage"}, {"$set":{"bytes": before}})
+    # expiry: media_out says until when; the sweep removes old files and frees the storage
+    assert sent[0]["media"]["expiresAt"] > sent[0]["createdAt"] and not sent[0]["media"]["expired"]
+    mongo.db().messages.update_many({"groupId": gl2["id"], "media.key": {"$exists": True}}, {"$inc": {"createdAt": -22*86_400_000}})
+    from app.chat import service as _sv
+    assert _sv.sweep_expired_media() >= 2
+    swept.assert_called()
+    hist = c.get(f"/api/chat/groups/{gl2['id']}/messages", headers=H("stu4")).get_json()["messages"]
+    old = [x for x in hist if x.get("media")]
+    assert old and all(x["media"]["expired"] and x["media"]["url"]=="" for x in old)
+    assert mongo.db().media_stats.find_one({"_id":"storage"})["bytes"] == before - 2*100*1024
+    # editing: own message, within the window, shown as edited; not after the window; not others'
+    m = c.post(f"/api/chat/groups/{gl2['id']}/messages", headers=H("stu4"), json={"clientId":"ed-1","text":"helo"}).get_json()["message"]
+    e = c.patch(f"/api/chat/groups/{gl2['id']}/messages/{m['seq']}", headers=H("stu4"), json={"text":"hello"}).get_json()
+    assert e["message"]["text"]=="hello" and e["message"]["editedAt"] > 0
+    assert c.patch(f"/api/chat/groups/{gl2['id']}/messages/{m['seq']}", headers=H("teacher1"), json={"text":"x"}).status_code==403
+    mongo.db().messages.update_one({"groupId": gl2["id"], "seq": m["seq"]}, {"$inc": {"createdAt": -61*60_000}})
+    r = c.patch(f"/api/chat/groups/{gl2['id']}/messages/{m['seq']}", headers=H("stu4"), json={"text":"again"})
+    assert r.status_code==403 and r.get_json()["error"]=="edit_window"
+    print("LIMITS / EXPIRY / EDIT TESTS PASSED")
+
