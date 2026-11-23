@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from flask import Blueprint, g, jsonify, request
 
-from . import chatconfig, service
+from . import ai_review, chatconfig, service
 from .auth import require_admin, require_staff, require_user
 from .mongo import db
 from .moderation import DEFAULT_RULES
@@ -418,3 +418,11 @@ def admin_reports():
 def admin_moderation_log():
     items = list(db().moderation.find({}, {"_id": 0}).sort("createdAt", -1).limit(200))
     return jsonify({"items": items})
+
+
+@bp.get("/admin/ai-check")
+@require_admin
+def admin_ai_check():
+    """How much of Groq's free allowance each day used, how many messages were checked (or left
+    to the word list), and the words the AI caught most, to add to chatConfig/moderation/extraWords."""
+    return jsonify(ai_review.stats(int(request.args.get("days", 7))))

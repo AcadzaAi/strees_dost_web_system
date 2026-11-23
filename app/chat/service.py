@@ -29,7 +29,7 @@ from typing import Any, Optional
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
-from . import chatconfig, media, moderation, presence, push, settings
+from . import ai_review, chatconfig, media, media_scan, moderation, presence, push, settings
 from .auth import STAFF_ROLES, ChatUser
 from .mongo import db, next_seq
 
@@ -806,17 +806,23 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
             if verdict.alert:
                 db().moderation.insert_one({"kind": "alert", "groupId": group_id, "userId": user.id, "name": user.name,
                                             "text": text, "reasons": ["self-harm"], "createdAt": now_ms(), "seq": seq})
+                _alert_admins(g, user, shown)
         except Exception:  # noqa: BLE001
             log.exception("chat: after-send bookkeeping failed for %s", doc["_id"])
-        try:
-            later = moderation.ai_check(text) if text and not is_staff else moderation.Verdict(allowed=True)
-            if not later.allowed:
-                _take_down(user, group_id, doc, later.reasons)     # also pulls the notification back
-            elif later.alert:
-                db().moderation.insert_one({"kind": "alert", "groupId": group_id, "userId": user.id, "name": user.name,
-                                            "text": text, "reasons": ["self-harm"], "createdAt": now_ms(), "seq": seq})
-        except Exception:  # noqa: BLE001
-            log.exception("chat: AI check failed for %s", doc["_id"])
+        if text and not is_staff:
+            try:
+                ai_review.submit(text, _on_ai_verdict(user, g, doc, already_alerted=verdict.alert))
+            except Exception:  # noqa: BLE001
+                log.exception("chat: AI check failed for %s", doc["_id"])
+        # Photos and PDFs from anyone: checked for nudity on this server; gone in a second or two if so.
+        if attached:
+            try:
+                scan = media_scan.check_media(attached)
+                if not scan.allowed:
+                    log.warning("chat: %s taken down by the media check (%s)", doc["_id"], ", ".join(scan.reasons))
+                    _take_down(user, group_id, doc, scan.reasons)
+            except Exception:  # noqa: BLE001
+                log.exception("chat: media check failed for %s", doc["_id"])
 
     _background(notify_now)
     _background(after)
@@ -877,6 +883,39 @@ def _background(fn) -> None:
 
 
 _SYNC_BACKGROUND = False       # tests flip this so they can check the results right away
+
+
+def _alert_admins(g: dict, user: ChatUser, shown: str) -> None:
+    """A student wrote something that sounds like self-harm: the group's admins (not the group)
+    get a notification that opens the chat, so a person notices quickly."""
+    if user.is_staff:
+        return
+    admins = [m["userId"] for m in db().members.find({"groupId": g["_id"], "role": "admin", "removed": {"$ne": True}},
+                                                     projection={"userId": 1}) if m["userId"] != user.id]
+    if not admins:
+        return
+    title = g.get("title", "")
+    body = f"{shown or 'A student'} may need help. Please look at their message in {title}."
+    push.send_to_users(admins, {"type": "chat_admin", "kind": "alert", "groupId": g["_id"], "groupTitle": title,
+                                "title": title, "body": body, "text": body})
+
+
+def _on_ai_verdict(user: ChatUser, g: dict, doc: dict, *, already_alerted: bool = False):
+    """What happens when the AI check (a few seconds after delivery) has looked at a message."""
+    def done(v: "moderation.Verdict", terms: list) -> None:
+        if not v.allowed:
+            current = db().messages.find_one({"_id": doc["_id"]}, projection={"deletedAt": 1, "text": 1}) or {}
+            if current.get("deletedAt") or (current.get("text") or "") != (doc.get("text") or ""):
+                return                            # already deleted, or edited since (the edit is checked on its own)
+            log.warning("chat: %s taken down by the AI check (%s)", doc["_id"], ", ".join(v.reasons))
+            _take_down(user, g["_id"], doc, v.reasons)    # also pulls the notification back
+            ai_review.learn(terms, v.reasons[0].replace("ai:", ""), doc.get("text") or "")
+        elif v.alert and not already_alerted:
+            db().moderation.insert_one({"kind": "alert", "groupId": g["_id"], "userId": user.id, "name": user.name,
+                                        "text": doc.get("text", ""), "reasons": ["self-harm", "ai"], "createdAt": now_ms(),
+                                        "seq": doc.get("seq")})
+            _alert_admins(g, user, display_name(doc.get("senderRole"), doc.get("senderName"), doc.get("rollNo")))
+    return done
 
 
 def _take_down(user: ChatUser, group_id: str, doc: dict, reasons: list) -> None:
@@ -1203,11 +1242,7 @@ def edit_message(user: ChatUser, group_id: str, seq: int, text: str) -> dict:
     out = message_out(msg)
     _emit("message_edited", {"groupId": group_id, "seq": int(seq), "text": text, "editedAt": at}, group_room(group_id))
     if text and not is_staff:
-        def later() -> None:
-            v = moderation.ai_check(text)
-            if not v.allowed:
-                _take_down(user, group_id, msg, v.reasons)
-        _background(later)
+        _background(lambda: ai_review.submit(text, _on_ai_verdict(user, g, msg, already_alerted=verdict.alert)))
     return out
 
 
