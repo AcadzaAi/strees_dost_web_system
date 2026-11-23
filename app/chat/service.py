@@ -151,7 +151,16 @@ def message_out(m: dict, avatars: Optional[dict] = None) -> dict:
         "deletedByAdmin": deleted and m.get("deletedBy") not in (None, m["senderId"]),
         "media": None if deleted else _media_out(m.get("media"), m.get("createdAt") or 0),
         "editedAt": int(m.get("editedAt") or 0) if not deleted else 0,
+        "reactions": [] if deleted else reactions_out(m),
+        "reactedAt": int(m.get("reactedAt") or 0),
     }
+
+
+def reactions_out(m: dict) -> list[dict]:
+    """Who reacted with what, oldest first: [{userId, name, emoji}]."""
+    rs = [v for v in (m.get("reactions") or {}).values() if isinstance(v, dict) and v.get("e")]
+    rs.sort(key=lambda v: int(v.get("at") or 0))
+    return [{"userId": v.get("u", ""), "name": v.get("n", ""), "emoji": v["e"]} for v in rs]
 
 
 def _media_out(md: Optional[dict], created_at: int = 0) -> Optional[dict]:
@@ -196,7 +205,21 @@ def _add_stored(delta: int) -> None:
         db().media_stats.update_one({"_id": "storage"}, {"$inc": {"bytes": int(delta)}}, upsert=True)
 
 
-def _check_media_allowed(user: ChatUser, member: dict, kind: str, size: int) -> None:
+def _month_key() -> str:
+    return "month:" + time.strftime("%Y-%m", time.gmtime(time.time() + 5.5 * 3600))
+
+
+def _uploaded_this_month() -> int:
+    return int((db().media_stats.find_one({"_id": _month_key()}) or {}).get("bytes") or 0)
+
+
+def _pending_bytes(exclude_key: Optional[str] = None) -> int:
+    """Files uploaded (or being uploaded) but not sent yet: they take space too."""
+    q = {"_id": {"$ne": exclude_key}} if exclude_key else {}
+    return sum(int(d.get("size") or 0) for d in db().media_pending.find(q, projection={"size": 1}))
+
+
+def _check_media_allowed(user: ChatUser, member: dict, kind: str, size: int, key: Optional[str] = None) -> None:
     """Every rule from chatConfig, with a reason the person can understand."""
     c = chatconfig.media()
     if not c["enabled"] or not media.enabled():
@@ -217,8 +240,13 @@ def _check_media_allowed(user: ChatUser, member: dict, kind: str, size: int) -> 
         raise ChatError("daily_limit", f"You can send {int(cap['count'])} files a day. Try again tomorrow.", 429)
     if int(used.get("bytes") or 0) + size > int(float(cap["mb"]) * 1024 * 1024):
         raise ChatError("daily_limit", f"You can send {cap['mb']} MB of files a day. Try again tomorrow.", 429)
-    if _stored_bytes() + size > float(c["storageLimitGB"]) * 1024 ** 3:
+    # Two hard ceilings so the bucket never goes past R2's free 10 GB: what is kept right now
+    # (sent files + uploads not sent yet), and what was uploaded this month.
+    gb = 1024 ** 3
+    if _stored_bytes() + _pending_bytes(exclude_key=key) + size > float(c["storageLimitGB"]) * gb:
         raise ChatError("storage_full", "File storage is full for now. Older files are cleared every day; try later.", 507)
+    if key is None and _uploaded_this_month() + size > float(c["monthlyUploadGB"]) * gb:
+        raise ChatError("storage_full", "This month's file limit is used up. Text messages still work.", 507)
 
 
 def _clean_media(user: ChatUser, member: dict, group_id: str, raw) -> Optional[dict]:
@@ -232,7 +260,10 @@ def _clean_media(user: ChatUser, member: dict, group_id: str, raw) -> Optional[d
     if kind not in media.KINDS or not media.belongs_to(key, group_id):
         raise ChatError("bad_media", "That file could not be sent.")
     size = int(raw.get("size") or 0)
-    _check_media_allowed(user, member, kind, size)
+    pending = db().media_pending.find_one({"_id": key}, projection={"size": 1})
+    if pending and int(pending.get("size") or 0) > 0:
+        size = int(pending["size"])                # the size the upload was signed for, not what the app says
+    _check_media_allowed(user, member, kind, size, key=key)
 
     def num(name, top):
         try:
@@ -265,6 +296,8 @@ def request_upload(user: ChatUser, group_id: str, body: dict) -> dict:
     size = int(body.get("size") or 0)
     _check_media_allowed(user, member, kind, size)
     key = media.key_for(group_id, mime, str(body.get("name") or ""))
+    # Remembered until the message is sent; an upload never sent is removed after a few days.
+    db().media_pending.insert_one({"_id": key, "size": size, "userId": user.id, "groupId": group_id, "at": now_ms()})
     return {"key": key, "uploadUrl": media.upload_link(key, mime, size), "method": "PUT",
             "headers": {"Content-Type": mime}, "expiresIn": media.UPLOAD_LINK_S}
 
@@ -583,6 +616,8 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
         db().media_usage.update_one({"_id": _day_key(user.id)},
                                     {"$inc": {"count": 1, "bytes": attached["size"]}, "$set": {"at": now_ms()}}, upsert=True)
         _add_stored(attached["size"])
+        db().media_pending.delete_one({"_id": attached["key"]})
+        db().media_stats.update_one({"_id": _month_key()}, {"$inc": {"bytes": attached["size"]}}, upsert=True)
     try:
         db().messages.insert_one(doc)
     except DuplicateKeyError:                      # two resends raced: return the one that won
@@ -885,17 +920,152 @@ def sweep_expired_media(limit: int = 500) -> int:
     return len(docs)
 
 
+PENDING_KEEP_MS = 3 * 86_400_000
+
+
+def sweep_unsent_uploads() -> int:
+    """Uploads whose message was never sent (app closed, sending cancelled): removed after 3 days."""
+    cutoff = now_ms() - PENDING_KEEP_MS
+    docs = list(db().media_pending.find({"at": {"$lt": cutoff}}, projection={"_id": 1}).limit(500))
+    if not docs:
+        return 0
+    keys = [d["_id"] for d in docs]
+    if media.enabled():
+        media.delete_many(keys)
+    db().media_pending.delete_many({"_id": {"$in": keys}})
+    log.info("chat: removed %d uploads that were never sent", len(keys))
+    return len(keys)
+
+
+def recount_storage() -> int:
+    """Recounts the bytes kept in storage from the messages themselves, so the running total can
+    never drift away from the truth (and let the bucket grow past the limit)."""
+    total = 0
+    for d in db().messages.find({"media.key": {"$exists": True}, "media.expired": {"$ne": True},
+                                 "deletedAt": {"$exists": False}}, projection={"media.size": 1}):
+        total += int((d.get("media") or {}).get("size") or 0)
+    db().media_stats.update_one({"_id": "storage"}, {"$set": {"bytes": total, "countedAt": now_ms()}}, upsert=True)
+    return total
+
+
 def start_media_sweeper() -> None:
     def loop() -> None:
         while True:
             try:
                 while sweep_expired_media() >= 500:       # a big backlog: keep going
                     pass
+                sweep_unsent_uploads()
+                recount_storage()
             except Exception:  # noqa: BLE001
                 log.exception("chat: expired-file sweep failed")
             time.sleep(3 * 3600)
     from ..extensions import socketio
     socketio.start_background_task(loop)
+
+
+# ── reactions ────────────────────────────────────────────────────────────────────────────────
+
+_REACT_WINDOW_S = 60
+_REACT_MAX = 40
+_react_times: dict[str, deque] = {}
+_react_lock = threading.Lock()
+
+
+def _react_rate_ok(user_id: str) -> bool:
+    t = time.time()
+    with _react_lock:
+        q = _react_times.setdefault(user_id, deque())
+        while q and t - q[0] > _REACT_WINDOW_S:
+            q.popleft()
+        if len(q) >= _REACT_MAX:
+            return False
+        q.append(t)
+        return True
+
+
+def _clean_emoji(raw) -> str:
+    e = str(raw or "").strip()
+    if not e:
+        return ""
+    if len(e) > 8 or any(ch.isascii() for ch in e):
+        raise ChatError("bad_reaction", "Pick an emoji to react with.")
+    return e
+
+
+def react(user: ChatUser, group_id: str, seq: int, emoji) -> dict:
+    """One reaction per person per message: a new emoji replaces mine, an empty one removes it.
+    Everyone in the chat sees it at once; the message's author gets a notification."""
+    if not chatconfig.reactions_on():
+        raise ChatError("reactions_off", "Reactions are switched off right now.", 503)
+    emoji = _clean_emoji(emoji)
+    g = group_or_404(group_id)
+    member = membership(group_id, user.id)
+    if (member.get("restrictedUntil") or 0) > now_ms():
+        raise ChatError("restricted", "A teacher has paused your messages in this group for a while.", 403)
+    msg = db().messages.find_one({"groupId": group_id, "seq": int(seq)})
+    if not msg or msg.get("type") == "system" or msg.get("deletedAt"):
+        raise ChatError("no_message", "That message is gone.", 404)
+    slot = user.id.replace(".", "_").replace("$", "_")
+    before = (msg.get("reactions") or {}).get(slot) or {}
+    if (before.get("e") or "") == emoji:
+        return {"groupId": group_id, "seq": int(seq), "reactions": reactions_out(msg), "reactedAt": int(msg.get("reactedAt") or 0)}
+    if not _react_rate_ok(user.id):
+        raise ChatError("slow_down", "You're reacting too fast.", 429)
+    at = now_ms()
+    name = display_name(member.get("role", "student"), member.get("name") or user.name, member.get("rollNo"))
+    if emoji:
+        change = {"$set": {f"reactions.{slot}": {"u": user.id, "n": name, "e": emoji, "at": at}, "reactedAt": at}}
+    else:
+        change = {"$unset": {f"reactions.{slot}": ""}, "$set": {"reactedAt": at}}
+    fresh = db().messages.find_one_and_update({"_id": msg["_id"]}, change, return_document=ReturnDocument.AFTER)
+    payload = {"groupId": group_id, "seq": int(seq), "reactions": reactions_out(fresh), "reactedAt": at}
+    _emit("reaction", payload, group_room(group_id))
+    if msg["senderId"] != user.id and (emoji or before.get("e")):
+        def notify() -> None:
+            try:
+                _notify_reaction(g, msg, user, name, emoji)
+            except Exception:  # noqa: BLE001
+                log.exception("chat: reaction notification failed for %s", msg["_id"])
+        _background(notify)
+    return payload
+
+
+def _notify_reaction(g: dict, msg: dict, reactor: ChatUser, name: str, emoji: str) -> None:
+    author = db().members.find_one({"groupId": g["_id"], "userId": msg["senderId"], "removed": {"$ne": True}},
+                                   projection={"muted": 1})
+    if not author or author.get("muted"):
+        return
+    if emoji and presence.is_viewing(msg["senderId"], g["_id"]):
+        return                                     # they are looking at the chat: they see it there
+    direct = g.get("type") == "direct"
+    title = reactor.name if direct else g.get("title", "")
+    shown = reactor.name if direct else name
+    preview = _push_text(msg)[:80] or "your message"
+    push.send_to_users([msg["senderId"]], {
+        "type": "chat_reaction",
+        "groupId": g["_id"],
+        "groupTitle": title,
+        "groupType": g.get("type", "chat"),
+        "seq": str(msg["seq"]),
+        "senderId": reactor.id,
+        "senderName": shown,
+        "emoji": emoji,                            # empty: the reaction was taken back, pull the line
+        "text": preview,
+        "title": title,
+        "body": f"{shown} reacted {emoji} to: \u201c{preview}\u201d" if emoji else "",
+        "createdAt": str(now_ms()),
+    })
+
+
+def reactions_since(user: ChatUser, group_id: str, since: int) -> dict:
+    """Reactions that changed after `since` (ms), for a phone that was offline when they came."""
+    membership(group_id, user.id)
+    docs = list(db().messages.find({"groupId": group_id, "reactedAt": {"$gt": int(since or 0)}},
+                                   projection={"seq": 1, "reactions": 1, "reactedAt": 1, "deletedAt": 1})
+                .sort("reactedAt", 1).limit(300))
+    items = [{"seq": d["seq"], "reactions": [] if d.get("deletedAt") else reactions_out(d)} for d in docs]
+    until = max([int(d["reactedAt"]) for d in docs], default=int(since or 0))
+    return {"items": items, "until": until, "more": len(docs) == 300}
 
 
 def report_message(user: ChatUser, group_id: str, seq: int, reason: str) -> None:
