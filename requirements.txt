@@ -29,3 +29,8 @@ pymongo==4.10.1
 boto3==1.35.36
 google-auth==2.35.0
 resend==2.4.0
+# Chat: nudity check for photos and PDFs, on this server (free, no key)
+nudenet==3.4.2
+onnxruntime==1.29.0
+opencv-python-headless==5.0.0.93
+pypdfium2==5.15.2
