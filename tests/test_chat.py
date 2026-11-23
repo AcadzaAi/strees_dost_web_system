@@ -1125,3 +1125,47 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     assert mongo.db().users.find_one({"_id": "stu9"})["name"] == "Priya Verma"
     assert c.get("/api/chat/me", headers=T("stu1")).get_json()["needsName"] is False
 print("PREVIEW / PHOTO / SIR / NAME TESTS PASSED")
+
+# ── @mentions: students and teachers mention anyone in the group; muted people still hear it ──
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users") as pushed:
+    c = app.test_client()
+    T = lambda u: {"Authorization": "Bearer "+tok(u), "X-Chat-Device": "tphone-123", "X-Chat-Client": "1"}
+    _svc._rate.clear(); mongo.db().members.update_many({}, {"$unset": {"restrictedUntil": ""}})
+    gm2 = c.post("/api/chat/admin/groups", headers=T("teacher1"), json={"title":"Mentions","type":"chat","batch":"none-mn"}).get_json()
+    c.post(f"/api/chat/groups/{gm2['id']}/manage/members", headers=T("teacher1"),
+           json={"members":[{"userId":"stu1"},{"userId":"stu2"},{"userId":"teacher2","role":"teacher"}]})
+    who = c.get(f"/api/chat/groups/{gm2['id']}/mentionable", headers=T("stu1")).get_json()
+    ids = [p_["userId"] for p_ in who["people"]]
+    assert "stu1" not in ids and {"stu2", "teacher1", "teacher2"} <= set(ids) and who["everyone"] is False, who
+    assert who["people"][0]["role"] != "student"                         # teachers first
+    c.post(f"/api/chat/groups/{gm2['id']}/mute", headers=T("stu2"), json={"muted": True})
+    mongo.db().members.update_one({"groupId": gm2["id"], "userId": "stu2"}, {"$set": {"muted": True}})
+    pushed.reset_mock()
+    r = c.post(f"/api/chat/groups/{gm2['id']}/messages", headers=T("stu1"),
+               json={"clientId": "mn-1", "text": "@Aman @Anshul Sir doubt in Q5", "mentions": ["stu2", "teacher1", "ghost", "stu1", "everyone"]}).get_json()
+    msg = r["message"]
+    assert [x["userId"] for x in msg["mentions"]] == ["stu2", "teacher1"] and msg["mentionAll"] is False, msg   # no ghosts, not me, no @everyone
+    calls = [(x.args[0], x.args[1]) for x in pushed.call_args_list if x.args[1].get("type") == "chat_message"]
+    plain = [ids_ for ids_, d in calls if d.get("mentioned") != "1"]
+    called = [(ids_, d) for ids_, d in calls if d.get("mentioned") == "1"]
+    assert called and set(called[0][0]) == {"stu2", "teacher1"} and "mentioned you" in called[0][1]["body"], calls
+    assert plain and set(plain[0]) == {"teacher2"}, calls                 # stu2 muted but mentioned: still told
+    # the admin can @everyone, muted people included
+    pushed.reset_mock()
+    r = c.post(f"/api/chat/groups/{gm2['id']}/messages", headers=T("teacher1"),
+               json={"clientId": "mn-2", "text": "@everyone test tomorrow", "mentions": ["everyone"]}).get_json()
+    assert r["message"]["mentionAll"] is True
+    called = [x.args[0] for x in pushed.call_args_list if x.args[1].get("mentioned") == "1"]
+    assert called and set(called[0]) == {"stu1", "stu2", "teacher2"}, pushed.call_args_list
+    # Firebase: students mention only teachers
+    _cfg.set_for_tests({"messages": {"studentsMentionStudents": False}})
+    who = c.get(f"/api/chat/groups/{gm2['id']}/mentionable", headers=T("stu1")).get_json()
+    assert all(p_["role"] != "student" for p_ in who["people"]), who
+    r = c.post(f"/api/chat/groups/{gm2['id']}/messages", headers=T("stu1"),
+               json={"clientId": "mn-3", "text": "@Aman hi", "mentions": ["stu2"]}).get_json()
+    assert r["message"]["mentions"] == []
+    _cfg.set_for_tests({})
+    # history keeps them
+    h = c.get(f"/api/chat/groups/{gm2['id']}/messages?after=0", headers=T("stu2")).get_json()["messages"]
+    assert any(m_.get("mentions") for m_ in h)
+print("MENTION TESTS PASSED")
