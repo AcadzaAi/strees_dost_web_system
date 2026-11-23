@@ -36,9 +36,27 @@ def db() -> Database:
             connectTimeoutMS=8000,
             retryWrites=True,
             tz_aware=False,
+            # A few connections kept open and ready: no new TLS handshake (several round trips)
+            # in front of the first message after a quiet spell.
+            minPoolSize=4,
+            maxPoolSize=50,
         )
         _db = _client[settings.CHAT_DB_NAME]
     return _db
+
+
+def warm() -> None:
+    """Opens the connections at startup and keeps them used, so no message waits for one."""
+    def loop() -> None:
+        import time
+        while True:
+            try:
+                db().command("ping")
+            except Exception:  # noqa: BLE001
+                log.warning("chat: MongoDB ping failed")
+            time.sleep(120)
+    from ..extensions import socketio
+    socketio.start_background_task(loop)
 
 
 def use_database(database: Database) -> None:
