@@ -30,10 +30,31 @@ DEFAULT_RULES = {
         # English
         "fuck", "fucker", "fucking", "bitch", "bastard", "asshole", "dick", "pussy", "slut", "whore",
         "motherfucker", "porn", "nude", "nudes", "sex chat",
-        # Hinglish (common spellings; extend from the admin panel)
-        "madarchod", "mc", "behenchod", "bc", "bhenchod", "chutiya", "chutiye", "chut", "lund",
-        "lauda", "loda", "gaand", "gand", "randi", "harami", "kamina", "bhosdike", "bsdk", "chod",
-        "tatti", "jhaatu", "suar",
+        "fucked", "fucks", "fuk", "dickhead", "cunt", "cock", "boobs", "boob", "tits", "titties",
+        "horny", "blowjob", "handjob", "sexy", "xxx", "onlyfans", "pornhub", "xvideos", "fap",
+        "masturbate", "rape", "rapist", "nigga", "nigger", "retard", "bullshit",
+        # Hinglish (common spellings; add more from Firebase: chatConfig/moderation/extraWords)
+        "madarchod", "maderchod", "madarjaat", "mc", "mkc", "tmkc", "behenchod", "behnchod", "bc",
+        "bhenchod", "benchod", "bkl", "chutiya", "chutiye", "chutiyapa", "chutmarike", "chut", "chudai",
+        "chodu", "lund", "lauda", "loda", "lavda", "lawda", "lavde", "lawde", "lodu", "gaand", "gand",
+        "gandu", "gaandu", "randi", "raand", "randwa", "chinal", "chhinal", "bhadwa", "bhadwe", "bhadve",
+        "harami", "haramzada", "haramzade", "haramkhor", "kamina", "kamine", "kutiya", "bhosdike",
+        "bhosdi", "bhosda", "bhosdiwale", "bhosdiwala", "bsdk", "jhant", "jhaat", "jhaant", "jhantu",
+        "jhaatu", "hijda", "hijde", "tatti", "suar",
+        "teri maa ki", "teri ma ki", "teri behen ki", "maa chod", "behen chod",
+    ],
+    # Hindi in Devanagari (matched as written, with or without the dot under letters).
+    "bannedWordsHindi": [
+        "मादरचोद", "मादरचोत", "बहनचोद", "बहिनचोद", "भेनचोद", "चूतिया", "चुतिया", "चूत", "लंड", "लौड़ा", "लौडा",
+        "लोड़ा", "लोडा", "गांड", "गाँड", "गांडू", "रंडी", "भोसड़ी", "भोसडी", "भोसड़ीके", "भोसडीके", "हरामी",
+        "हरामजादा", "हरामज़ादा", "कमीना", "कमीने", "भड़वा", "भडवा", "छिनाल", "कुतिया", "चुदाई", "झांट", "झाँट",
+        "तेरी माँ की", "तेरी मां की", "तेरी बहन की",
+    ],
+    # Not blocked: these make admins look at the chat at once (a student may need help).
+    "selfHarmPhrases": [
+        "kill myself", "want to die", "end my life", "suicide", "suicidal", "cut myself",
+        "marna chahta", "marna chahti", "mar jaunga", "mar jaungi", "jeena nahi", "khudkushi", "aatmahatya",
+        "आत्महत्या", "खुदकुशी", "मरना चाहता", "मरना चाहती", "मर जाऊंगा", "मर जाऊंगी",
     ],
     "competitors": [
         "allen", "aakash", "physics wallah", "physicswallah", "pw app", "unacademy", "vedantu",
@@ -78,14 +99,55 @@ class Verdict:
 
 
 def rules() -> dict:
+    """The built-in lists, plus what admins add in Firebase (chatConfig/moderation):
+    extraWords / extraHindiWords / extraCompetitors are blocked too; allowWords un-blocks a
+    built-in word that causes trouble (a name, a subject term)."""
     global _rules_cache
     at, cached = _rules_cache
     if time.time() - at < 60:
         return cached
     doc = db().settings.find_one({"_id": "moderation"}) or {}
     merged = {**DEFAULT_RULES, **{k: v for k, v in doc.items() if k != "_id"}}
+    try:
+        from . import chatconfig
+        fb = chatconfig.get().get("moderation") or {}
+    except Exception:  # noqa: BLE001
+        fb = {}
+    def words(v) -> list[str]:
+        # A list, or what the Firebase console makes of one ({"0": "word", "1": "word"}).
+        items = list(v.values()) if isinstance(v, dict) else (v if isinstance(v, list) else [])
+        return [str(w).strip() for w in items if w is not None and str(w).strip()]
+    allow = {w.lower() for w in words(fb.get("allowWords"))}
+    merged["bannedWords"] = [w for w in list(merged.get("bannedWords", [])) + words(fb.get("extraWords")) if w.lower() not in allow]
+    merged["bannedWordsHindi"] = [w for w in list(merged.get("bannedWordsHindi", [])) + words(fb.get("extraHindiWords")) if w not in allow]
+    merged["competitors"] = list(merged.get("competitors", [])) + words(fb.get("extraCompetitors"))
     _rules_cache = (time.time(), merged)
     return merged
+
+
+def _deva(text: str) -> str:
+    """Devanagari compared as written: the dot under letters (ड़ / ड़) and ँ / ं don't matter."""
+    t = unicodedata.normalize("NFKD", text)
+    t = t.replace("\u093c", "").replace("\u0901", "\u0902").replace("\u200d", "").replace("\u200c", "")
+    return re.sub(r"\s+", " ", t)
+
+
+_MASK = "*#%^&_~"
+
+
+def _masked_hit(text: str, terms: list[str]) -> bool:
+    """"f*ck", "ch#tiya", "b**ch": a word with a few letters hidden behind symbols still counts."""
+    singles = [normalize(t) for t in terms if " " not in t.strip()]
+    singles = [t for t in singles if len(t) >= 4]
+    for token in re.findall(r"[a-z0-9@$!" + re.escape(_MASK) + r"]{4,}", text.lower()):
+        hidden = sum(ch in _MASK for ch in token)
+        letters = sum(ch.isalpha() for ch in token)
+        if not hidden or hidden > 3 or letters < 2:
+            continue
+        pattern = "".join("[a-z]?" if ch in _MASK else re.escape(ch) for ch in token.translate(_LEET))
+        if any(re.fullmatch(pattern, t) for t in singles):
+            return True
+    return False
 
 
 def normalize(text: str) -> str:
@@ -129,7 +191,10 @@ def check(text: str, *, is_staff: bool, ai: bool = True, can_link: Optional[bool
     squeezed = re.sub(r"\b(\w) (?=\w\b)", r"\1", norm)
     reasons: list[str] = []
 
-    if any(_has_term(norm, squeezed, w) for w in r.get("bannedWords", [])):
+    deva = _deva(text)
+    if any(_has_term(norm, squeezed, w) for w in r.get("bannedWords", [])) \
+            or any(_deva(w) in deva for w in r.get("bannedWordsHindi", []) if w) \
+            or _masked_hit(text, r.get("bannedWords", [])):
         reasons.append("abusive")
     if is_staff and can_link is False and r.get("blockLinksForStudents", True) and _URL.search(text):
         reasons.append("link_admin")                   # a teacher who isn't an admin
@@ -143,14 +208,15 @@ def check(text: str, *, is_staff: bool, ai: bool = True, can_link: Optional[bool
         if _INVITE.search(text):
             reasons.append("invite")
 
-    alert = False
+    # Self-harm is never blocked: the message goes through and the group's admins are told.
+    alert = any((p in norm) if p.isascii() else (_deva(p) in deva) for p in r.get("selfHarmPhrases", []))
     if not reasons and ai and r.get("useAiModeration", True):
         ai = _ai_categories(text)
         if ai:
             blocked = [c for c in AI_BLOCK if ai.get(c)]
             if blocked:
                 reasons.extend(f"ai:{c}" for c in blocked)
-            alert = any(ai.get(c) for c in AI_ALERT)
+            alert = alert or any(ai.get(c) for c in AI_ALERT)
 
     return Verdict(allowed=not reasons, reasons=reasons, alert=alert)
 
