@@ -79,6 +79,11 @@ _URL = re.compile(
     r"|\b[a-z0-9-]+\.[a-z]{2,6}/\S+)",            # any site with a path: zoom.us/j/123, meet.new/abc
     re.I)
 _PHONE = re.compile(r"(?<!\d)(?:\+?91[\s-]?)?[6-9](?:[\s-]?\d){9}(?!\d)")
+# Links that pull students out of the group (WhatsApp/Telegram/Discord invites, Instagram):
+# blocked for students even when links are allowed.
+_INVITE_LINK = re.compile(
+    r"(chat\.whatsapp\.com|whatsapp\.com/channel|wa\.me/|t\.me/|telegram\.(me|dog)/|discord\.(gg|com/invite)"
+    r"|instagram\.com|instagr\.am|snapchat\.com|join\.skype\.com)", re.I)
 _INVITE = re.compile(r"\b(whatsapp|telegram|insta(gram)?|snapchat|discord)\s*(group|grp|channel|id|link|pe|par|me)\b", re.I)
 
 AI_BLOCK = ("harassment", "harassment/threatening", "hate", "hate/threatening", "sexual", "sexual/minors", "illicit")
@@ -128,6 +133,8 @@ def rules() -> dict:
     merged["bannedWordsHindi"] = [w for w in list(merged.get("bannedWordsHindi", [])) + words(fb.get("extraHindiWords")) if w not in allow]
     merged["competitors"] = list(merged.get("competitors", [])) + words(fb.get("extraCompetitors"))
     merged["bannedEmojis"] = list(merged.get("bannedEmojis", [])) + words(fb.get("extraEmojis"))
+    # chatConfig/moderation/links: "everyone" (default) or "admins" (only group admins may send links).
+    merged["linksFor"] = "admins" if str(fb.get("links", "everyone")).strip().lower() == "admins" else "everyone"
     _rules_cache = (time.time(), merged)
     return merged
 
@@ -248,13 +255,16 @@ def check(text: str, *, is_staff: bool, ai: bool = True, can_link: Optional[bool
         reasons.append("abusive")
     if emoji_hit(text):
         reasons.append("emoji")
-    if is_staff and can_link is False and r.get("blockLinksForStudents", True) and _URL.search(text):
+    admins_only = r.get("linksFor", "everyone") == "admins"
+    if admins_only and is_staff and can_link is False and _URL.search(text):
         reasons.append("link_admin")                   # a teacher who isn't an admin
     if not is_staff:
         if any(_has_term(norm, squeezed, c) for c in r.get("competitors", [])):
             reasons.append("competitor")
-        if r.get("blockLinksForStudents", True) and _URL.search(text):
+        if admins_only and r.get("blockLinksForStudents", True) and _URL.search(text):
             reasons.append("link")
+        if _INVITE_LINK.search(text):
+            reasons.append("invite")
         if r.get("blockPhonesForStudents", True) and _PHONE.search(text):
             reasons.append("phone")
         if _INVITE.search(text):
