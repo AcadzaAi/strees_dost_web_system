@@ -9,8 +9,9 @@ App → server (all reply through the ack callback):
   delivered {groupId, seq}
   typing    {groupId, typing}
   viewing   {groupId | null}     the chat on screen: no notifications for it
+  react     {groupId, seq, emoji}    emoji "" takes my reaction back
 Server → app:
-  message, message_deleted, receipts, typing, group_added, group_removed, group_updated
+  message, message_deleted, message_edited, reaction, receipts, typing, group_added, group_removed, group_updated
 """
 from __future__ import annotations
 
@@ -86,6 +87,13 @@ def on_send(data):
 def on_edit(data):
     msg = service.edit_message(_user(), str(data.get("groupId", "")), int(data.get("seq", 0)), str(data.get("text", "")))
     return {"ok": True, "message": msg}
+
+
+@socketio.on("react", namespace=NS)
+@_safe
+def on_react(data):
+    out = service.react(_user(), str(data.get("groupId", "")), int(data.get("seq", 0)), data.get("emoji"))
+    return {"ok": True, **out}
 
 
 @socketio.on("read", namespace=NS)

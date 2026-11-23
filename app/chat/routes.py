@@ -101,6 +101,20 @@ def edit(group_id, seq):
     return jsonify({"ok": True, "message": msg})
 
 
+@bp.post("/groups/<group_id>/messages/<int:seq>/react")
+@require_user
+def react(group_id, seq):
+    """{emoji}: my reaction on this message; "" takes it back."""
+    return jsonify({"ok": True, **service.react(g.chat_user, group_id, seq, _body().get("emoji"))})
+
+
+@bp.get("/groups/<group_id>/reactions")
+@require_user
+def reactions(group_id):
+    """Reactions changed after ?since=<ms> (catch-up after being offline)."""
+    return jsonify(service.reactions_since(g.chat_user, group_id, _int("since") or 0))
+
+
 @bp.get("/config")
 @require_user
 def config():
