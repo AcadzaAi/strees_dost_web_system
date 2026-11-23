@@ -599,6 +599,14 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
             _emit("group_added", {"groupId": group_id}, user_room(other["userId"]))
     _emit("message", out, group_room(group_id))
 
+    def notify_now() -> None:
+        # The notification goes out first and on its own, so nothing else can hold it back or
+        # stop it (it used to wait for the AI check and was lost when anything before it failed).
+        try:
+            _notify(g, doc)
+        except Exception:  # noqa: BLE001
+            log.exception("chat: notification failed for %s", doc["_id"])
+
     def after() -> None:
         try:
             shown = display_name(doc["senderRole"], doc["senderName"], doc.get("rollNo"))
@@ -609,17 +617,19 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
             if verdict.alert:
                 db().moderation.insert_one({"kind": "alert", "groupId": group_id, "userId": user.id, "name": user.name,
                                             "text": text, "reasons": ["self-harm"], "createdAt": now_ms(), "seq": seq})
+        except Exception:  # noqa: BLE001
+            log.exception("chat: after-send bookkeeping failed for %s", doc["_id"])
+        try:
             later = moderation.ai_check(text) if text and not is_staff else moderation.Verdict(allowed=True)
             if not later.allowed:
-                _take_down(user, group_id, doc, later.reasons)
-                return                                  # never notified
-            if later.alert:
+                _take_down(user, group_id, doc, later.reasons)     # also pulls the notification back
+            elif later.alert:
                 db().moderation.insert_one({"kind": "alert", "groupId": group_id, "userId": user.id, "name": user.name,
                                             "text": text, "reasons": ["self-harm"], "createdAt": now_ms(), "seq": seq})
-            _notify(g, doc)
         except Exception:  # noqa: BLE001
-            log.exception("chat: after-send work failed for %s", doc["_id"])
+            log.exception("chat: AI check failed for %s", doc["_id"])
 
+    _background(notify_now)
     _background(after)
     took = int((time.time() - started) * 1000)
     if took > 400:
@@ -651,6 +661,9 @@ def _take_down(user: ChatUser, group_id: str, doc: dict, reasons: list) -> None:
     if (g.get("lastMessage") or {}).get("seq") == doc["seq"]:
         db().groups.update_one({"_id": group_id}, {"$set": {"lastMessage.text": "This message was deleted"}})
     _emit("message_deleted", {"groupId": group_id, "seq": doc["seq"], "id": doc["_id"], "byAdmin": True}, group_room(group_id))
+    others = [m["userId"] for m in db().members.find({"groupId": group_id, "userId": {"$ne": user.id}, "removed": {"$ne": True}},
+                                                     projection={"userId": 1})]
+    push.send_to_users(others, {"type": "chat_retract", "groupId": group_id, "seq": str(doc["seq"])})
     db().moderation.insert_one({"kind": "blocked", "groupId": group_id, "userId": user.id, "name": user.name,
                                 "text": doc.get("text", ""), "reasons": reasons, "createdAt": now_ms(), "after": True})
     _strike(user, group_id)

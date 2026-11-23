@@ -155,7 +155,7 @@ def _ai_categories(text: str) -> Optional[dict]:
             return None
         result = (resp.json().get("results") or [{}])[0]
         return result.get("categories") or {}
-    except requests.RequestException:
+    except Exception:  # noqa: BLE001  (network, bad JSON…): the message simply isn't AI-checked
         return None
 
 

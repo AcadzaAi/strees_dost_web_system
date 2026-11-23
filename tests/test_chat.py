@@ -366,7 +366,8 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     assert r["ok"]
     doc = mongo.db().messages.find_one({"groupId": gq2["id"], "clientId": "ai-1"})
     assert doc.get("deletedAt") and doc.get("deletedBy")=="moderation"
-    assert not [c_ for c_ in pushed.call_args_list if c_.args[1].get("type")=="chat_message"], "flagged messages are never notified"
+    types = [c_.args[1].get("type") for c_ in pushed.call_args_list]
+    assert "chat_message" in types and "chat_retract" in types, types     # notified at once, then pulled back
     print("AI AFTER-DELIVERY TEST PASSED")
 
 # ── limits from Firebase chatConfig, storage budget, expiry sweep, editing ──
