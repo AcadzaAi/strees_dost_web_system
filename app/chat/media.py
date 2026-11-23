@@ -106,6 +106,18 @@ def download_link(key: str) -> str:
     return url
 
 
+def read(key: str, max_bytes: int) -> Optional[bytes]:
+    """The file's bytes (for the nudity check), or None when it is missing or too big."""
+    try:
+        obj = _s3().get_object(Bucket=R2_BUCKET, Key=key)
+        if int(obj.get("ContentLength") or 0) > max_bytes:
+            return None
+        return obj["Body"].read(max_bytes + 1)[:max_bytes]
+    except Exception:  # noqa: BLE001
+        log.warning("chat: could not read %s from storage", key)
+        return None
+
+
 def delete(key: str) -> None:
     try:
         _s3().delete_object(Bucket=R2_BUCKET, Key=key)
