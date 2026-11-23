@@ -1046,3 +1046,82 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     _cfg.set_for_tests({})
     assert c.get("/api/chat/groups", headers=T("teacher1", "")).status_code == 200      # off by default
 print("SWITCHES TESTS PASSED")
+
+# ── link previews, teacher photos, Sir / Ma'am, students adding their name ──
+from app.chat import linkpreview as _lp
+assert _lp.youtube_id("https://youtu.be/dQw4w9WgXcQ?t=3") == "dQw4w9WgXcQ"
+assert _lp.youtube_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=x") == "dQw4w9WgXcQ"
+assert _lp.youtube_id("youtube.com/shorts/dQw4w9WgXcQ") == "dQw4w9WgXcQ" and _lp.youtube_id("https://example.com") is None
+head = _lp.parse_head('<html><head><title>Fallback</title><meta property="og:title" content="Kinematics &amp; more">'
+                      '<meta content="https://cdn.x.com/a.jpg" property="og:image"><meta name="description" content="Notes"></head>')
+assert head == {"title": "Kinematics & more", "description": "Notes", "image": "https://cdn.x.com/a.jpg", "site": ""}, head
+assert not _lp._public_host("127.0.0.1") and not _lp._public_host("10.0.0.5") and not _lp._public_host("localhost")
+class _R:
+    def __init__(self, status, body=b"", ctype="text/html", headers=None, j=None):
+        self.status_code, self._b, self.headers, self._j = status, body, {"content-type": ctype, **(headers or {})}, j
+    def iter_content(self, n): yield self._b
+    def close(self): pass
+    def json(self): return self._j
+def fake_get(url, headers=None, timeout=None, stream=False, allow_redirects=True, params=None):
+    if "oembed" in url: return _R(200, j={"title": "Projectile motion in 10 min", "author_name": "Physics Sir"})
+    if url.endswith(".jpg"): return _R(200, b"img", "image/jpeg")
+    if "adult" in url: return _R(200, b'<meta property="og:title" content="hot pics"><meta property="og:image" content="https://adult.example/n.jpg">')
+    return _R(200, b'<meta property="og:title" content="NCERT Physics"><meta property="og:image" content="/cover.jpg">')
+with mock.patch("app.chat.linkpreview.requests.get", side_effect=fake_get), mock.patch.object(_lp, "_public_host", return_value=True), \
+     mock.patch.object(_scan, "check_image", side_effect=lambda d: _scan.ScanResult(allowed=True)):
+    yt = _lp.preview("https://youtu.be/dQw4w9WgXcQ")
+    assert yt["video"] and yt["title"] == "Projectile motion in 10 min" and yt["image"].endswith("/hqdefault.jpg"), yt
+    pg = _lp.preview("https://ncert.example/book")
+    assert pg["title"] == "NCERT Physics" and pg["image"] == "https://ncert.example/cover.jpg", pg
+with mock.patch("app.chat.linkpreview.requests.get", side_effect=fake_get), mock.patch.object(_lp, "_public_host", return_value=True), \
+     mock.patch.object(_scan, "check_image", side_effect=lambda d: _scan.ScanResult(allowed=False, reasons=["nudity:x"])):
+    bad = _lp.preview("https://adult.example/x")
+    assert not bad.get("image"), bad                         # a nude picture is never shown
+assert mongo.db().link_previews.find_one({"url": "https://ncert.example/book"})   # cached
+
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users"):
+    c = app.test_client()
+    T = lambda u: {"Authorization": "Bearer "+tok(u), "X-Chat-Device": "tphone-123", "X-Chat-Client": "1"}
+    _verify.needs = lambda user, device: None
+    # link preview over the API
+    with mock.patch.object(_lp, "build", return_value={"title": "T", "image": "", "video": False}):
+        assert c.get("/api/chat/link-preview?url=https://new.example/a", headers=T("stu1")).get_json()["title"] == "T"
+    # teacher photo: students can't, teachers can; a failing photo is refused
+    assert c.post("/api/chat/me/photo/upload", headers=T("stu1"), json={"size": 1000}).status_code == 403
+    with mock.patch.object(_media, "enabled", return_value=True), mock.patch.object(_media, "upload_link", return_value="https://r2/up"), \
+         mock.patch.object(_media, "read", return_value=b"jpg"), mock.patch.object(_media, "delete") as deleted, \
+         mock.patch.object(_media, "download_link", return_value="https://r2/get/photo"):
+        up = c.post("/api/chat/me/photo/upload", headers=T("teacher1"), json={"size": 20000}).get_json()
+        assert up["key"].startswith("a/teacher1/")
+        with mock.patch.object(_scan, "check_image", return_value=_scan.ScanResult(allowed=False, reasons=["nudity:x"])):
+            assert c.post("/api/chat/me/photo", headers=T("teacher1"), json={"key": up["key"]}).status_code == 422
+        up = c.post("/api/chat/me/photo/upload", headers=T("teacher1"), json={"size": 20000}).get_json()
+        with mock.patch.object(_scan, "check_image", return_value=_scan.ScanResult(allowed=True)):
+            r = c.post("/api/chat/me/photo", headers=T("teacher1"), json={"key": up["key"]}).get_json()
+        assert r["avatar"].startswith("https://") and "/api/chat/avatar/teacher1/" in r["avatar"], r
+        assert c.post("/api/chat/me/photo", headers=T("teacher2"), json={"key": up["key"]}).status_code == 400   # not theirs
+        img = c.get(r["avatar"].split("localhost", 1)[-1])
+        assert img.status_code == 302 and img.headers["Location"] == "https://r2/get/photo"
+        # shows on their messages and in member lists
+        gph = c.post("/api/chat/admin/groups", headers=T("teacher1"), json={"title":"Photo","type":"chat","batch":"none-ph"}).get_json()
+        msg = c.post(f"/api/chat/groups/{gph['id']}/messages", headers=T("teacher1"), json={"clientId":"ph-1","text":"hello"}).get_json()["message"]
+        assert msg["sender"]["avatar"] == r["avatar"], msg["sender"]
+        assert c.delete("/api/chat/me/photo", headers=T("teacher1")).get_json()["avatar"] == "teacher"
+    # Sir / Ma'am on teachers' names
+    assert c.post("/api/chat/me/honorific", headers=T("stu1"), json={"honorific": "sir"}).status_code == 403
+    assert c.post("/api/chat/me/honorific", headers=T("teacher1"), json={"honorific": "sir"}).get_json()["honorific"] == "sir"
+    assert c.get("/api/chat/me", headers=T("teacher1")).get_json()["honorific"] == "sir"
+    msg = c.post(f"/api/chat/groups/{gph['id']}/messages", headers=T("teacher1"), json={"clientId":"ph-2","text":"class at 5"}).get_json()["message"]
+    assert msg["sender"]["name"] == "Anshul Sir", msg["sender"]          # already ends in Sir: not doubled
+    assert _svc.with_honorific("Neha", "maam") == "Neha Ma'am" and _svc.with_honorific("Neha Mam", "maam") == "Neha Mam"
+    assert _svc.with_honorific("Rahul", "sir") == "Rahul Sir" and _svc.with_honorific("Rahul", "") == "Rahul"
+    # a student without a name is asked for one; once saved it is used everywhere
+    USERS["stu9"] = {"_id": "stu9", "name": "", "role": "student", "reference": "pace", "coachingBatch": []}
+    me9 = c.get("/api/chat/me", headers=T("stu9")).get_json()
+    assert me9["needsName"] is True, me9
+    assert c.post("/api/chat/me/name", headers=T("stu9"), json={"name": "x"}).status_code == 400
+    assert c.post("/api/chat/me/name", headers=T("stu9"), json={"name": "  Priya   Verma "}).get_json()["name"] == "Priya Verma"
+    assert c.get("/api/chat/me", headers=T("stu9")).get_json()["needsName"] is False
+    assert mongo.db().users.find_one({"_id": "stu9"})["name"] == "Priya Verma"
+    assert c.get("/api/chat/me", headers=T("stu1")).get_json()["needsName"] is False
+print("PREVIEW / PHOTO / SIR / NAME TESTS PASSED")
