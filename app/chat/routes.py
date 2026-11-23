@@ -92,6 +92,13 @@ def avatar_image(user_id, token):
     return resp
 
 
+@bp.get("/groups/<group_id>/mentionable")
+@require_user
+def mentionable(group_id):
+    """People I can @mention in this group."""
+    return jsonify(service.mentionable(g.chat_user, group_id))
+
+
 @bp.get("/link-preview")
 @require_user
 def link_preview():
@@ -170,7 +177,7 @@ def messages(group_id):
 def send(group_id):
     b = _body()
     msg = service.send_message(g.chat_user, group_id, b.get("clientId", ""), b.get("text", ""), b.get("replyToSeq"),
-                               media_in=b.get("media"))
+                               media_in=b.get("media"), mentions_in=b.get("mentions"))
     return jsonify({"ok": True, "message": msg})
 
 

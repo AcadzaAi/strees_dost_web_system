@@ -282,6 +282,8 @@ def message_out(m: dict, avatars: Optional[dict] = None) -> dict:
         "editedAt": int(m.get("editedAt") or 0) if not deleted else 0,
         "reactions": [] if deleted else reactions_out(m),
         "reactedAt": int(m.get("reactedAt") or 0),
+        "mentions": [] if deleted else [{"userId": x.get("u", ""), "name": x.get("n", "")} for x in m.get("mentions") or []],
+        "mentionAll": bool(m.get("mentionAll")) and not deleted,
     }
 
 
@@ -861,7 +863,7 @@ def _strike(user: ChatUser, group_id: str, reasons) -> None:
 
 def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
                  reply_to_seq: Optional[int] = None, origin_sid: Optional[str] = None,
-                 media_in: Optional[dict] = None) -> dict:
+                 media_in: Optional[dict] = None, mentions_in=None) -> dict:
     started = time.time()
     text = (text or "").strip()
     client_id = (client_id or "").strip()[:64] or secrets.token_hex(8)
@@ -921,6 +923,11 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
         "senderRole": member.get("role", "student"), "rollNo": member.get("rollNo"), "senderAvatar": avatar,
         "type": "text", "text": text, "replyTo": reply, "createdAt": now_ms(),
     }
+    mentioned, everyone = _clean_mentions(user, g, member, mentions_in)
+    if mentioned:
+        doc["mentions"] = mentioned
+    if everyone:
+        doc["mentionAll"] = True
     if attached:
         doc["media"] = attached
         # Counts towards today's limit and the storage total.
@@ -1107,26 +1114,84 @@ def _push_text(doc: dict) -> str:
     return doc.get("text", "")
 
 
+MAX_MENTIONS = 5
+
+
+def _can_mention_all(user: ChatUser, member: dict) -> bool:
+    return member.get("role") == "admin" or user.is_admin
+
+
+def _clean_mentions(user: ChatUser, g: dict, member: dict, raw) -> tuple[list[dict], bool]:
+    """@mentions in a group: up to 5 people who are in it (students and teachers alike), plus
+    "everyone" for admins. Ids that aren't members, or myself, are dropped quietly."""
+    cfg = chatconfig.get()["messages"]
+    if not raw or not isinstance(raw, (list, tuple)) or g.get("type") == "direct" or not cfg.get("mentions", True):
+        return [], False
+    asked = [str(x).strip() for x in raw if str(x or "").strip()]
+    everyone = "everyone" in asked and _can_mention_all(user, member)
+    ids = [i for i in dict.fromkeys(asked) if i not in ("everyone", user.id)][:MAX_MENTIONS]
+    if not ids:
+        return [], everyone
+    staff = member.get("role") in STAFF_MEMBER_ROLES or user.is_staff
+    rows = {r["userId"]: r for r in db().members.find(
+        {"groupId": g["_id"], "userId": {"$in": ids}, "removed": {"$ne": True}},
+        projection={"userId": 1, "name": 1, "role": 1, "rollNo": 1})}
+    out = []
+    for uid in ids:
+        r = rows.get(uid)
+        if not r:
+            continue
+        if not staff and r.get("role", "student") == "student" and not cfg.get("studentsMentionStudents", True):
+            continue
+        out.append({"u": uid, "n": display_name(r.get("role", "student"), r.get("name") or "", r.get("rollNo"))})
+    return out, everyone
+
+
+def mentionable(user: ChatUser, group_id: str) -> dict:
+    """Who I can @mention here: teachers first, then students (as everyone in the group sees them)."""
+    g = group_or_404(group_id)
+    me = membership(group_id, user.id)
+    cfg = chatconfig.get()["messages"]
+    if g.get("type") == "direct" or not cfg.get("mentions", True):
+        return {"people": [], "everyone": False}
+    staff = me.get("role") in STAFF_MEMBER_ROLES or user.is_staff
+    docs = list(db().members.find({"groupId": group_id, "removed": {"$ne": True}, "userId": {"$ne": user.id}},
+                                  projection={"userId": 1, "name": 1, "role": 1, "rollNo": 1}))
+    if not staff and not cfg.get("studentsMentionStudents", True):
+        docs = [d for d in docs if d.get("role", "student") != "student"]
+    avatars = _avatars(d["userId"] for d in docs)
+    people = [{"userId": d["userId"], "name": display_name(d.get("role", "student"), d.get("name") or "", d.get("rollNo")),
+               "role": d.get("role", "student"), "avatar": avatar_of(d.get("role"), avatars.get(d["userId"]))}
+              for d in docs]
+    people.sort(key=lambda x: (x["role"] == "student", x["name"].lower()))
+    return {"people": people[:500], "everyone": _can_mention_all(user, me)}
+
+
 def _notify(g: dict, doc: dict) -> None:
-    recipients, muted, viewing = [], 0, 0
+    named = {x.get("u") for x in doc.get("mentions") or []}
+    everyone = bool(doc.get("mentionAll"))
+    recipients, mentioned, muted, viewing = [], [], 0, 0
     for m in db().members.find({"groupId": g["_id"], "removed": {"$ne": True}, "userId": {"$ne": doc["senderId"]}},
                                projection={"userId": 1, "muted": 1}):
-        if m.get("muted"):
-            muted += 1
-        elif presence.is_viewing(m["userId"], g["_id"]):
+        called = everyone or m["userId"] in named
+        if presence.is_viewing(m["userId"], g["_id"]):
             viewing += 1                           # the chat is open on their phone: no notification
+        elif called:
+            mentioned.append(m["userId"])          # a mention gets through even when the group is muted
+        elif m.get("muted"):
+            muted += 1
         else:
             recipients.append(m["userId"])
     if muted or viewing:
         log.info("chat push %s: skipped %d muted, %d with the chat open", g["_id"], muted, viewing)
-    if not recipients:
+    if not recipients and not mentioned:
         return
     label = sender_label(doc["senderRole"], doc.get("rollNo"))
     shown = display_name(doc["senderRole"], doc["senderName"], doc.get("rollNo"))
     direct = g.get("type") == "direct"
     # A direct message shows the sender's real name (the teacher knows who wrote).
     title = doc["senderName"] if direct else g.get("title", "")
-    push.send_to_users(recipients, {
+    data = {
         "type": "chat_message",
         "groupId": g["_id"],
         "groupTitle": title,
@@ -1142,7 +1207,12 @@ def _notify(g: dict, doc: dict) -> None:
         "createdAt": str(doc["createdAt"]),
         "title": title,
         "body": _push_text(doc)[:200] if direct else f"{shown}: {_push_text(doc)[:200]}",
-    })
+    }
+    if recipients:
+        push.send_to_users(recipients, data)
+    if mentioned:
+        push.send_to_users(mentioned, {**data, "mentioned": "1",
+                                       "body": f"{shown} mentioned you: {_push_text(doc)[:180]}"})
 
 
 # ── reading ──────────────────────────────────────────────────────────────────────────────────
