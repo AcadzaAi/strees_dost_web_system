@@ -73,6 +73,8 @@ def ensure_indexes() -> None:
     d.members.create_index([("groupId", ASCENDING), ("userId", ASCENDING)], unique=True)
     d.messages.create_index([("groupId", ASCENDING), ("reactedAt", ASCENDING)], sparse=True)
     d.media_pending.create_index([("at", ASCENDING)])
+    d.join_requests.create_index([("groupId", ASCENDING), ("status", ASCENDING), ("at", ASCENDING)])
+    d.join_requests.create_index([("userId", ASCENDING)])
     d.members.create_index([("userId", ASCENDING), ("removed", ASCENDING)])
     d.groups.create_index([("autoJoin.coaching", ASCENDING), ("autoJoin.batch", ASCENDING)])
     d.groups.create_index([("coaching", ASCENDING)])

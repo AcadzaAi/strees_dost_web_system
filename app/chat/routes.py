@@ -129,6 +129,40 @@ def presence(group_id):
     return jsonify({"ok": True, **service.peer_presence(g.chat_user, group_id)})
 
 
+@bp.get("/discover")
+@require_user
+def discover():
+    """Groups I may ask to join (made for my batches, asking switched on, I'm not in them)."""
+    return jsonify({"groups": service.discover_groups(g.chat_user)})
+
+
+@bp.post("/groups/<group_id>/request")
+@require_user
+def request_join(group_id):
+    return jsonify(service.request_join(g.chat_user, group_id))
+
+
+@bp.delete("/groups/<group_id>/request")
+@require_user
+def cancel_request(group_id):
+    return jsonify(service.cancel_request(g.chat_user, group_id))
+
+
+@bp.get("/groups/<group_id>/manage/requests")
+@require_user
+def manage_requests(group_id):
+    return jsonify({"requests": service.list_requests(g.chat_user, group_id)})
+
+
+@bp.post("/groups/<group_id>/manage/requests")
+@require_user
+def manage_answer_requests(group_id):
+    """{userIds: [...], approve: true|false}"""
+    body = _body()
+    n = service.answer_requests(g.chat_user, group_id, list(body.get("userIds") or []), bool(body.get("approve")))
+    return jsonify({"ok": True, "count": n})
+
+
 @bp.get("/config")
 @require_user
 def config():
