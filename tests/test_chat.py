@@ -669,3 +669,22 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     mem = {m["userId"]: m for m in c.get(f"/api/chat/groups/{gp2['id']}/manage/members", headers=H("teacher1")).get_json()["members"]}
     assert mem["nameless1"]["phone"] == "9123456789" and mem["stu1"]["phone"] == "9876543210", mem
     print("ADD PEOPLE NAME / PHONE TESTS PASSED")
+
+# ── add by name, phone (typed any way) or user id; students only from the admin's coachings ──
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users"):
+    c = app.test_client(); H=lambda u: {"Authorization": "Bearer "+tok(u)}
+    c.get("/api/chat/me", headers=H("stu1"))                     # saves stu1's phone and its search key
+    assert mongo.db().users.find_one({"_id": "stu1"})["phoneDigits"] == "9876543210"
+    for typed in ("+91 98765 43210", "098765-43210", "43210", "Riya", "stu1"):
+        got = c.get("/api/chat/admin/users", headers=H("teacher1"), query_string={"q": typed, "within": "pace"}).get_json()["users"]
+        assert any(u["id"] == "stu1" for u in got), (typed, got)
+    # a student of another coaching never shows up (their number would be in the results)
+    mongo.db().users.update_one({"_id": "stu4"}, {"$set": {"phone": "9000011111", "phoneDigits": "9000011111"}})
+    got = c.get("/api/chat/admin/users", headers=H("teacher1"), query_string={"q": "9000011111", "within": "pace"}).get_json()["users"]
+    assert not any(u["id"] == "stu4" for u in got), got
+    got = c.get("/api/chat/admin/users", headers=H("teacher1"), query_string={"q": "Isha", "within": "pace"}).get_json()["users"]
+    assert not any(u["id"] == "stu4" for u in got), got
+    # teachers can be found from anywhere (to add a visiting teacher)
+    got = c.get("/api/chat/admin/users", headers=H("teacher1"), query_string={"q": "Neha", "within": "pace"}).get_json()["users"]
+    assert any(u["id"] == "teacher2" for u in got), got
+    print("SEARCH BY NAME / PHONE / ID TESTS PASSED")

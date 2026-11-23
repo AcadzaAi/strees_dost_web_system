@@ -1932,7 +1932,8 @@ def admin_groups_of(user: ChatUser) -> list[dict]:
 # ── people search (teachers) ─────────────────────────────────────────────────────────────────
 
 def search_users(query: str, coaching: Optional[str] = None, role: Optional[str] = None, limit: int = 30,
-                 batches: Optional[list[str]] = None, coachings: Optional[list[str]] = None) -> list[dict]:
+                 batches: Optional[list[str]] = None, coachings: Optional[list[str]] = None,
+                 students_from: Optional[list[str]] = None) -> list[dict]:
     """People who have opened the app since the chat came, or are in a copied coaching list
     (with the batch flags from their meta), by name / id, batch and coaching. Indexed."""
     q: dict = {}
@@ -1940,8 +1941,9 @@ def search_users(query: str, coaching: Optional[str] = None, role: Optional[str]
     if text:
         q["$or"] = [{"_id": text}, {"name": {"$regex": re.escape(text), "$options": "i"}}]
         digits = re.sub(r"\D", "", text)
-        if len(digits) >= 4:                           # typing part of a phone number finds them too
-            q["$or"].append({"phone": {"$regex": re.escape(digits)}})
+        if len(digits) >= 4:                           # a phone number (or part of one), typed any way
+            key = re.escape(digits[-10:])
+            q["$or"] += [{"phoneDigits": {"$regex": key}}, {"parentDigits": {"$regex": key}}, {"phone": {"$regex": key}}]
     wanted = [c.strip().lower() for c in (coachings or []) if c and c.strip()]
     if coaching:
         wanted.append(coaching.strip().lower())
@@ -1949,6 +1951,11 @@ def search_users(query: str, coaching: Optional[str] = None, role: Optional[str]
         q["coaching"] = {"$in": list(dict.fromkeys(wanted))}
     if batches:
         q["batches"] = {"$in": [b for b in batches if b]}
+    if students_from and not wanted:
+        # Searching by name / phone / id: students only from the admin's own coachings (their
+        # numbers are in the results); teachers from anywhere, to add a visiting teacher.
+        allowed = list(dict.fromkeys(c.strip().lower() for c in students_from if c and c.strip()))
+        q["$and"] = [{"$or": [{"role": {"$in": ["teacher", "admin", "faculty", "mentor"]}}, {"coaching": {"$in": allowed}}]}]
     if role == "staff":
         q["role"] = {"$in": ["teacher", "admin", "faculty", "mentor"]}
     elif role:

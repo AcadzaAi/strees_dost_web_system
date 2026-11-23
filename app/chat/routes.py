@@ -358,9 +358,11 @@ def admin_users():
     def _csv(name):
         return [x.strip() for x in (request.args.get(name) or "").split(",") if x.strip()]
     batches = _csv("batches")
+    within = _csv("within") or [g.chat_user.coaching]        # the admin's coachings (from the app), else their own
     return jsonify({"users": service.search_users(
         request.args.get("q", ""), request.args.get("coaching"), request.args.get("role"),
-        limit=2000 if batches else 30, batches=batches, coachings=_csv("coachings"))})
+        limit=2000 if batches else 30, batches=batches, coachings=_csv("coachings"),
+        students_from=None if g.chat_user.is_admin and not _csv("within") else within)})
 
 
 @bp.get("/admin/batches")

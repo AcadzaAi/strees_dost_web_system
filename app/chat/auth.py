@@ -152,9 +152,17 @@ def contact_of(data: dict) -> dict:
     parent = clean(meta.get("parentPhone") or data.get("parentPhone") or meta.get("parentMobile"))
     if phone:
         out["phone"] = phone
+        out["phoneDigits"] = phone_key(phone)          # for search: any way the number is typed
     if parent:
         out["parentPhone"] = parent
+        out["parentDigits"] = phone_key(parent)
     return out
+
+
+def phone_key(text: str) -> str:
+    """The last 10 digits: "+91 98765-43210", "098765 43210" and "9876543210" are one number."""
+    digits = "".join(ch for ch in str(text or "") if ch.isdigit())
+    return digits[-10:]
 
 
 def _remember(user: ChatUser, contact: Optional[dict] = None) -> None:
