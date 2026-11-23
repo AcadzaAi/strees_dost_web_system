@@ -719,7 +719,8 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
     is_staff = member.get("role") in STAFF_MEMBER_ROLES or user.is_staff
     # Word lists, links, phone numbers: checked here, instantly. The AI check runs right after
     # delivery (it is a call to OpenAI) and takes the message down if it finds abuse.
-    verdict = moderation.check(text, is_staff=is_staff, ai=False) if text else moderation.Verdict(allowed=True)
+    can_link = _can_send_links(user, member) if text and moderation.has_link(text) else None
+    verdict = moderation.check(text, is_staff=is_staff, ai=False, can_link=can_link) if text else moderation.Verdict(allowed=True)
     if not verdict.allowed:
         db().moderation.insert_one({
             "kind": "blocked", "groupId": group_id, "userId": user.id, "name": user.name,
@@ -841,6 +842,16 @@ def _together(*fns):
         except ImportError:
             pass
     return [fn() for fn in fns]
+
+
+def _can_send_links(user: ChatUser, member: dict) -> bool:
+    """Links are for admins: an admin of this group, anyone on the chat admin list, or a teacher
+    who runs any group, so a Meet link also works in their private chats with students."""
+    if member.get("role") == "admin" or user.is_admin:
+        return True
+    if not user.is_staff:
+        return False
+    return db().members.find_one({"userId": user.id, "role": "admin", "removed": {"$ne": True}}, projection={"_id": 1}) is not None
 
 
 def _background(fn) -> None:
@@ -1163,7 +1174,8 @@ def edit_message(user: ChatUser, group_id: str, seq: int, text: str) -> dict:
     if not _can_post(g, member):
         raise ChatError("read_only", "You can't send messages here right now.", 403)
     is_staff = member.get("role") in STAFF_MEMBER_ROLES or user.is_staff
-    verdict = moderation.check(text, is_staff=is_staff, ai=False) if text else moderation.Verdict(allowed=True)
+    can_link = _can_send_links(user, member) if text and moderation.has_link(text) else None
+    verdict = moderation.check(text, is_staff=is_staff, ai=False, can_link=can_link) if text else moderation.Verdict(allowed=True)
     if not verdict.allowed:
         _strike(user, group_id)
         raise ChatError("blocked", verdict.message, 422)

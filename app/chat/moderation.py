@@ -46,7 +46,11 @@ DEFAULT_RULES = {
 }
 
 _LEET = str.maketrans({"0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", "$": "s", "!": "i"})
-_URL = re.compile(r"(https?://|www\.|\b[a-z0-9-]+\.(com|in|net|org|io|me|app|link|ly|co|xyz)\b|t\.me/|wa\.me/|chat\.whatsapp)", re.I)
+_URL = re.compile(
+    r"(https?://|www\.|t\.me/|wa\.me/|chat\.whatsapp"
+    r"|\b[a-z0-9-]+\.(com|in|net|org|io|me|app|link|ly|co|xyz|us|gg|edu|gov|ai|tv|to|cc|info|biz|live|site|online|page|dev|club|tech|store)\b"
+    r"|\b[a-z0-9-]+\.[a-z]{2,6}/\S+)",            # any site with a path: zoom.us/j/123, meet.new/abc
+    re.I)
 _PHONE = re.compile(r"(?<!\d)(?:\+?91[\s-]?)?[6-9](?:[\s-]?\d){9}(?!\d)")
 _INVITE = re.compile(r"\b(whatsapp|telegram|insta(gram)?|snapchat|discord)\s*(group|grp|channel|id|link|pe|par|me)\b", re.I)
 
@@ -64,6 +68,8 @@ class Verdict:
 
     @property
     def message(self) -> str:
+        if self.reasons == ["link_admin"]:
+            return "Only admins can send links."
         if "competitor" in self.reasons:
             return "Promoting other coachings isn't allowed in this group."
         if "link" in self.reasons or "phone" in self.reasons or "invite" in self.reasons:
@@ -111,7 +117,13 @@ def _has_term(norm: str, squeezed: str, term: str) -> bool:
     return len(term_n) >= 4 and re.search(rf"\b{re.escape(_collapse(term_n))}\b", _collapse(squeezed)) is not None
 
 
-def check(text: str, *, is_staff: bool, ai: bool = True) -> Verdict:
+def has_link(text: str) -> bool:
+    return bool(_URL.search(text or ""))
+
+
+def check(text: str, *, is_staff: bool, ai: bool = True, can_link: Optional[bool] = None) -> Verdict:
+    """[can_link]: links (a Meet link, a PDF on Drive…) are for admins only. None = the old rule
+    (staff yes, students no)."""
     r = rules()
     norm = normalize(text)
     squeezed = re.sub(r"\b(\w) (?=\w\b)", r"\1", norm)
@@ -119,6 +131,8 @@ def check(text: str, *, is_staff: bool, ai: bool = True) -> Verdict:
 
     if any(_has_term(norm, squeezed, w) for w in r.get("bannedWords", [])):
         reasons.append("abusive")
+    if is_staff and can_link is False and r.get("blockLinksForStudents", True) and _URL.search(text):
+        reasons.append("link_admin")                   # a teacher who isn't an admin
     if not is_staff:
         if any(_has_term(norm, squeezed, c) for c in r.get("competitors", [])):
             reasons.append("competitor")

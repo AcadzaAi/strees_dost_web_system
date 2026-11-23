@@ -623,3 +623,29 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     # a teacher's own number is never shown
     assert c.get(f"/api/chat/groups/{gp['id']}/manage/members/teacher2", headers=H("teacher1")).get_json()["phone"] == ""
     print("CONTACT DETAILS TESTS PASSED")
+
+# ── links: admins only (groups and private chats), students and other teachers can't ──
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users"):
+    _svc._rate.clear()                                # earlier sections used up the per-minute budget
+    c = app.test_client(); H=lambda u: {"Authorization": "Bearer "+tok(u)}
+    gl = c.post("/api/chat/admin/groups", headers=H("teacher1"), json={"title":"Links","type":"chat","batch":"none-k"}).get_json()
+    c.post(f"/api/chat/groups/{gl['id']}/manage/members", headers=H("teacher1"),
+           json={"members":[{"userId":"stu1"},{"userId":"teacher2","role":"teacher"}]})
+    mongo.db().members.update_many({"userId": "teacher2", "role": "admin"}, {"$set": {"role": "teacher"}})  # teacher2 runs no group
+    meet = "Class now: https://meet.google.com/abc-defg-hij"
+    r = c.post(f"/api/chat/groups/{gl['id']}/messages", headers=H("teacher1"), json={"clientId":"ln-1","text":meet})
+    assert r.status_code == 200 and r.get_json()["message"]["text"] == meet, r.get_json()
+    r = c.post(f"/api/chat/groups/{gl['id']}/messages", headers=H("teacher2"), json={"clientId":"ln-2","text":"see www.example.com"})
+    assert r.status_code == 422 and r.get_json()["message"] == "Only admins can send links.", r.get_json()
+    assert c.post(f"/api/chat/groups/{gl['id']}/messages", headers=H("teacher2"), json={"clientId":"ln-2b","text":"Revise chapter 4"}).status_code == 200
+    r = c.post(f"/api/chat/groups/{gl['id']}/messages", headers=H("stu1"), json={"clientId":"ln-3","text":"zoom.us/j/123"})
+    assert r.status_code == 422, r.get_json()
+    # private chat: the admin's link goes through there too
+    dm = c.post("/api/chat/direct", headers=H("teacher1"), json={"userId": "stu1"}).get_json()
+    dmid = dm.get("id") or dm.get("group", {}).get("id")
+    r = c.post(f"/api/chat/groups/{dmid}/messages", headers=H("teacher1"), json={"clientId":"ln-4","text":meet})
+    assert r.status_code == 200, r.get_json()
+    # editing a message into a link follows the same rule
+    m = c.post(f"/api/chat/groups/{gl['id']}/messages", headers=H("teacher2"), json={"clientId":"ln-5","text":"link soon"}).get_json()["message"]
+    assert c.patch(f"/api/chat/groups/{gl['id']}/messages/{m['seq']}", headers=H("teacher2"), json={"text":"https://x.com"}).status_code == 422
+    print("ADMIN LINKS TESTS PASSED")
