@@ -26,6 +26,9 @@ CHAT_ADMIN_IDS = set(_list("CHAT_ADMIN_IDS"))
 # OpenAI's moderation endpoint is free; it uses the key stress-dost already has.
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 
+# Groq (free, console.groq.com): AI check of students' messages a few seconds after delivery.
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+
 MAX_TEXT_LENGTH = 2000
 PAGE_SIZE = 50
 MAX_PAGE_SIZE = 200
