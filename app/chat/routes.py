@@ -38,8 +38,73 @@ def me():
     u = g.chat_user
     return jsonify({"id": u.id, "name": u.name, "role": u.role, "coaching": u.coaching,
                     "isAdmin": u.is_admin, "isStaff": u.is_staff, "avatar": service.my_avatar(u),
+                    "needsName": not u.is_staff and not u.named and not service.has_saved_name(u.id),
+                    "honorific": service.honorific_of(u.id) if u.is_staff else "",
                     "config": chatconfig.public(), "verify": verify.status(u, verify.clean_device(g.chat_device),
                                                                       verify.client_version(g.chat_client))})
+
+
+@bp.post("/me/name")
+@require_user
+def save_my_name():
+    """Called after the app saved the name on the Acadza account."""
+    from .auth import forget
+    name = service.refresh_my_name(g.chat_user, str(_body().get("name", "")))
+    forget(g.chat_user.id)
+    return jsonify({"ok": True, "name": name})
+
+
+@bp.post("/me/honorific")
+@require_user
+def save_honorific():
+    return jsonify({"ok": True, "honorific": service.set_honorific(g.chat_user, str(_body().get("honorific", "")))})
+
+
+@bp.post("/me/photo/upload")
+@require_user
+def photo_upload():
+    return jsonify(service.request_avatar_upload(g.chat_user, _body()))
+
+
+@bp.post("/me/photo")
+@require_user
+def photo_set():
+    base = "https://" + request.host_url.split("://", 1)[-1]      # Render serves https; Flask sees http behind it
+    return jsonify({"ok": True, "avatar": service.set_avatar_photo(g.chat_user, str(_body().get("key", "")), base)})
+
+
+@bp.delete("/me/photo")
+@require_user
+def photo_remove():
+    return jsonify({"ok": True, "avatar": service.remove_avatar_photo(g.chat_user)})
+
+
+@bp.get("/avatar/<user_id>/<token>")
+def avatar_image(user_id, token):
+    """A teacher's photo (no sign-in: phones load it like any picture). Sends the phone on to a
+    short-lived storage link; the token in the address only changes when the photo does."""
+    from flask import redirect
+    link = service.avatar_link(user_id)
+    if not link:
+        return jsonify({"error": "not_found"}), 404
+    resp = redirect(link, 302)
+    resp.headers["Cache-Control"] = "public, max-age=3600"
+    return resp
+
+
+@bp.get("/link-preview")
+@require_user
+def link_preview():
+    from . import linkpreview
+    if not chatconfig.get()["messages"].get("linkPreviews", True):
+        return jsonify({"url": request.args.get("url", "")})
+    url = request.args.get("url", "")
+    hit = linkpreview.cached(url)
+    if hit is not None:
+        return jsonify(hit)
+    if not linkpreview.allowed(g.chat_user.id):
+        return jsonify({"url": url})
+    return jsonify(linkpreview.preview(url))
 
 
 # ── phone check (students: first add from the app, and every new phone) ──

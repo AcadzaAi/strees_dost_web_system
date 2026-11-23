@@ -72,10 +72,15 @@ def _emit(event: str, payload: Any, room: str, skip_sid: Optional[str] = None) -
 
 # ── avatars ──────────────────────────────────────────────────────────────────────────────────
 
+def is_photo(avatar: Optional[str]) -> bool:
+    return isinstance(avatar, str) and avatar.startswith("https://") and "/api/chat/avatar/" in avatar
+
+
 def avatar_of(role: Optional[str], chosen: Optional[str]) -> str:
-    """Teachers and admins always have the teacher avatar; students their chosen character."""
+    """Teachers and admins: their own photo if they set one, else the teacher picture. Students
+    only ever have one of the drawn characters (never a photo)."""
     if (role or "student") != "student":
-        return TEACHER_AVATAR
+        return chosen if is_photo(chosen) else TEACHER_AVATAR
     return chosen if chosen in STUDENT_AVATARS else ""
 
 
@@ -110,12 +115,126 @@ _avatar_cache: dict[str, str] = {}     # user id -> chosen character (saves a lo
 
 
 def my_avatar(user: ChatUser) -> str:
-    if user.is_staff:
-        return TEACHER_AVATAR
     if user.id not in _avatar_cache:
         doc = db().users.find_one({"_id": user.id}, projection={"avatar": 1}) or {}
         _avatar_cache[user.id] = doc.get("avatar") or ""
-    return avatar_of("student", _avatar_cache[user.id])
+    return avatar_of("teacher" if user.is_staff else "student", _avatar_cache[user.id])
+
+
+# ── a teacher's own photo ────────────────────────────────────────────────────────────────────
+
+AVATAR_MAX_BYTES = 600 * 1024
+
+
+def request_avatar_upload(user: ChatUser, body: dict) -> dict:
+    """Teachers and admins only: a link to upload their photo (a small JPEG the app made)."""
+    if not user.is_staff:
+        raise ChatError("forbidden", "Only teachers can use their own photo.", 403)
+    if not media.enabled():
+        raise ChatError("media_off", "Photos can't be uploaded right now.", 503)
+    size = int(body.get("size") or 0)
+    if size <= 0 or size > AVATAR_MAX_BYTES:
+        raise ChatError("too_big", "This photo is too big.", 400)
+    key = f"a/{user.id}/{secrets.token_urlsafe(12)}.jpg"
+    db().media_pending.insert_one({"_id": key, "size": size, "userId": user.id, "groupId": "avatar", "at": now_ms()})
+    return {"key": key, "uploadUrl": media.upload_link(key, "image/jpeg", size), "method": "PUT",
+            "headers": {"Content-Type": "image/jpeg"}, "expiresIn": media.UPLOAD_LINK_S}
+
+
+def set_avatar_photo(user: ChatUser, key: str, base_url: str) -> str:
+    """The uploaded photo is checked (nudity) and becomes the teacher's picture everywhere."""
+    if not user.is_staff:
+        raise ChatError("forbidden", "Only teachers can use their own photo.", 403)
+    if not isinstance(key, str) or not key.startswith(f"a/{user.id}/") or ".." in key:
+        raise ChatError("bad_photo", "That photo could not be used.")
+    if not db().media_pending.find_one({"_id": key}):
+        raise ChatError("bad_photo", "That photo could not be used.")
+    data = media.read(key, AVATAR_MAX_BYTES + 1024)
+    scan = media_scan.check_image(data) if data else None
+    if scan is None or not scan.checked or not scan.allowed:
+        media.delete(key)
+        db().media_pending.delete_one({"_id": key})
+        raise ChatError("bad_photo", "This photo can't be used. Please pick another one.", 422)
+    old = (db().users.find_one({"_id": user.id}, projection={"avatarKey": 1}) or {}).get("avatarKey")
+    token = key.rsplit("/", 1)[-1].split(".")[0]
+    url = f"{base_url.rstrip('/')}/api/chat/avatar/{user.id}/{token}"
+    db().users.update_one({"_id": user.id}, {"$set": {"avatar": url, "avatarKey": key}}, upsert=True)
+    db().media_pending.delete_one({"_id": key})
+    if old and old != key:
+        media.delete(old)
+    _avatar_cache[user.id] = url
+    return url
+
+
+def remove_avatar_photo(user: ChatUser) -> str:
+    if not user.is_staff:
+        raise ChatError("forbidden", "Only teachers can use their own photo.", 403)
+    old = (db().users.find_one({"_id": user.id}, projection={"avatarKey": 1}) or {}).get("avatarKey")
+    db().users.update_one({"_id": user.id}, {"$set": {"avatar": TEACHER_AVATAR}, "$unset": {"avatarKey": ""}})
+    if old:
+        media.delete(old)
+    _avatar_cache[user.id] = TEACHER_AVATAR
+    return TEACHER_AVATAR
+
+
+def avatar_link(user_id: str) -> Optional[str]:
+    """Where a teacher's current photo is (a storage link), for /api/chat/avatar/<id>/..."""
+    key = (db().users.find_one({"_id": user_id}, projection={"avatarKey": 1}) or {}).get("avatarKey")
+    return media.download_link(key) if key and media.enabled() else None
+
+
+# ── how teachers are addressed: "Anshul Sir", "Neha Ma'am" ──────────────────────────────────
+
+HONORIFICS = {"sir": "Sir", "maam": "Ma'am"}
+_HONORIFIC_IN_NAME = re.compile(r"\b(sir|ma'?am|mam|madam|maa?m)\.?$", re.I)
+
+
+def with_honorific(name: str, honorific: Optional[str]) -> str:
+    title = HONORIFICS.get(honorific or "")
+    if not title or not name or _HONORIFIC_IN_NAME.search(name.strip()):
+        return name
+    return f"{name.strip()} {title}"
+
+
+_honorific_cache: dict[str, str] = {}
+
+
+def honorific_of(user_id: str) -> str:
+    if user_id not in _honorific_cache:
+        doc = db().users.find_one({"_id": user_id}, projection={"honorific": 1}) or {}
+        _honorific_cache[user_id] = doc.get("honorific") or ""
+    return _honorific_cache[user_id]
+
+
+def set_honorific(user: ChatUser, value: str) -> str:
+    """Teachers choose Sir or Ma'am once; students then see "Anshul Sir" on their messages."""
+    if not user.is_staff:
+        raise ChatError("forbidden", "Only teachers choose this.", 403)
+    value = (value or "").strip().lower().replace("'", "")
+    if value not in ("sir", "maam", ""):
+        raise ChatError("bad_value", "Pick Sir or Ma'am.")
+    db().users.update_one({"_id": user.id}, {"$set": {"honorific": value}}, upsert=True)
+    _honorific_cache[user.id] = value
+    for m in db().members.find({"userId": user.id, "removed": {"$ne": True}}, projection={"groupId": 1}):
+        _emit("group_updated", {"groupId": m["groupId"]}, group_room(m["groupId"]))
+    return value
+
+
+def has_saved_name(user_id: str) -> bool:
+    """The student already added their name here (Acadza may still be catching up)."""
+    return bool((db().users.find_one({"_id": user_id}, projection={"named": 1}) or {}).get("named"))
+
+
+def refresh_my_name(user: ChatUser, name: str) -> str:
+    """A student saved their name on their account: the chat uses it straight away."""
+    name = re.sub(r"\s+", " ", (name or "").strip())[:60]
+    if len(name) < 2:
+        raise ChatError("bad_name", "Please type your full name.")
+    if not moderation.check(name, is_staff=user.is_staff, ai=False).allowed:
+        raise ChatError("bad_name", "Please type your real name.")
+    db().users.update_one({"_id": user.id}, {"$set": {"name": name, "named": True}})
+    db().members.update_many({"userId": user.id}, {"$set": {"name": name}})
+    return name
 
 
 # ── shapes sent to the app ───────────────────────────────────────────────────────────────────
@@ -797,7 +916,8 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
     doc = {
         "_id": f"{group_id}-{seq}",
         "groupId": group_id, "seq": seq, "clientId": client_id,
-        "senderId": user.id, "senderName": member.get("name") or user.name,
+        "senderId": user.id, "senderName": with_honorific(member.get("name") or user.name, honorific_of(user.id))
+        if is_staff else (member.get("name") or user.name),
         "senderRole": member.get("role", "student"), "rollNo": member.get("rollNo"), "senderAvatar": avatar,
         "type": "text", "text": text, "replyTo": reply, "createdAt": now_ms(),
     }
