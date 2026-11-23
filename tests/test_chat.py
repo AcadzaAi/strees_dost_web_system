@@ -550,3 +550,54 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     retract = [x for x in pushed.call_args_list if x.args[1].get("type")=="chat_retract"]
     assert retract and retract[0].kwargs.get("priority")=="normal", retract
     print("MESSAGE INFO / SECOND TICK / ONLINE TESTS PASSED")
+
+# ── students ask to join; admins approve / decline from the notification ──
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users") as pushed:
+    c = app.test_client(); H=lambda u: {"Authorization": "Bearer "+tok(u)}
+    # a group for the apex batch, nobody added automatically, asking switched on
+    gj = c.post("/api/chat/admin/groups", headers=H("teacher1"),
+                json={"title":"Apex Doubt Club","type":"chat","batch":"apex","autoJoin":False,"joinRequests":True}).get_json()
+    assert gj["joinRequests"] is True and gj["requestCount"] == 0
+    # stu1 / stu2 are apex: they can see it; stu4 (another coaching) can't
+    seen = c.get("/api/chat/discover", headers=H("stu1")).get_json()["groups"]
+    assert [x["id"] for x in seen if x["id"]==gj["id"]] and not [x for x in seen if x["id"]==gj["id"]][0]["requested"]
+    assert gj["id"] not in {x["id"] for x in c.get("/api/chat/discover", headers=H("stu4")).get_json()["groups"]}
+    assert c.post(f"/api/chat/groups/{gj['id']}/request", headers=H("stu4")).status_code == 403
+    # asking: the admins get a notification that opens the requests
+    pushed.reset_mock()
+    assert c.post(f"/api/chat/groups/{gj['id']}/request", headers=H("stu1")).get_json()["requested"]
+    note = [x for x in pushed.call_args_list if x.args[1].get("kind")=="join_request"]
+    assert note and note[0].args[0]==["teacher1"] and "asked to join" in note[0].args[1]["body"], note
+    assert c.post(f"/api/chat/groups/{gj['id']}/request", headers=H("stu1")).get_json()["requested"]   # twice = once
+    c.post(f"/api/chat/groups/{gj['id']}/request", headers=H("stu2"))
+    mine = [x for x in c.get("/api/chat/groups", headers=H("teacher1")).get_json()["groups"] if x["id"]==gj["id"]][0]
+    assert mine["requestCount"] == 2, mine
+    assert [x for x in c.get("/api/chat/discover", headers=H("stu1")).get_json()["groups"] if x["id"]==gj["id"]][0]["requested"]
+    reqs = c.get(f"/api/chat/groups/{gj['id']}/manage/requests", headers=H("teacher1")).get_json()["requests"]
+    assert [r["userId"] for r in reqs] == ["stu1", "stu2"]
+    assert c.get(f"/api/chat/groups/{gj['id']}/manage/requests", headers=H("stu1")).status_code == 403
+    # approve stu1: in the group, told, gone from discover; decline stu2: can't ask again today
+    r = c.post(f"/api/chat/groups/{gj['id']}/manage/requests", headers=H("teacher1"), json={"userIds":["stu1"], "approve": True}).get_json()
+    assert r["count"] == 1
+    assert gj["id"] in {x["id"] for x in c.get("/api/chat/groups", headers=H("stu1")).get_json()["groups"]}
+    assert gj["id"] not in {x["id"] for x in c.get("/api/chat/discover", headers=H("stu1")).get_json()["groups"]}
+    assert any(x.args[1].get("kind")=="added" and x.args[0]==["stu1"] for x in pushed.call_args_list)
+    c.post(f"/api/chat/groups/{gj['id']}/manage/requests", headers=H("teacher1"), json={"userIds":["stu2"], "approve": False})
+    again = c.post(f"/api/chat/groups/{gj['id']}/request", headers=H("stu2"))
+    assert again.status_code == 429 and again.get_json()["error"] == "wait"
+    mine = [x for x in c.get("/api/chat/groups", headers=H("teacher1")).get_json()["groups"] if x["id"]==gj["id"]][0]
+    assert mine["requestCount"] == 0
+    # someone who left can ask to come back, and the admin sees that they left
+    c.post(f"/api/chat/groups/{gj['id']}/leave", headers=H("stu1"))
+    assert c.post(f"/api/chat/groups/{gj['id']}/request", headers=H("stu1")).get_json()["requested"]
+    reqs = c.get(f"/api/chat/groups/{gj['id']}/manage/requests", headers=H("teacher1")).get_json()["requests"]
+    assert reqs[0]["note"] == "left"
+    # cancelling takes it back; switching asking off hides the group
+    c.delete(f"/api/chat/groups/{gj['id']}/request", headers=H("stu1"))
+    assert c.get(f"/api/chat/groups/{gj['id']}/manage/requests", headers=H("teacher1")).get_json()["requests"] == []
+    c.patch(f"/api/chat/groups/{gj['id']}/manage", headers=H("teacher1"), json={"joinRequests": False})
+    assert gj["id"] not in {x["id"] for x in c.get("/api/chat/discover", headers=H("stu1")).get_json()["groups"]}
+    assert c.post(f"/api/chat/groups/{gj['id']}/request", headers=H("stu1")).status_code == 403
+    # members only ever see it in their own list, not under "can join"
+    assert all(x["id"] != ann["id"] for x in c.get("/api/chat/discover", headers=H("stu1")).get_json()["groups"])
+    print("ASK TO JOIN TESTS PASSED")
