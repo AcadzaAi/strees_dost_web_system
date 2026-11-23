@@ -78,6 +78,10 @@ DEFAULTS: dict[str, Any] = {
         "showOnline": True,
         # Title and picture under a link (YouTube and other sites), fetched and checked by the server.
         "linkPreviews": True,
+        # @mentions in groups (the person is notified even if they muted the group).
+        # studentsMentionStudents false: students can mention only teachers.
+        "mentions": True,
+        "studentsMentionStudents": True,
     },
 }
 
