@@ -686,16 +686,40 @@ def _rate_ok(user_id: str) -> bool:
         return True
 
 
-def _strike(user: ChatUser, group_id: str) -> None:
-    """Too many blocked messages in a short time: a short automatic mute in that group."""
+def _strike(user: ChatUser, group_id: str, reasons) -> None:
+    """Something explicit (a sexual or abusive message, a nude photo): the student is paused in
+    that group for chatconfig moderation.muteMinutes (20), and the group's admins are told so they
+    can lift it. Links, phone numbers and other coachings' names are only stopped, never punished.
+    Teachers and admins are never paused."""
+    if user.is_staff or not moderation.is_explicit(reasons):
+        return
     t = now_ms()
-    since = t - settings.STRIKE_WINDOW_S * 1000
     db().users.update_one({"_id": user.id}, {"$push": {"strikes": {"$each": [t], "$slice": -20}}})
-    doc = db().users.find_one({"_id": user.id}, projection={"strikes": 1}) or {}
-    recent = [s for s in doc.get("strikes", []) if s >= since]
-    if len(recent) >= settings.STRIKES_BEFORE_MUTE:
-        until = t + settings.AUTO_MUTE_MIN * 60_000
-        db().members.update_one({"groupId": group_id, "userId": user.id}, {"$set": {"restrictedUntil": until}})
+    try:
+        minutes = int((chatconfig.get().get("moderation") or {}).get("muteMinutes", 20))
+    except (TypeError, ValueError):
+        minutes = 20
+    if minutes <= 0:
+        return
+    until = t + minutes * 60_000
+    # $max: a longer pause a teacher already set stays.
+    res = db().members.update_one({"groupId": group_id, "userId": user.id, "role": "student", "removed": {"$ne": True}},
+                                  {"$max": {"restrictedUntil": until}})
+    if not res.matched_count:
+        return
+    _emit("group_updated", {"groupId": group_id}, user_room(user.id))
+    g = db().groups.find_one({"_id": group_id}, projection={"title": 1}) or {}
+    title = g.get("title", "")
+    body = f"Your messages in {title} are paused for {minutes} minutes because a message broke the group rules."
+    push.send_to_users([user.id], {"type": "chat_admin", "kind": "paused", "groupId": group_id, "groupTitle": title,
+                                   "title": title, "body": body, "text": body})
+    admins = [m["userId"] for m in db().members.find({"groupId": group_id, "role": "admin", "removed": {"$ne": True}},
+                                                     projection={"userId": 1})]
+    if admins:
+        note = (f"{user.name or 'A student'} was paused for {minutes} minutes in {title} for an explicit message. "
+                f"You can lift it from the member's profile.")
+        push.send_to_users(admins, {"type": "chat_admin", "kind": "auto_paused", "groupId": group_id, "userId": user.id,
+                                    "groupTitle": title, "title": title, "body": note, "text": note})
 
 
 def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
@@ -739,7 +763,7 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
             "kind": "blocked", "groupId": group_id, "userId": user.id, "name": user.name,
             "text": text, "reasons": verdict.reasons, "createdAt": now_ms(),
         })
-        _strike(user, group_id)
+        _strike(user, group_id, verdict.reasons)
         raise ChatError("blocked", verdict.message, 422)
 
     reply = None
@@ -932,10 +956,11 @@ def _take_down(user: ChatUser, group_id: str, doc: dict, reasons: list) -> None:
     _emit("message_deleted", {"groupId": group_id, "seq": doc["seq"], "id": doc["_id"], "byAdmin": True}, group_room(group_id))
     others = [m["userId"] for m in db().members.find({"groupId": group_id, "userId": {"$ne": user.id}, "removed": {"$ne": True}},
                                                      projection={"userId": 1})]
-    push.send_to_users(others, {"type": "chat_retract", "groupId": group_id, "seq": str(doc["seq"])}, priority="normal")
+    # High priority: the phone must wake now and remove the notification, not when Android gets to it.
+    push.send_to_users(others, {"type": "chat_retract", "groupId": group_id, "seq": str(doc["seq"])}, priority="high")
     db().moderation.insert_one({"kind": "blocked", "groupId": group_id, "userId": user.id, "name": user.name,
                                 "text": doc.get("text", ""), "reasons": reasons, "createdAt": now_ms(), "after": True})
-    _strike(user, group_id)
+    _strike(user, group_id, reasons)
 
 
 def _push_text(doc: dict) -> str:
@@ -1229,7 +1254,7 @@ def edit_message(user: ChatUser, group_id: str, seq: int, text: str) -> dict:
     can_link = _can_send_links(user, member) if text and moderation.has_link(text) else None
     verdict = moderation.check(text, is_staff=is_staff, ai=False, can_link=can_link) if text else moderation.Verdict(allowed=True)
     if not verdict.allowed:
-        _strike(user, group_id)
+        _strike(user, group_id, verdict.reasons)
         raise ChatError("blocked", verdict.message, 422)
     at = now_ms()
     db().messages.update_one({"_id": msg["_id"]}, {"$set": {"text": text, "editedAt": at}, "$push": {
@@ -1336,6 +1361,8 @@ def _clean_emoji(raw) -> str:
         return ""
     if len(e) > 8 or any(ch.isascii() for ch in e):
         raise ChatError("bad_reaction", "Pick an emoji to react with.")
+    if moderation.emoji_hit(e, reaction=True):
+        raise ChatError("bad_reaction", "That emoji isn't allowed here.")
     return e
 
 
@@ -1431,14 +1458,15 @@ def set_muted(user: ChatUser, group_id: str, muted: bool) -> None:
     db().members.update_one({"_id": m["_id"]}, {"$set": {"muted": bool(muted)}})
 
 
-def register_device(user: ChatUser, token: str, platform: str) -> None:
+def register_device(user: ChatUser, token: str, platform: str, device: str = "") -> None:
     token = (token or "").strip()
     if not token:
         raise ChatError("no_token", "Missing FCM token.")
     # A phone that changed accounts sends its token to the new account only.
     db().users.update_many({"fcmTokens.token": token}, {"$pull": {"fcmTokens": {"token": token}}})
     db().users.update_one({"_id": user.id}, {"$push": {"fcmTokens": {
-        "$each": [{"token": token, "platform": (platform or "android")[:16], "updatedAt": now_ms()}],
+        "$each": [{"token": token, "platform": (platform or "android")[:16], "updatedAt": now_ms(),
+                   **({"device": device} if device else {})}],
         "$slice": -5,                              # last 5 phones
     }}}, upsert=True)
 
