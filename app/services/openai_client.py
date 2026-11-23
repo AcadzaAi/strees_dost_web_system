@@ -1,10 +1,34 @@
 """Shared OpenAI chat helpers."""
 from __future__ import annotations
 
+import threading
+
 from openai import OpenAI
 
-client = OpenAI(timeout=30.0)  # 30 second timeout
-client_no_retry = OpenAI(max_retries=0, timeout=10.0)  # 10 second timeout for latency-critical calls
+
+class _LazyClient:
+    """Builds the OpenAI client the first time it is used, not when the server starts. Without
+    OPENAI_API_KEY the server still starts (chat and everything else keep working); only the
+    calls that need OpenAI fail, with OpenAI's own error."""
+
+    def __init__(self, **options):
+        self._options = options
+        self._client = None
+        self._lock = threading.Lock()
+
+    def _get(self) -> OpenAI:
+        if self._client is None:
+            with self._lock:
+                if self._client is None:
+                    self._client = OpenAI(**self._options)
+        return self._client
+
+    def __getattr__(self, name):
+        return getattr(self._get(), name)
+
+
+client = _LazyClient(timeout=30.0)  # 30 second timeout
+client_no_retry = _LazyClient(max_retries=0, timeout=10.0)  # 10 second timeout for latency-critical calls
 
 
 def chat_text(model: str, system: str, user: str, **kwargs):
