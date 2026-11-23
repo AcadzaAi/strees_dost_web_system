@@ -11,8 +11,9 @@ App → server (all reply through the ack callback):
   viewing   {groupId | null}     the chat on screen: no notifications for it
   react     {groupId, seq, emoji}    emoji "" takes my reaction back
   alive     {}                       answers {ok}: the connection still works
+  presence  {groupId}                direct chat: {online, lastSeen} of the other person
 Server → app:
-  message, message_deleted, message_edited, reaction, receipts, typing, group_added, group_removed, group_updated
+  message, message_deleted, message_edited, reaction, presence, receipts, typing, group_added, group_removed, group_updated
 """
 from __future__ import annotations
 
@@ -60,6 +61,7 @@ def on_connect(auth=None):
     except AuthError as exc:
         raise ConnectionRefusedError({"error": "unauthorized", "reason": str(exc)})
     _users[request.sid] = user
+    was_online = presence.is_online(user.id)
     presence.connected(request.sid, user.id)
     service.sync_auto_groups(user)
     join_room(service.user_room(user.id))
@@ -67,11 +69,27 @@ def on_connect(auth=None):
         join_room(service.group_room(gid))
     emit("ready", {"userId": user.id})
 
+    def after_connect() -> None:
+        try:
+            service.mark_all_delivered(user.id)        # second tick for whatever came while offline
+            if not was_online:
+                service.presence_changed(user.id, True)
+        except Exception:  # noqa: BLE001
+            log.exception("chat: after-connect work failed for %s", user.id)
+    service._background(after_connect)
+
 
 @socketio.on("disconnect", namespace=NS)
 def on_disconnect(*_args):
     _users.pop(request.sid, None)
-    presence.disconnected(request.sid)
+    user_id = presence.disconnected(request.sid)
+    if user_id and not presence.is_online(user_id):
+        def gone() -> None:
+            try:
+                service.presence_changed(user_id, False)
+            except Exception:  # noqa: BLE001
+                log.exception("chat: presence update failed for %s", user_id)
+        service._background(gone)
 
 
 @socketio.on("send", namespace=NS)
@@ -95,6 +113,12 @@ def on_edit(data):
 def on_react(data):
     out = service.react(_user(), str(data.get("groupId", "")), int(data.get("seq", 0)), data.get("emoji"))
     return {"ok": True, **out}
+
+
+@socketio.on("presence", namespace=NS)
+@_safe
+def on_presence(data):
+    return {"ok": True, **service.peer_presence(_user(), str(data.get("groupId", "")))}
 
 
 @socketio.on("alive", namespace=NS)

@@ -739,7 +739,7 @@ def _take_down(user: ChatUser, group_id: str, doc: dict, reasons: list) -> None:
     _emit("message_deleted", {"groupId": group_id, "seq": doc["seq"], "id": doc["_id"], "byAdmin": True}, group_room(group_id))
     others = [m["userId"] for m in db().members.find({"groupId": group_id, "userId": {"$ne": user.id}, "removed": {"$ne": True}},
                                                      projection={"userId": 1})]
-    push.send_to_users(others, {"type": "chat_retract", "groupId": group_id, "seq": str(doc["seq"])})
+    push.send_to_users(others, {"type": "chat_retract", "groupId": group_id, "seq": str(doc["seq"])}, priority="normal")
     db().moderation.insert_one({"kind": "blocked", "groupId": group_id, "userId": user.id, "name": user.name,
                                 "text": doc.get("text", ""), "reasons": reasons, "createdAt": now_ms(), "after": True})
     _strike(user, group_id)
@@ -855,19 +855,135 @@ def _send_receipts(group_id: str) -> None:
         log.exception("chat: receipts failed for %s", group_id)
 
 
+RECEIPT_LOG = 300        # how many steps of "delivered / read up to N at time T" each member keeps
+
+
+def _advance(member_id, field: str, seq: int, at: int) -> bool:
+    """Moves lastDeliveredSeq / lastReadSeq forward and notes when, so "Message info" can say
+    exactly when each person got and read each message. False when it was already there."""
+    log_field = "deliveredLog" if field == "lastDeliveredSeq" else "readLog"
+    r = db().members.update_one(
+        {"_id": member_id, "$or": [{field: {"$lt": seq}}, {field: {"$exists": False}}]},
+        {"$set": {field: seq}, "$push": {log_field: {"$each": [[seq, at]], "$slice": -RECEIPT_LOG}}})
+    return r.modified_count > 0
+
+
 def mark_read(user: ChatUser, group_id: str, seq: int) -> int:
-    m = membership(group_id, user.id)
-    g = group_or_404(group_id)
+    m, g = _together(lambda: membership(group_id, user.id), lambda: group_or_404(group_id))
     seq = max(0, min(int(seq), int(g.get("lastSeq", 0))))
-    db().members.update_one({"_id": m["_id"]}, {"$max": {"lastReadSeq": seq, "lastDeliveredSeq": seq}})
-    _broadcast_receipts(group_id)
+    at = now_ms()
+    moved = _advance(m["_id"], "lastDeliveredSeq", seq, at)       # read means it arrived too
+    moved = _advance(m["_id"], "lastReadSeq", seq, at) or moved
+    if moved:
+        _broadcast_receipts(group_id)
     return seq
 
 
 def mark_delivered(user: ChatUser, group_id: str, seq: int) -> None:
     m = membership(group_id, user.id)
-    db().members.update_one({"_id": m["_id"]}, {"$max": {"lastDeliveredSeq": int(seq)}})
-    _broadcast_receipts(group_id)
+    if _advance(m["_id"], "lastDeliveredSeq", int(seq), now_ms()):
+        _broadcast_receipts(group_id)
+
+
+def mark_all_delivered(user_id: str) -> int:
+    """The phone just connected and synced its chats: everything sent to it so far has arrived
+    (WhatsApp's second tick, even for messages that came while it was offline and the
+    notification never got through). Returns how many chats moved on."""
+    rows = list(db().members.find({"userId": user_id, "removed": {"$ne": True}},
+                                  projection={"groupId": 1, "lastDeliveredSeq": 1}))
+    if not rows:
+        return 0
+    last = {g["_id"]: int(g.get("lastSeq") or 0) for g in db().groups.find(
+        {"_id": {"$in": [r["groupId"] for r in rows]}}, projection={"lastSeq": 1})}
+    at, moved = now_ms(), 0
+    for r in rows:
+        top = last.get(r["groupId"], 0)
+        if top > int(r.get("lastDeliveredSeq") or 0) and _advance(r["_id"], "lastDeliveredSeq", top, at):
+            moved += 1
+            _broadcast_receipts(r["groupId"])
+    return moved
+
+
+def _when(log_rows, seq: int) -> int:
+    """When a member's delivered / read mark first reached seq (0 = not known)."""
+    for entry in log_rows or []:
+        try:
+            s_, at = int(entry[0]), int(entry[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if s_ >= seq:
+            return at
+    return 0
+
+
+def message_info(user: ChatUser, group_id: str, seq: int) -> dict:
+    """My message's "Message info", like WhatsApp: who read it and when, who has it on their
+    phone (ticked twice) and when, and who hasn't got it yet (phone off or no internet, or no app)."""
+    membership(group_id, user.id)
+    msg = db().messages.find_one({"groupId": group_id, "seq": int(seq)})
+    if not msg or msg.get("type") == "system" or msg.get("deletedAt"):
+        raise ChatError("no_message", "That message is gone.", 404)
+    if msg["senderId"] != user.id:
+        raise ChatError("forbidden", "Only the sender can see who got a message.", 403)
+    rows = list(db().members.find(
+        {"groupId": group_id, "removed": {"$ne": True}, "userId": {"$ne": user.id}},
+        projection={"userId": 1, "name": 1, "role": 1, "rollNo": 1, "joinedAt": 1, "lastDeliveredSeq": 1,
+                    "lastReadSeq": 1, "deliveredLog": 1, "readLog": 1}))
+    # People who joined after it was sent never got it: not "waiting".
+    rows = [m for m in rows if int(m.get("joinedAt") or 0) <= int(msg["createdAt"]) + 1000]
+    with_app = {u["_id"] for u in db().users.find(
+        {"_id": {"$in": [m["userId"] for m in rows]}, "fcmTokens.0": {"$exists": True}}, projection={"_id": 1})}
+    read, delivered, waiting = [], [], []
+    for m in rows:
+        person = {"userId": m["userId"], "name": display_name(m.get("role", "student"), m.get("name") or "", m.get("rollNo"))}
+        if int(m.get("lastReadSeq") or 0) >= seq:
+            read.append({**person, "at": _when(m.get("readLog"), seq)})
+        elif int(m.get("lastDeliveredSeq") or 0) >= seq:
+            delivered.append({**person, "at": _when(m.get("deliveredLog"), seq)})
+        else:
+            waiting.append({**person, "hasApp": m["userId"] in with_app, "online": presence.is_online(m["userId"])})
+    read.sort(key=lambda x: x["at"] or 0, reverse=True)
+    delivered.sort(key=lambda x: x["at"] or 0, reverse=True)
+    waiting.sort(key=lambda x: (not x["hasApp"], x["name"]))
+    return {"groupId": group_id, "seq": int(seq), "sentAt": int(msg["createdAt"]),
+            "read": read, "delivered": delivered, "waiting": waiting}
+
+
+# ── online / last seen (direct chats) ────────────────────────────────────────────────────────
+
+def _direct_groups_of(user_id: str) -> list[str]:
+    ids = [m["groupId"] for m in db().members.find({"userId": user_id, "removed": {"$ne": True}}, projection={"groupId": 1})]
+    if not ids:
+        return []
+    return [g["_id"] for g in db().groups.find({"_id": {"$in": ids}, "type": "direct"}, projection={"_id": 1})]
+
+
+def presence_changed(user_id: str, online: bool) -> None:
+    """Came online (app opened) or went offline: the people they chat with directly see it at once."""
+    if not chatconfig.show_online():
+        return
+    at = now_ms()
+    if not online:
+        db().users.update_one({"_id": user_id}, {"$set": {"lastSeenAt": at}}, upsert=True)
+    payload = {"userId": user_id, "online": online, "lastSeen": 0 if online else at}
+    for gid in _direct_groups_of(user_id):
+        _emit("presence", {**payload, "groupId": gid}, group_room(gid))
+
+
+def peer_presence(user: ChatUser, group_id: str) -> dict:
+    """For a direct chat: is the other person here right now, and if not, when they last were."""
+    membership(group_id, user.id)
+    g = group_or_404(group_id)
+    if g.get("type") != "direct" or not chatconfig.show_online():
+        return {"userId": "", "online": False, "lastSeen": 0}
+    other = db().members.find_one({"groupId": group_id, "userId": {"$ne": user.id}}, projection={"userId": 1})
+    if not other:
+        return {"userId": "", "online": False, "lastSeen": 0}
+    uid = other["userId"]
+    if presence.is_online(uid):
+        return {"userId": uid, "online": True, "lastSeen": 0}
+    doc = db().users.find_one({"_id": uid}, projection={"lastSeenAt": 1}) or {}
+    return {"userId": uid, "online": False, "lastSeen": int(doc.get("lastSeenAt") or 0)}
 
 
 def delete_message(user: ChatUser, group_id: str, seq: int) -> dict:
@@ -1095,7 +1211,7 @@ def _notify_reaction(g: dict, msg: dict, reactor: ChatUser, name: str, emoji: st
         "title": title,
         "body": f"{shown} reacted {emoji} to: \u201c{preview}\u201d" if emoji else "",
         "createdAt": str(now_ms()),
-    })
+    }, priority="high" if emoji else "normal")
 
 
 def reactions_since(user: ChatUser, group_id: str, since: int) -> dict:

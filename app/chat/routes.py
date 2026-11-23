@@ -115,6 +115,20 @@ def reactions(group_id):
     return jsonify(service.reactions_since(g.chat_user, group_id, _int("since") or 0))
 
 
+@bp.get("/groups/<group_id>/messages/<int:seq>/info")
+@require_user
+def message_info(group_id, seq):
+    """My message: who read it, who has it (two ticks), who is still waiting."""
+    return jsonify({"ok": True, **service.message_info(g.chat_user, group_id, seq)})
+
+
+@bp.get("/groups/<group_id>/presence")
+@require_user
+def presence(group_id):
+    """Direct chat: is the other person online, or when were they last."""
+    return jsonify({"ok": True, **service.peer_presence(g.chat_user, group_id)})
+
+
 @bp.get("/config")
 @require_user
 def config():
