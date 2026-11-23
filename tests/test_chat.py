@@ -418,3 +418,80 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     assert r.status_code==403 and r.get_json()["error"]=="edit_window"
     print("LIMITS / EXPIRY / EDIT TESTS PASSED")
 
+
+# ── captions, reactions (+ notification + catch-up), storage guard ──
+_cfg.set_for_tests({"media": {"monthlyUploadGB": 9, "storageLimitGB": 9}})
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users") as pushed, \
+     mock.patch.object(_media, "delete"), mock.patch.object(_media, "delete_many") as removed:
+    c = app.test_client(); H=lambda u: {"Authorization": "Bearer "+tok(u)}
+    gr = c.post("/api/chat/admin/groups", headers=H("teacher1"), json={"title":"React","type":"chat","batch":"none-r"}).get_json()
+    c.post(f"/api/chat/groups/{gr['id']}/manage/members", headers=H("teacher1"), json={"members":[{"userId":"stu1"},{"userId":"stu2"}]})
+    # a photo with a caption: the caption is the message text
+    t = c.post(f"/api/chat/groups/{gr['id']}/media/upload", headers=H("stu1"), json={"kind":"image","mime":"image/jpeg","size":90000}).get_json()
+    assert mongo.db().media_pending.find_one({"_id": t["key"]})
+    m = c.post(f"/api/chat/groups/{gr['id']}/messages", headers=H("stu1"),
+               json={"clientId":"cap-1","text":"Q5 from today","media":{"kind":"image","key":t["key"],"mime":"image/jpeg","size":90000}}).get_json()["message"]
+    assert m["text"]=="Q5 from today" and m["media"]["kind"]=="image" and m["reactions"]==[]
+    assert not mongo.db().media_pending.find_one({"_id": t["key"]}), "sent: no longer pending"
+    assert mongo.db().groups.find_one({"_id": gr["id"]})["lastMessage"]["text"]=="📷 Photo Q5 from today"
+    # the size the upload was signed for counts, not a smaller number the app claims later
+    t2 = c.post(f"/api/chat/groups/{gr['id']}/media/upload", headers=H("stu1"), json={"kind":"image","mime":"image/jpeg","size":120000}).get_json()
+    m2 = c.post(f"/api/chat/groups/{gr['id']}/messages", headers=H("stu1"),
+                json={"clientId":"cap-2","media":{"kind":"image","key":t2["key"],"mime":"image/jpeg","size":5}}).get_json()["message"]
+    assert m2["media"]["size"]==120000
+    # reactions: add, change, everyone sees it, the author is notified once per reaction
+    s2 = socketio.test_client(app, namespace="/chat", auth={"token": tok("stu2")})
+    s1 = socketio.test_client(app, namespace="/chat", auth={"token": tok("stu1")})
+    s1.get_received("/chat"); pushed.reset_mock()
+    a = s2.emit("react", {"groupId": gr["id"], "seq": m["seq"], "emoji": "👍"}, namespace="/chat", callback=True)
+    assert a["ok"] and a["reactions"]==[{"userId":"stu2","name":"Aman","emoji":"👍"}], a
+    ev = [e for e in s1.get_received("/chat") if e["name"]=="reaction"]
+    assert ev and (ev[0]["args"][0] if isinstance(ev[0]["args"], list) else ev[0]["args"])["seq"]==m["seq"]
+    calls = [x for x in pushed.call_args_list if x.args[1].get("type")=="chat_reaction"]
+    assert len(calls)==1 and calls[0].args[0]==["stu1"] and "reacted 👍 to" in calls[0].args[1]["body"] and "Q5 from today" in calls[0].args[1]["body"], calls
+    assert s2.emit("react", {"groupId": gr["id"], "seq": m["seq"], "emoji": "👍"}, namespace="/chat", callback=True)["ok"]
+    assert len([x for x in pushed.call_args_list if x.args[1].get("type")=="chat_reaction"])==1, "same emoji again: no change, no push"
+    r = c.post(f"/api/chat/groups/{gr['id']}/messages/{m['seq']}/react", headers=H("stu2"), json={"emoji":"❤️"}).get_json()
+    assert [x["emoji"] for x in r["reactions"]]==["❤️"]
+    c.post(f"/api/chat/groups/{gr['id']}/messages/{m['seq']}/react", headers=H("teacher1"), json={"emoji":"😂"})
+    hist = c.get(f"/api/chat/groups/{gr['id']}/messages", headers=H("stu1")).get_json()["messages"]
+    mine = [x for x in hist if x["seq"]==m["seq"]][0]
+    assert [x["emoji"] for x in mine["reactions"]]==["❤️","😂"] and mine["reactedAt"]>0
+    # reacting to my own message: no notification to myself
+    pushed.reset_mock()
+    c.post(f"/api/chat/groups/{gr['id']}/messages/{m['seq']}/react", headers=H("stu1"), json={"emoji":"🙏"})
+    assert not [x for x in pushed.call_args_list if x.args[1].get("type")=="chat_reaction"]
+    # taking it back: removed for everyone, the author's notification line is pulled
+    pushed.reset_mock()
+    r = c.post(f"/api/chat/groups/{gr['id']}/messages/{m['seq']}/react", headers=H("stu2"), json={"emoji":""}).get_json()
+    assert [x["userId"] for x in r["reactions"]]==["teacher1","stu1"]
+    pulled = [x for x in pushed.call_args_list if x.args[1].get("type")=="chat_reaction"]
+    assert pulled and pulled[0].args[1]["emoji"]=="", pulled
+    # text and system notes can't be reactions; strangers can't react
+    assert c.post(f"/api/chat/groups/{gr['id']}/messages/{m['seq']}/react", headers=H("stu2"), json={"emoji":"ok"}).status_code==400
+    assert c.post(f"/api/chat/groups/{gr['id']}/messages/1/react", headers=H("stu2"), json={"emoji":"👍"}).status_code==404
+    assert c.post(f"/api/chat/groups/{gr['id']}/messages/{m['seq']}/react", headers=H("stu3"), json={"emoji":"👍"}).status_code==403
+    # catch-up for a phone that was offline
+    since = mine["reactedAt"]
+    c.post(f"/api/chat/groups/{gr['id']}/messages/{m2['seq']}/react", headers=H("stu2"), json={"emoji":"😮"})
+    cu = c.get(f"/api/chat/groups/{gr['id']}/reactions?since={since}", headers=H("stu1")).get_json()
+    seqs = {x["seq"] for x in cu["items"]}
+    assert m2["seq"] in seqs and cu["until"] > since and not cu["more"], cu
+    # switched off from Firebase
+    _cfg.set_for_tests({"messages": {"reactions": False}})
+    assert c.post(f"/api/chat/groups/{gr['id']}/messages/{m['seq']}/react", headers=H("stu2"), json={"emoji":"👍"}).status_code==503
+    _cfg.set_for_tests({"media": {"monthlyUploadGB": 9, "storageLimitGB": 9}})
+    # storage guard: uploads not sent yet count; this month's cap; unsent uploads are cleared; the total is recounted
+    from app.chat import service as _sv
+    mongo.db().media_stats.update_one({"_id": _sv._month_key()}, {"$set": {"bytes": int(9*1024**3)}}, upsert=True)
+    r = c.post(f"/api/chat/groups/{gr['id']}/media/upload", headers=H("teacher1"), json={"kind":"image","mime":"image/jpeg","size":1000})
+    assert r.status_code==507 and "month" in r.get_json()["message"], r.get_json()
+    mongo.db().media_stats.update_one({"_id": _sv._month_key()}, {"$set": {"bytes": 0}})
+    stale = c.post(f"/api/chat/groups/{gr['id']}/media/upload", headers=H("teacher1"), json={"kind":"image","mime":"image/jpeg","size":1000}).get_json()
+    mongo.db().media_pending.update_one({"_id": stale["key"]}, {"$inc": {"at": -4*86_400_000}})
+    assert _sv.sweep_unsent_uploads() >= 1 and not mongo.db().media_pending.find_one({"_id": stale["key"]})
+    assert stale["key"] in removed.call_args.args[0]
+    mongo.db().media_stats.update_one({"_id":"storage"}, {"$set":{"bytes": 999_999_999}})
+    total = _sv.recount_storage()
+    assert total == mongo.db().media_stats.find_one({"_id":"storage"})["bytes"] and total < 999_999_999 and total >= 90000+120000
+    print("CAPTION / REACTION / STORAGE GUARD TESTS PASSED")
