@@ -62,9 +62,12 @@ Flag a message only when it clearly is one of:
 - abuse: gaali, swearing at someone, insults, slurs (English, Hindi, Hinglish, any spelling)
 - bullying: threats, humiliating or targeting a person, body shaming, "everyone ignore X"
 - hate: hate against religion, caste, region, gender, community
-- promo: promoting another coaching/app/channel, selling, asking people to move to WhatsApp/Telegram/Instagram
+- promo: promoting another coaching/app/channel, selling, asking people to move to WhatsApp/Telegram/Instagram,
+  links to other coachings' sites, paid groups, betting, crypto, "earn money" schemes
+- (a link to an adult/porn/dating site is sexual)
 
 Do NOT flag:
+- links to study material (YouTube lectures, Google Drive/Docs, Meet/Zoom classes, NCERT, Wikipedia)
 - study content: biology (reproduction, sex chromosomes, genitals in anatomy, "sex ratio"),
   chemistry, physics ("naked eye", "kill the process", "die" in electronics), maths, history
 - friendly everyday slang: yaar, bhai, pagal, "chod do" (= leave it), "mar gaya" (= exhausted), "kya bakwas paper tha"
