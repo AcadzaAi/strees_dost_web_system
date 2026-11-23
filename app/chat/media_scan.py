@@ -173,23 +173,81 @@ def check_pdf(data: bytes) -> ScanResult:
     return ScanResult(allowed=not reasons, reasons=sorted(set(reasons)))
 
 
-def check_media(md: dict) -> ScanResult:
-    """A delivered photo or document: fetched from storage and checked. Voice notes and other
-    kinds of file are let through."""
+def sniff(head: bytes) -> str:
+    """What a file really is, from its first bytes: "pdf", "image" (one we can read), "image_other"
+    (GIF / HEIC / AVIF / BMP…: an image the model can't take directly) or "other"."""
+    h = head or b""
+    if h[:5] == b"%PDF-":
+        return "pdf"
+    if h[:3] == b"\xff\xd8\xff" or h[:8] == b"\x89PNG\r\n\x1a\n" or (h[:4] == b"RIFF" and h[8:12] == b"WEBP"):
+        return "image"
+    if h[:6] in (b"GIF87a", b"GIF89a") or h[:2] == b"BM" or (h[4:8] == b"ftyp" and h[8:12] in (
+            b"heic", b"heix", b"hevc", b"mif1", b"msf1", b"avif", b"avis")):
+        return "image_other"
+    return "other"
+
+
+def _frames_via_pillow(data: bytes, frames: int = 3) -> list:
+    """GIF (first frames), BMP and anything else Pillow opens, as pictures the model can take."""
+    import io
+    import numpy as np
+    from PIL import Image, ImageSequence
+    out = []
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            for i, frame in enumerate(ImageSequence.Iterator(im)):
+                if i >= frames:
+                    break
+                rgb = frame.convert("RGB")
+                rgb.thumbnail((MAX_SIDE, MAX_SIDE))
+                out.append(np.array(rgb)[:, :, ::-1].copy())
+    except Exception:  # noqa: BLE001
+        return []
+    return out
+
+
+def check_media(md: dict, strict: bool = False) -> ScanResult:
+    """A delivered photo or document, checked by what the file really is (its first bytes), never
+    by the type the app claimed: a photo sent as a "document" is still checked as a photo.
+    Voice notes and other documents (Word, PowerPoint…) are let through.
+    [strict] (students): a picture that can't be checked at all is treated as failing."""
     cfg = _scan_config()
-    kind, mime = md.get("kind"), (md.get("mime") or "").lower()
-    is_image = kind == "image" or (kind == "file" and mime.startswith("image/") and mime != "image/gif")
-    is_pdf = kind == "file" and (mime == "application/pdf" or (md.get("name") or "").lower().endswith(".pdf"))
-    if not ((is_image and cfg["images"]) or (is_pdf and cfg["documents"])):
-        return ScanResult(checked=False)
-    if not media.enabled() or not md.get("key"):
-        return ScanResult(checked=False)
-    data = media.read(md["key"], MAX_DOWNLOAD)
-    if data is None:
+    if md.get("kind") == "audio" or not media.enabled() or not md.get("key"):
         return ScanResult(checked=False)
     if md.get("gzip"):
+        data = media.read(md["key"], MAX_DOWNLOAD)
+        if data is None:
+            return ScanResult(checked=False)
         try:
             data = gzip.decompress(data)
         except OSError:
             return ScanResult(checked=False)
-    return check_image(data) if is_image else check_pdf(data)
+        what = sniff(data[:32])
+    else:
+        data = None
+        start = media.head(md["key"], 32)
+        if start is None:                            # a ranged read failed: read the file itself
+            data = media.read(md["key"], MAX_DOWNLOAD)
+            start = data[:32] if data else b""
+        what = sniff(start)
+    if what == "other" or (what == "pdf" and not cfg["documents"]) or (what != "pdf" and not cfg["images"]):
+        return ScanResult(checked=False)
+    if data is None:
+        data = media.read(md["key"], MAX_DOWNLOAD)
+        if data is None:
+            return ScanResult(allowed=not strict, reasons=[] if not strict else ["unchecked"], checked=False)
+    if what == "pdf":
+        return check_pdf(data)
+    if what == "image":
+        res = check_image(data)
+        if res.checked:
+            return res
+    frames = _frames_via_pillow(data)
+    if not frames:
+        return ScanResult(allowed=not strict, reasons=[] if not strict else ["unchecked"], checked=False)
+    for img in frames:
+        with _one_at_a_time:
+            hits = _off_the_event_loop(_image_hits, img, cfg["strictness"])
+        if hits:
+            return ScanResult(allowed=False, reasons=[f"nudity:{h}" for h in hits])
+    return ScanResult()

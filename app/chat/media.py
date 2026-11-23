@@ -118,6 +118,16 @@ def read(key: str, max_bytes: int) -> Optional[bytes]:
         return None
 
 
+def head(key: str, n: int = 32) -> Optional[bytes]:
+    """The first [n] bytes of a stored file: what it really is, whatever the app said."""
+    try:
+        obj = _s3().get_object(Bucket=R2_BUCKET, Key=key, Range=f"bytes=0-{max(0, n - 1)}")
+        return obj["Body"].read(n)
+    except Exception:  # noqa: BLE001
+        log.warning("chat: could not read the start of %s", key)
+        return None
+
+
 def delete(key: str) -> None:
     try:
         _s3().delete_object(Bucket=R2_BUCKET, Key=key)
