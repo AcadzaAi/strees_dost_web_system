@@ -29,7 +29,7 @@ from typing import Any, Optional
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
-from . import moderation, presence, push, settings
+from . import media, moderation, presence, push, settings
 from .auth import STAFF_ROLES, ChatUser
 from .mongo import db, next_seq
 
@@ -149,7 +149,68 @@ def message_out(m: dict, avatars: Optional[dict] = None) -> dict:
         "createdAt": m["createdAt"],
         "deleted": deleted,
         "deletedByAdmin": deleted and m.get("deletedBy") not in (None, m["senderId"]),
+        "media": None if deleted else _media_out(m.get("media")),
     }
+
+
+def _media_out(md: Optional[dict]) -> Optional[dict]:
+    if not md or not md.get("key"):
+        return None
+    out = {k: md.get(k) for k in ("kind", "key", "mime", "size", "name", "width", "height", "durationMs")}
+    out["url"] = media.download_link(md["key"]) if media.enabled() else ""
+    return out
+
+
+def _clean_media(group_id: str, raw) -> Optional[dict]:
+    """The file a message points at, checked: right group, allowed kind, within the size limit."""
+    if not raw:
+        return None
+    if not media.enabled():
+        raise ChatError("media_off", "Sending photos and files is not switched on yet.", 503)
+    if not isinstance(raw, dict):
+        raise ChatError("bad_media", "That file could not be sent.")
+    kind = raw.get("kind")
+    rule = media.KINDS.get(kind)
+    key = raw.get("key")
+    if not rule or not media.belongs_to(key, group_id):
+        raise ChatError("bad_media", "That file could not be sent.")
+    size = int(raw.get("size") or 0)
+    if size <= 0 or size > rule["max"]:
+        raise ChatError("too_big", f"Files can be up to {rule['max'] // (1024 * 1024)} MB.")
+    def num(name, top):
+        try:
+            v = int(raw.get(name) or 0)
+        except (TypeError, ValueError):
+            v = 0
+        return max(0, min(v, top))
+    return {"kind": kind, "key": key, "mime": str(raw.get("mime") or "")[:80], "size": size,
+            "name": str(raw.get("name") or "")[:120], "width": num("width", 20000), "height": num("height", 20000),
+            "durationMs": num("durationMs", 3 * 3600 * 1000)}
+
+
+def request_upload(user: ChatUser, group_id: str, body: dict) -> dict:
+    """A short-lived link to upload one file to R2 for this group (only if I may post here)."""
+    if not media.enabled():
+        raise ChatError("media_off", "Sending photos and files is not switched on yet.", 503)
+    g = group_or_404(group_id)
+    member = membership(group_id, user.id)
+    if not _can_post(g, member):
+        if (member.get("restrictedUntil") or 0) > now_ms():
+            raise ChatError("restricted", "A teacher has paused your messages in this group for a while.", 403)
+        raise ChatError("read_only", "Only admins can send messages in this group.", 403)
+    kind = body.get("kind")
+    rule = media.KINDS.get(kind)
+    if not rule:
+        raise ChatError("bad_media", "Pick a photo, a voice note or a document.")
+    mime = str(body.get("mime") or "application/octet-stream").lower()[:80]
+    if rule["mimes"] and mime not in rule["mimes"]:
+        raise ChatError("bad_media", "That kind of file can't be sent here.")
+    size = int(body.get("size") or 0)
+    if size <= 0 or size > rule["max"]:
+        raise ChatError("too_big", f"Files can be up to {rule['max'] // (1024 * 1024)} MB.")
+    key = media.key_for(group_id, mime, str(body.get("name") or ""))
+    return {"key": key, "uploadUrl": media.upload_link(key, mime), "method": "PUT",
+            "headers": {"Content-Type": mime}, "expiresIn": media.UPLOAD_LINK_S}
 
 
 def _match(g: dict) -> Optional[dict]:
@@ -406,11 +467,13 @@ def _strike(user: ChatUser, group_id: str) -> None:
 
 
 def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
-                 reply_to_seq: Optional[int] = None, origin_sid: Optional[str] = None) -> dict:
+                 reply_to_seq: Optional[int] = None, origin_sid: Optional[str] = None,
+                 media_in: Optional[dict] = None) -> dict:
     started = time.time()
     text = (text or "").strip()
     client_id = (client_id or "").strip()[:64] or secrets.token_hex(8)
-    if not text:
+    attached = _clean_media(group_id, media_in)
+    if not text and not attached:
         raise ChatError("empty", "Type a message first.")
     if len(text) > settings.MAX_TEXT_LENGTH:
         raise ChatError("too_long", f"Messages can be up to {settings.MAX_TEXT_LENGTH} characters.")
@@ -430,7 +493,9 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
         raise ChatError("slow_down", "You're sending messages too fast.", 429)
 
     is_staff = member.get("role") in STAFF_MEMBER_ROLES or user.is_staff
-    verdict = moderation.check(text, is_staff=is_staff)
+    # Word lists, links, phone numbers: checked here, instantly. The AI check runs right after
+    # delivery (it is a call to OpenAI) and takes the message down if it finds abuse.
+    verdict = moderation.check(text, is_staff=is_staff, ai=False) if text else moderation.Verdict(allowed=True)
     if not verdict.allowed:
         db().moderation.insert_one({
             "kind": "blocked", "groupId": group_id, "userId": user.id, "name": user.name,
@@ -445,7 +510,7 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
         if r and not r.get("deletedAt") and r.get("type") != "system":
             reply = {"seq": r["seq"],
                      "senderName": display_name(r.get("senderRole", "student"), r.get("senderName", ""), r.get("rollNo")),
-                     "text": (r.get("text") or "")[:160]}
+                     "text": ((r.get("text") or "") or media.label(r.get("media")))[:160]}
 
     avatar = my_avatar(user)
     seq = next_seq(group_id)
@@ -456,6 +521,8 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
         "senderRole": member.get("role", "student"), "rollNo": member.get("rollNo"), "senderAvatar": avatar,
         "type": "text", "text": text, "replyTo": reply, "createdAt": now_ms(),
     }
+    if attached:
+        doc["media"] = attached
     try:
         db().messages.insert_one(doc)
     except DuplicateKeyError:                      # two resends raced: return the one that won
@@ -475,10 +542,18 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
     def after() -> None:
         try:
             shown = display_name(doc["senderRole"], doc["senderName"], doc.get("rollNo"))
-            last = {"seq": seq, "text": text[:160], "senderName": shown, "senderId": user.id, "createdAt": doc["createdAt"]}
+            preview = (media.label(attached) + (" " + text if text else "")) if attached else text
+            last = {"seq": seq, "text": preview[:160], "senderName": shown, "senderId": user.id, "createdAt": doc["createdAt"]}
             db().groups.update_one({"_id": group_id}, {"$set": {"lastMessage": last}})
             db().members.update_one({"_id": member["_id"]}, {"$max": {"lastReadSeq": seq, "lastDeliveredSeq": seq}})
             if verdict.alert:
+                db().moderation.insert_one({"kind": "alert", "groupId": group_id, "userId": user.id, "name": user.name,
+                                            "text": text, "reasons": ["self-harm"], "createdAt": now_ms(), "seq": seq})
+            later = moderation.ai_check(text) if text and not is_staff else moderation.Verdict(allowed=True)
+            if not later.allowed:
+                _take_down(user, group_id, doc, later.reasons)
+                return                                  # never notified
+            if later.alert:
                 db().moderation.insert_one({"kind": "alert", "groupId": group_id, "userId": user.id, "name": user.name,
                                             "text": text, "reasons": ["self-harm"], "createdAt": now_ms(), "seq": seq})
             _notify(g, doc)
@@ -502,6 +577,24 @@ def _background(fn) -> None:
 
 
 _SYNC_BACKGROUND = False       # tests flip this so they can check the results right away
+
+
+def _take_down(user: ChatUser, group_id: str, doc: dict, reasons: list) -> None:
+    """The AI check flagged a delivered message: gone for everyone, logged, and a strike."""
+    db().messages.update_one({"_id": doc["_id"]}, {"$set": {"deletedAt": now_ms(), "deletedBy": "moderation"}})
+    g = db().groups.find_one({"_id": group_id}, projection={"lastMessage": 1}) or {}
+    if (g.get("lastMessage") or {}).get("seq") == doc["seq"]:
+        db().groups.update_one({"_id": group_id}, {"$set": {"lastMessage.text": "This message was deleted"}})
+    _emit("message_deleted", {"groupId": group_id, "seq": doc["seq"], "id": doc["_id"], "byAdmin": True}, group_room(group_id))
+    db().moderation.insert_one({"kind": "blocked", "groupId": group_id, "userId": user.id, "name": user.name,
+                                "text": doc.get("text", ""), "reasons": reasons, "createdAt": now_ms(), "after": True})
+    _strike(user, group_id)
+
+
+def _push_text(doc: dict) -> str:
+    if doc.get("media"):
+        return media.label(doc["media"]) + (" " + doc["text"] if doc.get("text") else "")
+    return doc.get("text", "")
 
 
 def _notify(g: dict, doc: dict) -> None:
@@ -535,10 +628,10 @@ def _notify(g: dict, doc: dict) -> None:
         "senderLabel": "" if direct else label,
         "senderAvatar": doc.get("senderAvatar") or "",
         "senderRole": doc.get("senderRole") or "student",
-        "text": doc["text"][:300],
+        "text": _push_text(doc)[:300],
         "createdAt": str(doc["createdAt"]),
         "title": title,
-        "body": doc["text"][:200] if direct else f"{shown}: {doc['text'][:200]}",
+        "body": _push_text(doc)[:200] if direct else f"{shown}: {_push_text(doc)[:200]}",
     })
 
 
@@ -637,6 +730,9 @@ def delete_message(user: ChatUser, group_id: str, seq: int) -> dict:
         db().groups.update_one({"_id": group_id}, {"$set": {"lastMessage.text": "This message was deleted"}})
     payload = {"groupId": group_id, "seq": int(seq), "id": msg["_id"], "byAdmin": msg["senderId"] != user.id}
     _emit("message_deleted", payload, group_room(group_id))
+    key = (msg.get("media") or {}).get("key")
+    if key and media.enabled():                    # the photo / voice note goes too, not just the bubble
+        _background(lambda: media.delete(key))
     return payload
 
 
@@ -833,6 +929,8 @@ def delete_group(user: ChatUser, group_id: str) -> None:
     for uid in ids:
         _emit("group_removed", {"groupId": group_id}, user_room(uid))
         _join_live(uid, group_id, False)
+    if media.enabled():
+        _background(lambda: media.delete_group(group_id))
 
 
 def _is_teacher(user_id: str) -> bool:

@@ -82,7 +82,8 @@ def messages(group_id):
 @require_user
 def send(group_id):
     b = _body()
-    msg = service.send_message(g.chat_user, group_id, b.get("clientId", ""), b.get("text", ""), b.get("replyToSeq"))
+    msg = service.send_message(g.chat_user, group_id, b.get("clientId", ""), b.get("text", ""), b.get("replyToSeq"),
+                               media_in=b.get("media"))
     return jsonify({"ok": True, "message": msg})
 
 
@@ -90,6 +91,25 @@ def send(group_id):
 @require_user
 def read(group_id):
     return jsonify({"ok": True, "readSeq": service.mark_read(g.chat_user, group_id, int(_body().get("seq", 0)))})
+
+
+@bp.post("/groups/<group_id>/media/upload")
+@require_user
+def media_upload(group_id):
+    """A short-lived link to upload one photo / voice note / document straight to storage."""
+    return jsonify(service.request_upload(g.chat_user, group_id, _body()))
+
+
+@bp.get("/groups/<group_id>/media/link")
+@require_user
+def media_link(group_id):
+    """A fresh download link for a file of this group (an old one has run out)."""
+    from . import media
+    key = request.args.get("key", "")
+    service.membership(group_id, g.chat_user.id)
+    if not media.enabled() or not media.belongs_to(key, group_id):
+        return jsonify({"ok": False, "error": "no_media", "message": "That file is gone."}), 404
+    return jsonify({"ok": True, "url": media.download_link(key)})
 
 
 @bp.post("/groups/<group_id>/leave")

@@ -76,7 +76,8 @@ def on_disconnect(*_args):
 @_safe
 def on_send(data):
     msg = service.send_message(_user(), str(data.get("groupId", "")), str(data.get("clientId", "")),
-                               str(data.get("text", "")), data.get("replyToSeq"), origin_sid=request.sid)
+                               str(data.get("text", "")), data.get("replyToSeq"), origin_sid=request.sid,
+                               media_in=data.get("media"))
     return {"ok": True, "message": msg}
 
 

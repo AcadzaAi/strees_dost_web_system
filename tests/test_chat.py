@@ -317,3 +317,55 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     assert notes and notes[0][0]==["stu2"] and "added you to Added Note" in notes[0][1]["body"], sent.call_args_list
     print("ADDED NOTE TEST PASSED")
 
+# ── photos / voice notes / documents (R2) ──
+from app.chat import media as _media
+_media.R2_ENDPOINT = "https://acc.r2.cloudflarestorage.com"; _media.R2_ACCESS_KEY_ID = "AK"; _media.R2_SECRET_ACCESS_KEY = "SK"; _media.R2_BUCKET = "bkt"
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users") as pushed, \
+     mock.patch.object(_media, "delete") as deleted:
+    c = app.test_client(); H=lambda u: {"Authorization": "Bearer "+tok(u)}
+    gm = c.post("/api/chat/admin/groups", headers=H("teacher1"), json={"title":"Media","type":"chat","batch":"none-m"}).get_json()
+    c.post(f"/api/chat/groups/{gm['id']}/manage/members", headers=H("teacher1"), json={"members":[{"userId":"stu1"}]})
+    up = c.post(f"/api/chat/groups/{gm['id']}/media/upload", headers=H("stu1"), json={"kind":"image","mime":"image/jpeg","size":180000}).get_json()
+    assert up["key"].startswith(f"g/{gm['id']}/") and up["key"].endswith(".jpg") and "X-Amz-Signature" in up["uploadUrl"], up
+    # too big, wrong kind, someone else's group
+    assert c.post(f"/api/chat/groups/{gm['id']}/media/upload", headers=H("stu1"), json={"kind":"image","mime":"image/jpeg","size":50*1024*1024}).status_code==400
+    assert c.post(f"/api/chat/groups/{gm['id']}/media/upload", headers=H("stu1"), json={"kind":"image","mime":"text/html","size":10}).status_code==400
+    assert c.post(f"/api/chat/groups/{gm['id']}/media/upload", headers=H("stu3"), json={"kind":"image","mime":"image/jpeg","size":10}).status_code==403
+    # send with the photo (no caption)
+    r = c.post(f"/api/chat/groups/{gm['id']}/messages", headers=H("stu1"),
+               json={"clientId":"m-1","text":"","media":{"kind":"image","key":up["key"],"mime":"image/jpeg","size":180000,"width":1200,"height":900}}).get_json()
+    m = r["message"]
+    assert m["media"]["kind"]=="image" and m["media"]["width"]==1200 and "X-Amz-Signature" in m["media"]["url"], m
+    assert mongo.db().groups.find_one({"_id": gm["id"]})["lastMessage"]["text"].startswith("📷 Photo")
+    assert any("📷 Photo" in call.args[1]["body"] for call in pushed.call_args_list)
+    # a key from another group is refused
+    bad = c.post(f"/api/chat/groups/{gm['id']}/messages", headers=H("stu1"), json={"clientId":"m-2","text":"x","media":{"kind":"image","key":"g/other/x.jpg","size":10}})
+    assert bad.status_code==400
+    # history carries the link; deleting removes the file
+    hist = c.get(f"/api/chat/groups/{gm['id']}/messages", headers=H("teacher1")).get_json()["messages"]
+    assert any(x.get("media") and x["media"]["key"]==up["key"] for x in hist)
+    c.delete(f"/api/chat/groups/{gm['id']}/messages/{m['seq']}", headers=H("stu1"))
+    deleted.assert_called_with(up["key"])
+    # voice note label
+    up2 = c.post(f"/api/chat/groups/{gm['id']}/media/upload", headers=H("teacher1"), json={"kind":"audio","mime":"audio/mp4","size":300000}).get_json()
+    c.post(f"/api/chat/groups/{gm['id']}/messages", headers=H("teacher1"),
+           json={"clientId":"m-3","media":{"kind":"audio","key":up2["key"],"mime":"audio/mp4","size":300000,"durationMs":65000}})
+    assert mongo.db().groups.find_one({"_id": gm["id"]})["lastMessage"]["text"].startswith("🎤 Voice note (1:05)")
+    # fresh link
+    assert c.get(f"/api/chat/groups/{gm['id']}/media/link?key={up2['key']}", headers=H("stu1")).get_json()["ok"]
+    print("MEDIA TESTS PASSED")
+
+# ── the AI check runs after delivery and takes a flagged message down ──
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users") as pushed, \
+     mock.patch("app.chat.moderation.ai_check", return_value=moderation.Verdict(allowed=False, reasons=["ai:harassment"])):
+    c = app.test_client(); H=lambda u: {"Authorization": "Bearer "+tok(u)}
+    gq2 = c.post("/api/chat/admin/groups", headers=H("teacher1"), json={"title":"AI","type":"chat","batch":"none-q"}).get_json()
+    c.post(f"/api/chat/groups/{gq2['id']}/manage/members", headers=H("teacher1"), json={"members":[{"userId":"stu1"}]})
+    pushed.reset_mock()
+    r = c.post(f"/api/chat/groups/{gq2['id']}/messages", headers=H("stu1"), json={"clientId":"ai-1","text":"something nasty"}).get_json()
+    assert r["ok"]
+    doc = mongo.db().messages.find_one({"groupId": gq2["id"], "clientId": "ai-1"})
+    assert doc.get("deletedAt") and doc.get("deletedBy")=="moderation"
+    assert not [c_ for c_ in pushed.call_args_list if c_.args[1].get("type")=="chat_message"], "flagged messages are never notified"
+    print("AI AFTER-DELIVERY TEST PASSED")
+

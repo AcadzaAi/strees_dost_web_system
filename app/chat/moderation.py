@@ -111,7 +111,7 @@ def _has_term(norm: str, squeezed: str, term: str) -> bool:
     return len(term_n) >= 4 and re.search(rf"\b{re.escape(_collapse(term_n))}\b", _collapse(squeezed)) is not None
 
 
-def check(text: str, *, is_staff: bool) -> Verdict:
+def check(text: str, *, is_staff: bool, ai: bool = True) -> Verdict:
     r = rules()
     norm = normalize(text)
     squeezed = re.sub(r"\b(\w) (?=\w\b)", r"\1", norm)
@@ -130,7 +130,7 @@ def check(text: str, *, is_staff: bool) -> Verdict:
             reasons.append("invite")
 
     alert = False
-    if not reasons and r.get("useAiModeration", True):
+    if not reasons and ai and r.get("useAiModeration", True):
         ai = _ai_categories(text)
         if ai:
             blocked = [c for c in AI_BLOCK if ai.get(c)]
@@ -157,3 +157,15 @@ def _ai_categories(text: str) -> Optional[dict]:
         return result.get("categories") or {}
     except requests.RequestException:
         return None
+
+
+def ai_check(text: str) -> Verdict:
+    """Only the AI part (run after a message is delivered, so sending never waits for it)."""
+    if not text or not rules().get("useAiModeration", True):
+        return Verdict(allowed=True)
+    found = _ai_categories(text)
+    if not found:
+        return Verdict(allowed=True)
+    blocked = [f"ai:{c}" for c in AI_BLOCK if found.get(c)]
+    return Verdict(allowed=not blocked, reasons=blocked, alert=any(found.get(c) for c in AI_ALERT))
+

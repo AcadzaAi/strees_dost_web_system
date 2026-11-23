@@ -26,5 +26,6 @@ Flask-Limiter==3.8.0
 
 # Chat
 pymongo==4.10.1
+boto3==1.35.36
 google-auth==2.35.0
 resend==2.4.0
