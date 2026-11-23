@@ -15,6 +15,9 @@ from app.extensions import socketio
 from app.chat import moderation, service as _svc
 _svc._SYNC_BACKGROUND = True                     # after-send work runs inline so tests can check it
 moderation.settings.OPENAI_API_KEY = ""          # no network in tests
+from app.chat import verify as _verify
+_real_needs = _verify.needs
+_verify.needs = lambda user, device: None         # phone check has its own section at the end
 
 USERS = {"stu1": {"_id":"stu1","name":"Riya","role":"student","reference":"pace","coachingBatch":["apex"],"phone":"9876543210"},
          "stu2": {"_id":"stu2","name":"Aman","role":"student","reference":"pace","coachingBatch":["apex"]},
@@ -77,11 +80,17 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post):
         assert not v.allowed, (text, v)
     assert moderation.check("join allen instead", is_staff=True).allowed      # staff may name coachings
     assert moderation.check("Mujhe Q5 mein doubt hai, integration by parts", is_staff=False).allowed
-    # 3 blocked messages -> auto restricted in that group
-    for i,text in enumerate(["you are a chutiya","join allen instead","call me 98765 43210"]):
+    # other coachings, phone numbers, links: stopped every time, but never a pause
+    for i,text in enumerate(["join allen instead","call me 98765 43210","see www.example.com","join allen instead"]):
         r = s2.emit("send", {"groupId": grp["id"], "clientId":f"m-{i}", "text":text}, namespace="/chat", callback=True)
         assert not r["ok"] and r["error"]=="blocked", (text, r)
-    assert mongo.db().moderation.count_documents({"kind":"blocked"})==3
+    assert not mongo.db().members.find_one({"groupId": grp["id"], "userId": "stu2"}).get("restrictedUntil")
+    # one explicit message: paused 20 minutes in that group (admins can lift it)
+    r = s2.emit("send", {"groupId": grp["id"], "clientId":"m-x", "text":"you are a chutiya"}, namespace="/chat", callback=True)
+    assert not r["ok"] and r["error"]=="blocked", r
+    assert mongo.db().moderation.count_documents({"kind":"blocked"})==5
+    paused = mongo.db().members.find_one({"groupId": grp["id"], "userId": "stu2"})["restrictedUntil"]
+    assert 19 * 60_000 < paused - int(time.time()*1000) <= 20 * 60_000, paused
     r = s2.emit("send", {"groupId": grp["id"], "clientId":"ok-1", "text":"normal message"}, namespace="/chat", callback=True)
     assert not r["ok"] and r["error"]=="restricted", r
     # normal words that merely contain banned substrings pass (Scunthorpe check)
@@ -545,12 +554,12 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     assert got.get("userId")=="stu2" and got.get("online") is False and got.get("lastSeen", 0) > 0, ev
     pr = c.get(f"/api/chat/groups/{dmid}/presence", headers=H("teacher1")).get_json()
     assert not pr["online"] and pr["lastSeen"] > 0
-    # silent pushes go at normal priority
+    # a take-down's retract goes at high priority: the notification must vanish at once
     pushed.reset_mock()
     with mock.patch("app.chat.moderation.ai_check", return_value=moderation.Verdict(allowed=False, reasons=["ai:x"])):
         c.post(f"/api/chat/groups/{gi['id']}/messages", headers=H("stu1"), json={"clientId":"inf-3","text":"nasty"})
     retract = [x for x in pushed.call_args_list if x.args[1].get("type")=="chat_retract"]
-    assert retract and retract[0].kwargs.get("priority")=="normal", retract
+    assert retract and retract[0].kwargs.get("priority")=="high", retract
     print("MESSAGE INFO / SECOND TICK / ONLINE TESTS PASSED")
 
 # ── students ask to join; admins approve / decline from the notification ──
@@ -795,6 +804,22 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     assert alerts and alerts[0].args[0] == ["teacher1"] and "may need help" in alerts[0].args[1]["body"], alerts
     r = c.post(f"/api/chat/groups/{ga['id']}/messages", headers=H("stu2"), json={"clientId":"care-2","text":"तू चूतिया है"})
     assert r.status_code == 422, r.get_json()
+# emoji: explicit ones stopped, ordinary ones (and single fruit) fine; reactions stricter
+for bad in ("🖕", "🖕🏽 bhai", "ok 🔞", "🍆💦", "🍑😏", "👅💦", "come 👉👌", "🍆🍑"):
+    assert _blocked(bad), bad
+for fine in ("💀💀💀", "😂😂", "🍑 is my favourite fruit", "🍆 ki sabzi", "🥵 so hot today", "💦 sweating", "🔥🔥", "😭🙏"):
+    assert not _blocked(fine), fine
+assert moderation.emoji_hit("🍆", reaction=True) and not moderation.emoji_hit("😂", reaction=True)
+assert moderation.is_explicit(["emoji"]) and moderation.is_explicit(["nudity:female_breast_exposed"])
+assert not moderation.is_explicit(["competitor"]) and not moderation.is_explicit(["link", "phone"]) and not moderation.is_explicit(["ai:promo"])
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users"):
+    c = app.test_client(); H=lambda u: {"Authorization": "Bearer "+tok(u)}
+    _svc._rate.clear(); mongo.db().members.update_many({}, {"$unset": {"restrictedUntil": ""}})
+    r = c.post(f"/api/chat/groups/{ga['id']}/messages", headers=H("stu2"), json={"clientId":"emo-1","text":"💀 lol"})
+    assert r.status_code == 200
+    seq = r.get_json()["message"]["seq"]
+    assert c.post(f"/api/chat/groups/{ga['id']}/messages/{seq}/react", headers=H("teacher1"), json={"emoji": "🖕"}).status_code == 400
+    assert c.post(f"/api/chat/groups/{ga['id']}/messages/{seq}/react", headers=H("teacher1"), json={"emoji": "😂"}).status_code == 200
 print("TEXT CHECK TESTS PASSED")
 
 # ── AI check with Groq: batches, take-down, alerts, learning, fallback between models, daily limit ──
@@ -843,6 +868,13 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     assert st["days"][0]["checked"] == 3 and st["days"][0]["models"]["openai/gpt-oss-20b"]["tok"] == 900, st
     assert st["words"][0]["term"] == "pic without clothes"
     assert c.get("/api/chat/admin/ai-check", headers=H("stu2")).status_code == 403
+    # the AI found something sexual: explicit, so the student is paused and the admins are told
+    assert mongo.db().members.find_one({"groupId": gx["id"], "userId": "stu2"}).get("restrictedUntil", 0) > time.time()*1000
+    autos = [x for x in pushed.call_args_list if x.args[1].get("kind") == "auto_paused"]
+    assert autos and autos[0].args[0] == ["teacher1"], pushed.call_args_list
+    # the admin lifts it
+    assert c.post(f"/api/chat/groups/{gx['id']}/manage/members/stu2/restrict", headers=H("teacher1"), json={"minutes": 0}).status_code == 200
+    assert not mongo.db().members.find_one({"groupId": gx["id"], "userId": "stu2"}).get("restrictedUntil")
     # a message edited after sending: the old flagged text isn't acted on
     c.post(f"/api/chat/groups/{gx['id']}/messages", headers=H("stu2"), json={"clientId": "gq-e", "text": "something rude here"})
     seq = mongo.db().messages.find_one({"clientId": "gq-e"})["seq"]
@@ -871,3 +903,79 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     assert ai_review._parse("no idea") is None
 _settings.GROQ_API_KEY = ""
 print("GROQ AI CHECK TESTS PASSED")
+
+
+# ── phone check: OTP on the first hand-add, again on a new phone; backend groups need none ──
+_verify.needs = _real_needs
+_verify._ok.clear()
+otp_calls = []
+def acadza_otp(url, json=None, timeout=None, **kw):
+    otp_calls.append((url, json))
+    if url.endswith("/phonelogin/send"):
+        return _Resp(200, {"isSuccessful": True, "challengeId": "ch-1", "expiresIn": 300, "resendAfter": 60})
+    if url.endswith("/phonelogin/verify"):
+        ok = json["otp"] == "123456" and json["challengeId"] == "ch-1" and json["phone"] == "9876543210"
+        return _Resp(200 if ok else 400, {"isSuccessful": ok})
+    return fake_post(url, json=json, timeout=timeout, **kw)      # requests.post is one function for all
+_Resp.content = b"x"
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users"), \
+     mock.patch("app.chat.verify.requests.post", side_effect=acadza_otp):
+    c = app.test_client()
+    D = lambda u, dev: {"Authorization": "Bearer "+tok(u), "X-Chat-Device": dev}
+    mongo.db().users.update_many({}, {"$unset": {"verifiedDevice": "", "otpPending": "", "otpSends": ""}})
+    mongo.db().members.update_many({}, {"$unset": {"restrictedUntil": ""}}); _svc._rate.clear()
+    # stu1 (has a phone) was added by hand to several groups: OTP needed
+    st = c.get("/api/chat/me", headers=D("stu1", "phoneA-1234")).get_json()["verify"]
+    assert st == {"required": True, "reason": "first_add", "phone": "••••••3210"}, st
+    r = c.get("/api/chat/groups", headers=D("stu1", "phoneA-1234"))
+    assert r.status_code == 403 and r.get_json()["error"] == "verify_phone"
+    # teachers never
+    assert c.get("/api/chat/groups", headers=D("teacher1", "tphone-123")).status_code == 200
+    # no device id (an old app): asked to update
+    assert c.get("/api/chat/groups", headers={"Authorization": "Bearer "+tok("stu1")}).get_json()["reason"] == "update_app"
+    # send + wrong code + right code
+    sent = c.post("/api/chat/verify/send", headers=D("stu1", "phoneA-1234")).get_json()
+    assert sent["sent"] and sent["phone"] == "••••••3210" and otp_calls[-1][1] == {"phone": "9876543210"}, sent
+    assert c.post("/api/chat/verify/check", headers=D("stu1", "phoneA-1234"), json={"otp": "000000"}).get_json()["error"] == "wrong_otp"
+    assert c.post("/api/chat/verify/check", headers=D("stu1", "phoneB-9999"), json={"otp": "123456"}).get_json()["error"] == "otp_expired"
+    ok = c.post("/api/chat/verify/check", headers=D("stu1", "phoneA-1234"), json={"otp": "123456"}).get_json()
+    assert ok["verified"], ok
+    assert c.get("/api/chat/groups", headers=D("stu1", "phoneA-1234")).status_code == 200
+    # notifications only to the verified phone
+    c.post("/api/chat/devices", headers=D("stu1", "phoneA-1234"), json={"token": "tokA"})
+    # a new phone: asked again; verifying it switches the old one off
+    r = c.get("/api/chat/groups", headers=D("stu1", "phoneB-9999"))
+    assert r.status_code == 403 and r.get_json()["reason"] == "new_phone"
+    c.post("/api/chat/devices", headers=D("stu1", "phoneB-9999"), json={"token": "tokB"})
+    c.post("/api/chat/verify/send", headers=D("stu1", "phoneB-9999"))
+    assert c.post("/api/chat/verify/check", headers=D("stu1", "phoneB-9999"), json={"otp": "123456"}).get_json()["verified"]
+    assert c.get("/api/chat/groups", headers=D("stu1", "phoneA-1234")).get_json()["reason"] == "new_phone"
+    toks = [t["token"] for t in mongo.db().users.find_one({"_id": "stu1"})["fcmTokens"]]
+    assert "tokA" not in toks and "tokB" in toks, toks
+    # the socket follows the same rule
+    s_old = socketio.test_client(app, namespace="/chat", auth={"token": tok("stu1"), "device": "phoneA-1234"})
+    assert not s_old.is_connected("/chat")
+    s_new = socketio.test_client(app, namespace="/chat", auth={"token": tok("stu1"), "device": "phoneB-9999"})
+    assert s_new.is_connected("/chat")
+    s_new.disconnect(namespace="/chat")
+    # too many OTPs
+    mongo.db().users.update_one({"_id": "stu1"}, {"$set": {"otpSends": [int(time.time()*1000)] * 5}, "$unset": {"verifiedDevice": ""}})
+    assert c.post("/api/chat/verify/send", headers=D("stu1", "phoneC-0000")).status_code == 429
+    # stu4 is only in groups from the backend (auto-join / batch): no OTP; the phone is bound quietly
+    mongo.db().members.update_many({"userId": "stu4"}, {"$set": {"sources": ["auto"]}})
+    assert c.get("/api/chat/groups", headers=D("stu4", "iphone-77777")).status_code == 200
+    assert mongo.db().users.find_one({"_id": "stu4"})["verifiedDevice"]["how"] == "backend"
+    _verify._ok.clear()
+    assert c.get("/api/chat/groups", headers=D("stu4", "other-88888")).get_json()["reason"] == "new_phone"
+    # ...and a later hand-add asks for the OTP once
+    _verify._ok.clear()
+    gid = mongo.db().members.find_one({"userId": "stu4"})["groupId"]
+    mongo.db().members.update_one({"userId": "stu4", "groupId": gid}, {"$set": {"sources": ["manual"]}})
+    assert c.get("/api/chat/groups", headers=D("stu4", "iphone-77777")).get_json()["reason"] == "first_add"
+    # an account without a phone number is let in (logged)
+    mongo.db().users.update_one({"_id": "stu2"}, {"$unset": {"phone": "", "verifiedDevice": ""}})
+    _verify._ok.clear()
+    if c.get("/api/chat/groups", headers=D("stu2", "aman-phone1")).status_code == 403:
+        assert c.post("/api/chat/verify/send", headers=D("stu2", "aman-phone1")).get_json() == {"required": False}
+    assert c.get("/api/chat/groups", headers=D("stu2", "aman-phone1")).status_code == 200
+print("PHONE CHECK TESTS PASSED")
