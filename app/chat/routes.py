@@ -38,7 +38,8 @@ def me():
     u = g.chat_user
     return jsonify({"id": u.id, "name": u.name, "role": u.role, "coaching": u.coaching,
                     "isAdmin": u.is_admin, "isStaff": u.is_staff, "avatar": service.my_avatar(u),
-                    "config": chatconfig.public(), "verify": verify.status(u, verify.clean_device(g.chat_device))})
+                    "config": chatconfig.public(), "verify": verify.status(u, verify.clean_device(g.chat_device),
+                                                                      verify.client_version(g.chat_client))})
 
 
 # ── phone check (students: first add from the app, and every new phone) ──
@@ -46,7 +47,7 @@ def me():
 @bp.get("/verify")
 @require_user
 def verify_status():
-    return jsonify(verify.status(g.chat_user, verify.clean_device(g.chat_device)))
+    return jsonify(verify.status(g.chat_user, verify.clean_device(g.chat_device), verify.client_version(g.chat_client)))
 
 
 @bp.post("/verify/send")

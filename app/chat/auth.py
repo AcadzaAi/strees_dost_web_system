@@ -192,9 +192,10 @@ def require_user(fn: Callable) -> Callable:
         except AuthError as exc:
             return jsonify({"error": "unauthorized", "reason": str(exc)}), 401
         g.chat_device = request.headers.get("X-Chat-Device", "")
+        g.chat_client = request.headers.get("X-Chat-Client", "")
         if fn.__name__ not in OPEN_BEFORE_VERIFY:
             from . import verify
-            need = verify.needs(g.chat_user, verify.clean_device(g.chat_device))
+            need = verify.gate(g.chat_user, verify.clean_device(g.chat_device), verify.client_version(g.chat_client))
             if need is not None:
                 return jsonify(need.to_dict()), 403
         return fn(*args, **kwargs)

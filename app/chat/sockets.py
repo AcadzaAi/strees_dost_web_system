@@ -72,7 +72,8 @@ def on_connect(auth=None):
     except AuthError as exc:
         raise ConnectionRefusedError({"error": "unauthorized", "reason": str(exc)})
     device = verify.clean_device((auth or {}).get("device") if isinstance(auth, dict) else request.args.get("device"))
-    need = verify.needs(user, device)
+    client = verify.client_version((auth or {}).get("client") if isinstance(auth, dict) else request.args.get("client"))
+    need = verify.gate(user, device, client)
     if need is not None:
         raise ConnectionRefusedError(need.to_dict())
     _users[request.sid] = user

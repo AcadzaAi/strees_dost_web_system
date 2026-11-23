@@ -42,13 +42,13 @@ PENDING_MS = 10 * 60_000
 
 
 class VerifyNeeded(Exception):
-    def __init__(self, reason: str, phone: str):
+    def __init__(self, reason: str, phone: str, message: str = ""):
         super().__init__(reason)
-        self.reason, self.phone = reason, phone
+        self.reason, self.phone, self.message = reason, phone, message
 
     def to_dict(self) -> dict:
-        msg = ("You're using the chat on a new phone. Verify it with the OTP sent to your number."
-               if self.reason == "new_phone" else "Verify your phone number once to use the chat.")
+        msg = self.message or ("You're using the chat on a new phone. Verify it with the OTP sent to your number."
+                               if self.reason == "new_phone" else "Verify your phone number once to use the chat.")
         return {"ok": False, "error": "verify_phone", "reason": self.reason, "phone": self.phone, "message": msg}
 
 
@@ -90,6 +90,36 @@ def added_by_hand(user_id: str) -> bool:
     return any(gid not in direct for gid in manual)
 
 
+def _service() -> dict:
+    try:
+        from . import chatconfig
+        return chatconfig.get().get("service") or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def gate(user, device: str, client: int = 0) -> Optional[VerifyNeeded]:
+    """Everything that can keep someone out of the chat, in order: the whole chat closed (Firebase
+    chatConfig/service/open), an app build too old (service/minClientVersion), then the phone check."""
+    svc = _service()
+    if svc.get("open", True) in (False, "false", 0, "0"):
+        return VerifyNeeded("closed", "", str(svc.get("closedMessage") or ""))
+    try:
+        least = int(float(svc.get("minClientVersion") or 0))
+    except (TypeError, ValueError):
+        least = 0
+    if least and int(client or 0) < least:
+        return VerifyNeeded("update_app", "", "Please update the app to use the chat.")
+    return needs(user, device)
+
+
+def client_version(raw) -> int:
+    try:
+        return max(0, int(str(raw or "0").strip()))
+    except ValueError:
+        return 0
+
+
 def needs(user, device: str) -> Optional[VerifyNeeded]:
     """None when this student may use the chat on this phone; else why not."""
     if user.is_staff or _config().get("phoneCheck", True) in (False, "false", 0, "0"):
@@ -114,9 +144,10 @@ def needs(user, device: str) -> Optional[VerifyNeeded]:
     return None
 
 
-def status(user, device: str) -> dict:
-    n = needs(user, device)
-    return {"required": False} if n is None else {"required": True, "reason": n.reason, "phone": n.phone}
+def status(user, device: str, client: int = 0) -> dict:
+    n = gate(user, device, client)
+    return {"required": False} if n is None else {"required": True, "reason": n.reason, "phone": n.phone,
+                                                  "message": n.to_dict()["message"]}
 
 
 def _now() -> int:
