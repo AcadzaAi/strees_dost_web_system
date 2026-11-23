@@ -286,6 +286,15 @@ def _clean_media(user: ChatUser, member: dict, group_id: str, raw) -> Optional[d
             "durationMs": num("durationMs", 3 * 3600 * 1000), "gzip": bool(raw.get("gzip")) and kind == "file"}
 
 
+def _as_list(v) -> list:
+    """A list from Firebase, which may arrive as {"0": a, "1": b} or as one comma-separated text."""
+    if isinstance(v, dict):
+        return list(v.values())
+    if isinstance(v, str):
+        return [x for x in v.split(",") if x.strip()]
+    return list(v or [])
+
+
 def request_upload(user: ChatUser, group_id: str, body: dict) -> dict:
     """A short-lived link to upload one file to R2 for this group (only if I may post here)."""
     if not media.enabled():
@@ -305,7 +314,15 @@ def request_upload(user: ChatUser, group_id: str, body: dict) -> dict:
         raise ChatError("bad_media", "That kind of file can't be sent here.")
     size = int(body.get("size") or 0)
     _check_media_allowed(user, member, kind, size)
-    key = media.key_for(group_id, mime, str(body.get("name") or ""))
+    name = str(body.get("name") or "")
+    staff = member.get("role") in STAFF_MEMBER_ROLES or user.is_staff
+    if kind == "file" and not staff:
+        # Students: documents only (no videos, apps, zips). chatConfig media/studentFileTypes.
+        allowed = {str(t).lower().strip(". ") for t in _as_list(chatconfig.media().get("studentFileTypes"))}
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        if ext not in allowed or mime.startswith(("video/", "application/vnd.android")):
+            raise ChatError("not_allowed", "Students can send PDF, Word, PowerPoint and Excel files only.", 403)
+    key = media.key_for(group_id, mime, name)
     # Remembered until the message is sent; an upload never sent is removed after a few days.
     db().media_pending.insert_one({"_id": key, "size": size, "userId": user.id, "groupId": group_id, "at": now_ms()})
     return {"key": key, "uploadUrl": media.upload_link(key, mime, size), "method": "PUT",
@@ -842,7 +859,7 @@ def send_message(user: ChatUser, group_id: str, client_id: str, text: str,
         # Photos and PDFs from anyone: checked for nudity on this server; gone in a second or two if so.
         if attached:
             try:
-                scan = media_scan.check_media(attached)
+                scan = media_scan.check_media(attached, strict=not is_staff)
                 if not scan.allowed:
                     log.warning("chat: %s taken down by the media check (%s)", doc["_id"], ", ".join(scan.reasons))
                     _take_down(user, group_id, doc, scan.reasons)
