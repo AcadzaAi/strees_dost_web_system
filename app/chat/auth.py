@@ -178,14 +178,25 @@ def _remember(user: ChatUser, contact: Optional[dict] = None) -> None:
     )
 
 
+# Calls a student may make before their phone is verified (to see why, and to verify).
+OPEN_BEFORE_VERIFY = {"me", "config", "verify_status", "verify_start", "verify_finish", "add_device", "remove_device"}
+
+
 def require_user(fn: Callable) -> Callable:
-    """REST: Authorization: Bearer <Acadza token>. Sets g.chat_user."""
+    """REST: Authorization: Bearer <Acadza token>. Sets g.chat_user. A student whose phone isn't
+    verified for the chat gets 403 {error: "verify_phone"} (see verify.py)."""
     @wraps(fn)
     def wrapper(*args, **kwargs):
         try:
             g.chat_user = verify_token(request.headers.get("Authorization", ""))
         except AuthError as exc:
             return jsonify({"error": "unauthorized", "reason": str(exc)}), 401
+        g.chat_device = request.headers.get("X-Chat-Device", "")
+        if fn.__name__ not in OPEN_BEFORE_VERIFY:
+            from . import verify
+            need = verify.needs(g.chat_user, verify.clean_device(g.chat_device))
+            if need is not None:
+                return jsonify(need.to_dict()), 403
         return fn(*args, **kwargs)
     return wrapper
 

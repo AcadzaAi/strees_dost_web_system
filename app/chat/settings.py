@@ -15,6 +15,8 @@ CHAT_DB_NAME = os.getenv("CHAT_DB_NAME", "acadza_chat")
 
 # Acadza's own API: every chat user is verified with their Acadza token (no separate login).
 ACADZA_API_BASE = os.getenv("ACADZA_API_BASE", "https://api.acadza.in").rstrip("/")
+# Where Acadza's phone OTP lives (phonelogin/send, phonelogin/verify), for the chat's phone check.
+ACADZA_OTP_BASE = os.getenv("ACADZA_OTP_BASE", "https://api.acadza.in").rstrip("/")
 
 # Firebase service account (the whole JSON as one line) for FCM HTTP v1 notifications.
 FIREBASE_SERVICE_ACCOUNT_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON", "").strip()
@@ -37,9 +39,6 @@ RATE_LIMIT_COUNT = 10
 RATE_LIMIT_WINDOW_S = 10
 # A sender can delete their own message for everyone within this many minutes; staff any time.
 DELETE_WINDOW_MIN = 60
-# Blocked messages before a short automatic mute in that group.
-STRIKES_BEFORE_MUTE = 3
-STRIKE_WINDOW_S = 10 * 60
-AUTO_MUTE_MIN = 30
+# (Automatic pauses for explicit messages: chatconfig moderation.muteMinutes, editable in Firebase.)
 
 ENABLED = bool(MONGODB_URI)
