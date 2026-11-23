@@ -83,6 +83,7 @@ def ensure_indexes() -> None:
     d.users.create_index([("coaching", ASCENDING), ("role", ASCENDING)])
     d.reports.create_index([("createdAt", DESCENDING)])
     d.moderation.create_index([("createdAt", DESCENDING)])
+    d.link_previews.create_index([("expiresAt", ASCENDING)], expireAfterSeconds=0)   # gone after 7 days
     log.info("chat: indexes ready")
 
 
