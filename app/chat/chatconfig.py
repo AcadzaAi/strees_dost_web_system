@@ -76,6 +76,8 @@ DEFAULTS: dict[str, Any] = {
         "reactions": True,
         # "online" / "last seen" in direct chats.
         "showOnline": True,
+        # Title and picture under a link (YouTube and other sites), fetched and checked by the server.
+        "linkPreviews": True,
     },
 }
 

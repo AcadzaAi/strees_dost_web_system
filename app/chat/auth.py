@@ -36,6 +36,8 @@ class ChatUser:
     coaching: str                  # Acadza "reference": the brand / coaching the student belongs to
     batches: tuple[str, ...] = field(default_factory=tuple)
     is_admin: bool = False
+    # False when the Acadza account has no name (the chat then asks the student to add one).
+    named: bool = True
 
     @property
     def is_staff(self) -> bool:
@@ -120,6 +122,7 @@ def verify_token(raw_token: str) -> ChatUser:
         batches=tuple(dict.fromkeys(str(b).strip() for b in batches if str(b).strip())),
         # Admins: only teachers, and only the ones on the admin list.
         is_admin=role.lower() in STAFF_ROLES and is_admin_id(user_id),
+        named=bool(str(data.get("name") or "").strip()),
     )
     _remember(user, contact_of(data))
     with _cache_lock:
@@ -127,6 +130,13 @@ def verify_token(raw_token: str) -> ChatUser:
             _cache.clear()
         _cache[key] = (now + CACHE_TTL_S, user)
     return user
+
+
+def forget(user_id: str) -> None:
+    """The next call checks with Acadza again (after the person changed their account)."""
+    with _cache_lock:
+        for k in [k for k, (_, u) in _cache.items() if u.id == user_id]:
+            _cache.pop(k, None)
 
 
 def _meta_batches(data: dict) -> list[str]:
@@ -170,9 +180,10 @@ def _remember(user: ChatUser, contact: Optional[dict] = None) -> None:
     db().users.update_one(
         {"_id": user.id},
         {
-            "$set": {"name": user.name, "role": user.role, "coaching": user.coaching,
+            "$set": {**({"name": user.name} if user.named else {}),    # never "Student" over a name typed in the chat
+                     "role": user.role, "coaching": user.coaching,
                      "batches": list(user.batches), "lastSeenAt": int(time.time() * 1000), **(contact or {})},
-            "$setOnInsert": {"fcmTokens": [], "strikes": []},
+            "$setOnInsert": {"fcmTokens": [], "strikes": [], **({} if user.named else {"name": user.name})},
         },
         upsert=True,
     )
