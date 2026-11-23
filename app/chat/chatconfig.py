@@ -30,6 +30,8 @@ DEFAULTS: dict[str, Any] = {
         "retentionDays": 21,
         # Uploads stop when the files kept in storage reach this size (R2's free plan is 10 GB).
         "storageLimitGB": 9.0,
+        # And no more than this much uploaded in one calendar month (India time), whatever expires.
+        "monthlyUploadGB": 9.0,
         "image": {"maxSide": 1280, "quality": 70, "maxKB": 1500},
         "audio": {"bitrateKbps": 32, "maxSeconds": 300, "maxKB": 3000},
         "file": {"maxMB": 10, "compress": True},
@@ -44,6 +46,8 @@ DEFAULTS: dict[str, Any] = {
     "messages": {
         # Your own message can be edited for this long after sending.
         "editMinutes": 60,
+        # Emoji reactions on messages and files (the author gets a notification).
+        "reactions": True,
     },
 }
 
@@ -144,6 +148,10 @@ def media() -> dict[str, Any]:
 
 def edit_minutes() -> int:
     return int(get()["messages"]["editMinutes"])
+
+
+def reactions_on() -> bool:
+    return bool(get()["messages"].get("reactions", True))
 
 
 def public() -> dict[str, Any]:
