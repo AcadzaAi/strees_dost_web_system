@@ -48,6 +48,8 @@ DEFAULTS: dict[str, Any] = {
         "editMinutes": 60,
         # Emoji reactions on messages and files (the author gets a notification).
         "reactions": True,
+        # "online" / "last seen" in direct chats.
+        "showOnline": True,
     },
 }
 
@@ -148,6 +150,10 @@ def media() -> dict[str, Any]:
 
 def edit_minutes() -> int:
     return int(get()["messages"]["editMinutes"])
+
+
+def show_online() -> bool:
+    return bool(get()["messages"].get("showOnline", True))
 
 
 def reactions_on() -> bool:

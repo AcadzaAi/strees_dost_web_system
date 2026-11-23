@@ -53,14 +53,16 @@ def _access_token() -> Optional[str]:
         return _creds.token
 
 
-def _send_one(token: str, data: dict[str, str], access: str) -> str:
+def _send_one(token: str, data: dict[str, str], access: str, priority: str = "high") -> str:
     """'ok', 'dead' (remove the token) or 'error'."""
     body = {
         "message": {
             "token": token,
             "data": data,
-            # High priority: delivered at once, even when the phone is dozing.
-            "android": {"priority": "high", "ttl": "86400s"},
+            # High priority: delivered at once, even when the phone is dozing. Only for what the
+            # person will see: Android quietly downgrades apps whose high-priority messages show
+            # nothing, so silent ones (a message pulled back, a reaction removed) go as normal.
+            "android": {"priority": priority, "ttl": "86400s"},
             "apns": {"headers": {"apns-priority": "10"},
                      "payload": {"aps": {"sound": "default", "mutable-content": 1,
                                          "alert": {"title": data.get("title", ""), "body": data.get("body", "")},
@@ -84,7 +86,7 @@ def _send_one(token: str, data: dict[str, str], access: str) -> str:
     return "error"
 
 
-def send_to_users(user_ids: Iterable[str], data: dict[str, str]) -> None:
+def send_to_users(user_ids: Iterable[str], data: dict[str, str], priority: str = "high") -> None:
     """Fire-and-forget: runs in the background so sending a message never waits for FCM."""
     ids = list(dict.fromkeys(user_ids))
     if not ids or not enabled():
@@ -104,7 +106,7 @@ def send_to_users(user_ids: Iterable[str], data: dict[str, str]) -> None:
                     if tok:
                         targets.append((user["_id"], tok))
                         found.add(user["_id"])
-            results = list(_pool.map(lambda t: _send_one(t[1], data, access), targets)) if targets else []
+            results = list(_pool.map(lambda t: _send_one(t[1], data, access, priority), targets)) if targets else []
             dead = [t for t, r in zip(targets, results) if r == "dead"]
             for uid, tok in dead:
                 db().users.update_one({"_id": uid}, {"$pull": {"fcmTokens": {"token": tok}}})
