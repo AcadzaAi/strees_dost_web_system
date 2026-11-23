@@ -54,7 +54,8 @@ BLOCK_TYPES = ("sexual", "abuse", "bullying", "hate", "promo")
 PROMPT = """You check chat messages from Indian students (age 13-19) in JEE/NEET coaching groups.
 Messages are English, Hindi, or Hinglish (Hindi in English letters), sometimes disguised with
 symbols, numbers, spaces or odd spellings to get past a word filter (m@d@rch0d, b h o s d i, ch*tiya,
-f.u.c.k, l0da, "teri m@@ ki"). Read through the disguise.
+f.u.c.k, l0da, "teri m@@ ki") or with emoji (🖕, 🍆💦, 🍑😏, 👉👌). Read through the disguise.
+Ordinary emoji are fine: 💀 (= dying of laughter), 😂, 😭, 🙏, 🔥, 🥵 (= hot/tired), 🍑 or 🍆 alone.
 
 Flag a message only when it clearly is one of:
 - sexual: sexual talk, innuendo, asking for or offering pics/nudes, sexual comments about a person

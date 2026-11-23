@@ -47,12 +47,19 @@ DEFAULTS: dict[str, Any] = {
         "scan": {"images": True, "documents": True, "documentPages": 5, "strictness": 1.0},
     },
     # Words admins add (or un-block) without a deploy: Firebase chatConfig/moderation.
-    "moderation": {"extraWords": [], "extraHindiWords": [], "extraCompetitors": [], "allowWords": []},
+    # muteMinutes: an explicit message or photo (sexual, abusive) pauses that student in the group
+    # for this long; group admins can lift it. Other blocked things (links, other coachings) never mute.
+    "moderation": {"extraWords": [], "extraHindiWords": [], "extraCompetitors": [], "allowWords": [],
+                   "extraEmojis": [], "muteMinutes": 20},
     # AI check of students' messages a few seconds after delivery (Groq, free; needs GROQ_API_KEY).
     # batchSize: messages per request. waitSeconds: how long to gather a batch before checking.
     # models: Groq models in order of use (the next one takes over when one's daily allowance ends).
     "aiCheck": {"enabled": True, "batchSize": 25, "waitSeconds": 5,
                 "models": ["openai/gpt-oss-safeguard-20b", "openai/gpt-oss-20b", "openai/gpt-oss-120b"]},
+    # Students verify their phone with an OTP the first time a teacher adds them from the app, and
+    # on every new phone (not for groups filled from the coaching's batches). allowWithoutPhone:
+    # an account with no phone number can't get an OTP, so it is let in (and logged).
+    "security": {"phoneCheck": True, "allowWithoutPhone": True},
     "messages": {
         # Your own message can be edited for this long after sending.
         "editMinutes": 60,
