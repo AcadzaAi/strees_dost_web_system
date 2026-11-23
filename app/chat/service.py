@@ -928,7 +928,7 @@ def _take_down(user: ChatUser, group_id: str, doc: dict, reasons: list) -> None:
             media.delete(md["key"])
     g = db().groups.find_one({"_id": group_id}, projection={"lastMessage": 1}) or {}
     if (g.get("lastMessage") or {}).get("seq") == doc["seq"]:
-        db().groups.update_one({"_id": group_id}, {"$set": {"lastMessage.text": "This message was deleted"}})
+        db().groups.update_one({"_id": group_id}, {"$set": {"lastMessage.text": "This message was deleted", "lastMessage.deleted": True}})
     _emit("message_deleted", {"groupId": group_id, "seq": doc["seq"], "id": doc["_id"], "byAdmin": True}, group_room(group_id))
     others = [m["userId"] for m in db().members.find({"groupId": group_id, "userId": {"$ne": user.id}, "removed": {"$ne": True}},
                                                      projection={"userId": 1})]
@@ -1190,7 +1190,7 @@ def delete_message(user: ChatUser, group_id: str, seq: int) -> dict:
     db().messages.update_one({"_id": msg["_id"]}, {"$set": {"deletedAt": now_ms(), "deletedBy": user.id}})
     g = db().groups.find_one({"_id": group_id}, projection={"lastMessage": 1}) or {}
     if (g.get("lastMessage") or {}).get("seq") == int(seq):
-        db().groups.update_one({"_id": group_id}, {"$set": {"lastMessage.text": "This message was deleted"}})
+        db().groups.update_one({"_id": group_id}, {"$set": {"lastMessage.text": "This message was deleted", "lastMessage.deleted": True}})
     payload = {"groupId": group_id, "seq": int(seq), "id": msg["_id"], "byAdmin": msg["senderId"] != user.id}
     _emit("message_deleted", payload, group_room(group_id))
     md = msg.get("media") or {}
