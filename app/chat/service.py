@@ -1688,9 +1688,14 @@ def left_members(user: ChatUser, group_id: str) -> list[dict]:
 
 
 def member_profile(user: ChatUser, group_id: str, user_id: str) -> dict:
-    """What an admin sees on tapping a member: who they are, which groups they are in, how they
-    came in, and whether they are paused."""
-    g, _ = require_group_admin(user, group_id)
+    """What a teacher or admin sees on tapping a member: who they are, a student's phone numbers
+    (to copy), which groups they are in, how they came in, and whether they are paused. Only the
+    group's admins get the actions (canManage)."""
+    g = group_or_404(group_id)
+    me = membership(group_id, user.id)
+    can_manage = me.get("role") == "admin" or _should_be_admin(user, g, me)
+    if not (can_manage or me.get("role") in STAFF_MEMBER_ROLES or user.is_staff):
+        raise ChatError("forbidden", "Only teachers and admins can see member details.", 403)
     m = db().members.find_one({"groupId": group_id, "userId": user_id})
     if not m:
         raise ChatError("not_member", "That person isn't in this group.", 404)
@@ -1725,6 +1730,10 @@ def member_profile(user: ChatUser, group_id: str, user_id: str) -> dict:
                                                        "deletedAt": {"$exists": False}}),
         "lastMessageAt": int((last or {}).get("createdAt") or 0),
         "groups": groups,
+        "canManage": can_manage,
+        # A student's numbers, for their teachers and admins (never a teacher's own number).
+        "phone": (person.get("phone") or "") if m.get("role", "student") == "student" else "",
+        "parentPhone": (person.get("parentPhone") or "") if m.get("role", "student") == "student" else "",
     }
 
 

@@ -16,7 +16,7 @@ from app.chat import moderation, service as _svc
 _svc._SYNC_BACKGROUND = True                     # after-send work runs inline so tests can check it
 moderation.settings.OPENAI_API_KEY = ""          # no network in tests
 
-USERS = {"stu1": {"_id":"stu1","name":"Riya","role":"student","reference":"pace","coachingBatch":["apex"]},
+USERS = {"stu1": {"_id":"stu1","name":"Riya","role":"student","reference":"pace","coachingBatch":["apex"],"phone":"9876543210"},
          "stu2": {"_id":"stu2","name":"Aman","role":"student","reference":"pace","coachingBatch":["apex"]},
          "stu3": {"_id":"stu3","name":"Kabir","role":"student","reference":"pace","coachingBatch":[],
                   "meta":{"spartansCourseMathEnrolled":True,"spartansCoursePhysicsEnrolled":False,"parentPhone":"98"}},
@@ -601,3 +601,25 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     # members only ever see it in their own list, not under "can join"
     assert all(x["id"] != ann["id"] for x in c.get("/api/chat/discover", headers=H("stu1")).get_json()["groups"])
     print("ASK TO JOIN TESTS PASSED")
+
+# ── teachers and admins see a student's name and phone numbers (to copy) ──
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users"):
+    from app.chat import auth as _auth
+    _auth._cache.clear()
+    c = app.test_client(); H=lambda u: {"Authorization": "Bearer "+tok(u)}
+    gp = c.post("/api/chat/admin/groups", headers=H("teacher1"), json={"title":"Phones","type":"chat","batch":"none-p"}).get_json()
+    c.post(f"/api/chat/groups/{gp['id']}/manage/members", headers=H("teacher1"),
+           json={"members":[{"userId":"stu1"},{"userId":"stu3"},{"userId":"teacher2","role":"teacher"}]})
+    c.get("/api/chat/me", headers=H("stu1")); c.get("/api/chat/me", headers=H("stu3")); c.get("/api/chat/me", headers=H("teacher2"))
+    pr = c.get(f"/api/chat/groups/{gp['id']}/manage/members/stu1", headers=H("teacher1")).get_json()
+    assert pr["phone"] == "9876543210" and pr["name"] == "Riya" and pr["canManage"] is True, pr
+    pr3 = c.get(f"/api/chat/groups/{gp['id']}/manage/members/stu3", headers=H("teacher1")).get_json()
+    assert pr3["parentPhone"] == "", pr3          # "98" is too short to be a number: left out
+    # a teacher who isn't an admin of the group sees the details but gets no admin actions
+    prt = c.get(f"/api/chat/groups/{gp['id']}/manage/members/stu1", headers=H("teacher2")).get_json()
+    assert prt["phone"] == "9876543210" and prt["canManage"] is False, prt
+    # students never see each other's numbers
+    assert c.get(f"/api/chat/groups/{gp['id']}/manage/members/stu3", headers=H("stu1")).status_code == 403
+    # a teacher's own number is never shown
+    assert c.get(f"/api/chat/groups/{gp['id']}/manage/members/teacher2", headers=H("teacher1")).get_json()["phone"] == ""
+    print("CONTACT DETAILS TESTS PASSED")
