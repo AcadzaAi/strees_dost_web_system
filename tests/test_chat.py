@@ -368,6 +368,8 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     assert doc.get("deletedAt") and doc.get("deletedBy")=="moderation"
     types = [c_.args[1].get("type") for c_ in pushed.call_args_list]
     assert "chat_message" in types and "chat_retract" in types, types     # notified at once, then pulled back
+    last = mongo.db().groups.find_one({"_id": gq2["id"]})["lastMessage"]
+    assert last["deleted"] is True and last["text"] == "This message was deleted", last   # chat list preview too
     print("AI AFTER-DELIVERY TEST PASSED")
 
 # ── limits from Firebase chatConfig, storage budget, expiry sweep, editing ──
@@ -762,7 +764,7 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
 # ── text: Hindi script, hidden letters, Firebase word lists, self-harm alerts, no false alarms ──
 def _blocked(t, staff=False):
     return not moderation.check(t, is_staff=staff, ai=False).allowed
-for bad in ("तू मादरचोद है", "भोसड़ीके", "भोसडीके", "गाँड", "f*ck you", "ch#tiya", "b**ch", "bh@dwa", "teri maa ki", "send boobs pic"):
+for bad in ("तू मादरचोद है", "भोसड़ीके", "भोसडीके", "गाँड", "f*ck you", "ch#tiya", "b**ch", "c___hu__tiya", "bh__dwa", "ch**t", "bh@dwa", "teri maa ki", "send boobs pic"):
     assert _blocked(bad), bad
 for fine in ("chod do yaar, kal karte hain", "आज का होमवर्क क्या है?", "sin^2x + cos^2x = 1", "2*3=6 and 4#5", "Q*5 doubt",
              "visible to the naked eye", "Gandhi ji was born in 1869", "integration by parts", "bcc lattice and fcc",
