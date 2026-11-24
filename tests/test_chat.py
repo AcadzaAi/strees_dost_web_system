@@ -1045,6 +1045,30 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     assert c.get("/api/chat/groups", headers=T("teacher1", "2")).status_code == 200
     _cfg.set_for_tests({})
     assert c.get("/api/chat/groups", headers=T("teacher1", "")).status_code == 200      # off by default
+    # Closed while a phone is already connected: its next action is refused, and a change in
+    # chatConfig/service drops every phone so the gate decides again.
+    s_open = socketio.test_client(app, namespace="/chat", auth={"token": tok("teacher1"), "device": "tphone-123", "client": 1})
+    assert s_open.is_connected("/chat")
+    _cfg.set_for_tests({"service": {"open": False, "closedMessage": "Back at 6 PM"}})
+    ack = s_open.emit("send", {"groupId": "x", "clientId": "c1", "text": "hi"}, namespace="/chat", callback=True)
+    assert ack["error"] == "closed" and ack["message"] == "Back at 6 PM", ack
+    from app.chat import sockets as _sk
+    _sk._drop_everyone()
+    assert not s_open.is_connected("/chat")
+    hooked = []
+    _cfg.on_service_change(lambda: hooked.append(1))
+    _cfg._cache = _cfg._merge(_cfg.DEFAULTS, {})
+    with mock.patch("app.chat.chatconfig._db_url", return_value="https://x"), \
+         mock.patch("app.chat.chatconfig._token", return_value="t"), \
+         mock.patch("app.chat.chatconfig.requests.get") as fb:
+        fb.return_value.status_code = 200
+        fb.return_value.json.return_value = {"service": {"open": False}}
+        _cfg.refresh()
+        assert hooked == [1]
+        _cfg.refresh()                       # nothing changed: no second drop
+        assert hooked == [1]
+    _cfg._service_hooks.pop()
+    _cfg.set_for_tests({})
 print("SWITCHES TESTS PASSED")
 
 # ── link previews, teacher photos, Sir / Ma'am, students adding their name ──
