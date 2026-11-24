@@ -473,7 +473,7 @@ def _as_list(v) -> list:
 def group_out(g: dict, member: Optional[dict] = None, viewer: Optional[str] = None) -> dict:
     last_seq = int(g.get("lastSeq", 0))
     m = member or {}
-    read = int(m.get("lastReadSeq", 0))
+    read = max(int(m.get("lastReadSeq", 0)), int(m.get("clearedSeq", 0)))   # nothing unread from before a delete
     match = _match(g) or {}
     out = {
         "id": g["_id"],
@@ -767,7 +767,10 @@ def groups_for(user: ChatUser) -> list[dict]:
         return []
     groups = [g for g in db().groups.find({"_id": {"$in": list(members)}})
               # an opened but empty direct chat is only the opener's (the app hides it too)
-              if not (g.get("type") == "direct" and not g.get("lastSeq") and g.get("createdBy") != user.id)]
+              if not (g.get("type") == "direct" and not g.get("lastSeq") and g.get("createdBy") != user.id)
+              # a private chat I deleted stays away until someone writes again
+              and not (g.get("type") == "direct" and int(members[g["_id"]].get("clearedSeq") or 0) > 0
+                       and int(g.get("lastSeq") or 0) <= int(members[g["_id"]].get("clearedSeq") or 0))]
     for g in groups:                               # groups made before group admins existed
         m = members[g["_id"]]
         if g.get("type") != "direct" and m.get("role") != "admin" and _should_be_admin(user, g, m):
@@ -775,6 +778,20 @@ def groups_for(user: ChatUser) -> list[dict]:
             m["role"] = "admin"
     out = [group_out(g, members[g["_id"]], user.id) for g in groups]
     return sorted(out, key=lambda x: x["updatedAt"], reverse=True)
+
+
+def delete_direct_chat(user: ChatUser, group_id: str) -> None:
+    """Deletes a private chat for me only: it leaves my list and its messages are gone for me.
+    The other person keeps theirs. If either of us writes again, it comes back with only the new
+    messages. (Groups are left, not deleted.)"""
+    g = group_or_404(group_id)
+    if g.get("type") != "direct":
+        raise ChatError("not_direct", "Only private chats can be deleted. Leave a group instead.")
+    m = membership(group_id, user.id)
+    last = int(g.get("lastSeq") or 0)
+    # Read ticks are not touched: deleting a chat is not reading it.
+    db().members.update_one({"_id": m["_id"]}, {"$set": {"clearedSeq": max(last, 1)}})
+    _emit("group_removed", {"groupId": group_id}, user_room(user.id))
 
 
 def group_ids_for(user_id: str) -> list[str]:
@@ -1219,17 +1236,20 @@ def _notify(g: dict, doc: dict) -> None:
 
 def history(user: ChatUser, group_id: str, before: Optional[int] = None, after: Optional[int] = None,
             limit: int = settings.PAGE_SIZE) -> dict:
-    membership(group_id, user.id)
+    me = membership(group_id, user.id)
     limit = max(1, min(int(limit or settings.PAGE_SIZE), settings.MAX_PAGE_SIZE))
+    # A private chat I deleted: only what came after (the other person still has everything).
+    cleared = int(me.get("clearedSeq") or 0)
     q: dict = {"groupId": group_id}
     if after is not None:
-        q["seq"] = {"$gt": int(after)}
+        q["seq"] = {"$gt": max(int(after), cleared)}
         items = list(db().messages.find(q).sort("seq", 1).limit(limit + 1))
         has_more = len(items) > limit
         items = items[:limit]
     else:
+        q["seq"] = {"$gt": cleared}
         if before is not None:
-            q["seq"] = {"$lt": int(before)}
+            q["seq"]["$lt"] = int(before)
         items = list(db().messages.find(q).sort("seq", -1).limit(limit + 1))
         has_more = len(items) > limit
         items = list(reversed(items[:limit]))

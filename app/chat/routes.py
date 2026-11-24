@@ -92,6 +92,14 @@ def avatar_image(user_id, token):
     return resp
 
 
+@bp.post("/groups/<group_id>/delete-chat")
+@require_user
+def delete_chat(group_id):
+    """A private chat, deleted for me only."""
+    service.delete_direct_chat(g.chat_user, group_id)
+    return jsonify({"ok": True})
+
+
 @bp.get("/groups/<group_id>/mentionable")
 @require_user
 def mentionable(group_id):

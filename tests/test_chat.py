@@ -1169,3 +1169,28 @@ with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patc
     h = c.get(f"/api/chat/groups/{gm2['id']}/messages?after=0", headers=T("stu2")).get_json()["messages"]
     assert any(m_.get("mentions") for m_ in h)
 print("MENTION TESTS PASSED")
+
+# ── deleting a private chat: gone from my list and history only; back with new messages ──
+with mock.patch("app.chat.auth.requests.post", side_effect=fake_post), mock.patch("app.chat.push.send_to_users"):
+    c = app.test_client()
+    T = lambda u: {"Authorization": "Bearer "+tok(u), "X-Chat-Device": "tphone-123", "X-Chat-Client": "1"}
+    _svc._rate.clear(); mongo.db().members.update_many({}, {"$unset": {"restrictedUntil": ""}})
+    dm = c.post("/api/chat/direct", headers=T("teacher1"), json={"userId": "stu1"}).get_json()
+    dmid = (dm.get("group") or dm)["id"]
+    for i in range(3):
+        assert c.post(f"/api/chat/groups/{dmid}/messages", headers=T("teacher1"), json={"clientId": f"dd-{i}", "text": f"old {i}"}).status_code == 200
+    assert any(g_["id"] == dmid for g_ in c.get("/api/chat/groups", headers=T("stu1")).get_json()["groups"])
+    assert c.post(f"/api/chat/groups/{dmid}/delete-chat", headers=T("stu1")).get_json()["ok"]
+    assert not any(g_["id"] == dmid for g_ in c.get("/api/chat/groups", headers=T("stu1")).get_json()["groups"])
+    assert any(g_["id"] == dmid for g_ in c.get("/api/chat/groups", headers=T("teacher1")).get_json()["groups"])  # theirs stays
+    assert c.get(f"/api/chat/groups/{dmid}/messages", headers=T("stu1")).get_json()["messages"] == []
+    assert len(c.get(f"/api/chat/groups/{dmid}/messages", headers=T("teacher1")).get_json()["messages"]) >= 3
+    c.post(f"/api/chat/groups/{dmid}/messages", headers=T("teacher1"), json={"clientId": "dd-new", "text": "new one"})
+    mine = [g_ for g_ in c.get("/api/chat/groups", headers=T("stu1")).get_json()["groups"] if g_["id"] == dmid]
+    assert mine and mine[0]["unread"] == 1, mine                      # back, with only the new message unread
+    h = c.get(f"/api/chat/groups/{dmid}/messages?after=0", headers=T("stu1")).get_json()["messages"]
+    assert [m_["text"] for m_ in h] == ["new one"], h
+    # groups can't be deleted this way
+    gl = [g_ for g_ in c.get("/api/chat/groups", headers=T("stu1")).get_json()["groups"] if g_["type"] != "direct"][0]
+    assert c.post(f"/api/chat/groups/{gl['id']}/delete-chat", headers=T("stu1")).status_code == 400
+print("DELETE CHAT TESTS PASSED")
