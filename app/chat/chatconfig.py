@@ -5,6 +5,11 @@ account). Anything missing there uses the defaults below. The server re-reads it
 enforces it, and sends it to the app (GET /api/chat/config and /me) so the app compresses and
 warns with the same numbers.
 
+Live: watch() keeps one quiet connection open to Firebase (its REST streaming), which sends a
+message only when something under chatConfig changes; the server then re-reads it at once. While
+that connection is up, the 5-minute re-read becomes a 30-minute safety net. The app also listens
+to chatConfig/media and chatConfig/messages itself, so phones update without asking the server.
+
 Environment: FIREBASE_DATABASE_URL, e.g. https://<project>-default-rtdb.asia-southeast1.firebasedatabase.app
 """
 from __future__ import annotations
@@ -92,6 +97,9 @@ _lock = threading.Lock()
 _cache: dict[str, Any] = copy.deepcopy(DEFAULTS)
 _loaded_at = 0.0
 _REFRESH_S = 300
+_REFRESH_WATCHED_S = 1800
+_watching = False
+_watch_started = False
 _creds = None
 
 
@@ -166,10 +174,62 @@ def refresh() -> None:
 
 
 def get() -> dict[str, Any]:
-    if time.time() - _loaded_at > _REFRESH_S:
+    if time.time() - _loaded_at > (_REFRESH_WATCHED_S if _watching else _REFRESH_S):
         refresh()
     with _lock:
         return _cache
+
+
+def _watch_once() -> None:
+    """One streaming connection; returns when Firebase or the network closes it."""
+    global _watching
+    url, token = _db_url(), _token()
+    if not url or not token:
+        raise RuntimeError("no Firebase url or credentials")
+    opened = time.time()
+    # Firebase sends a keep-alive every ~30 s, so 90 s of silence means the line is dead.
+    with requests.get(f"{url}/chatConfig.json", params={"access_token": token},
+                      headers={"Accept": "text/event-stream"}, stream=True, timeout=(10, 90)) as r:
+        if r.status_code != 200:
+            raise RuntimeError(f"Firebase answered {r.status_code}")
+        _watching = True
+        event = ""
+        for raw in r.iter_lines(decode_unicode=True):
+            line = raw or ""
+            if line.startswith("event:"):
+                event = line[6:].strip()
+            elif line.startswith("data:") and event in ("put", "patch"):
+                refresh()                  # something changed: read the whole node once
+            elif line.startswith("data:") and event in ("cancel", "auth_revoked"):
+                return                     # rules changed or token expired: reconnect
+            if time.time() - opened > 50 * 60:
+                return                     # renew the token before its hour is up
+
+
+def watch() -> None:
+    """Runs for the life of the server (a background task); reconnects with a growing pause."""
+    global _watching
+    pause = 5
+    while True:
+        try:
+            _watch_once()
+            pause = 5
+        except Exception as exc:  # noqa: BLE001
+            log.warning("chat config: live updates paused (%s), retrying in %ss", exc, pause)
+            pause = min(pause * 2, 300)
+        finally:
+            _watching = False
+        time.sleep(pause)
+
+
+def start_watch() -> None:
+    global _watch_started
+    if _watch_started or not settings.FIREBASE_SERVICE_ACCOUNT_JSON:
+        return
+    _watch_started = True
+    from ..extensions import socketio
+    socketio.start_background_task(watch)
+    log.info("chat config: watching Firebase for live changes")
 
 
 def set_for_tests(over: dict) -> None:
