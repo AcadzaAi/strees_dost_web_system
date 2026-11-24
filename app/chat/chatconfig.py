@@ -168,9 +168,27 @@ def refresh() -> None:
             return
         merged = _merge(DEFAULTS, r.json() or {})
         with _lock:
-            _cache = merged
+            before, _cache = _cache, merged
+        if before.get("service") != merged.get("service"):
+            _service_changed()
     except Exception:  # noqa: BLE001
         log.warning("chat config: could not read Firebase, keeping the last values")
+
+
+_service_hooks: list = []
+
+
+def on_service_change(fn) -> None:
+    """[fn] runs whenever chatConfig/service changes (chat closed or opened, minimum app version)."""
+    _service_hooks.append(fn)
+
+
+def _service_changed() -> None:
+    for fn in list(_service_hooks):
+        try:
+            fn()
+        except Exception:  # noqa: BLE001
+            log.exception("chat config: service hook failed")
 
 
 def get() -> dict[str, Any]:
