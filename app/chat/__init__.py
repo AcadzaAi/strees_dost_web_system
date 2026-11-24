@@ -34,6 +34,8 @@ def init_chat(app: Flask) -> None:
         mongo.warm()                       # database connections open before the first message
         push.warm_up()
         service.start_media_sweeper()      # files older than chatConfig.media.retentionDays
+        from . import chatconfig
+        chatconfig.start_watch()           # chatConfig edits in Firebase apply at once
 
 
 _awake_started = False
