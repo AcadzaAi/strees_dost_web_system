@@ -47,7 +47,27 @@ def _user():
     u = _users.get(request.sid)
     if u is None:
         raise ChatError("unauthorized", "Not signed in.", 401)
+    closed = verify.closed_message()
+    if closed is not None:                 # chat switched off while this phone was connected
+        raise ChatError("closed", closed, 503)
     return u
+
+
+def _drop_everyone() -> None:
+    """chatConfig/service changed: every phone reconnects, and the gate decides again (closed:
+    refused with the message; too old: asked to update; opened: back in)."""
+    sids = list(_users.keys())
+    for sid in sids:
+        try:
+            socketio.server.disconnect(sid, namespace=NS)
+        except Exception:  # noqa: BLE001
+            log.exception("chat: could not disconnect %s", sid)
+    if sids:
+        log.info("chat: service settings changed, %d phones reconnecting", len(sids))
+
+
+from . import chatconfig as _chatconfig  # noqa: E402
+_chatconfig.on_service_change(lambda: socketio.start_background_task(_drop_everyone))
 
 
 def _safe(fn):
