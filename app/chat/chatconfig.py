@@ -82,6 +82,9 @@ DEFAULTS: dict[str, Any] = {
         # studentsMentionStudents false: students can mention only teachers.
         "mentions": True,
         "studentsMentionStudents": True,
+        # The line at the top of every chat (under the group name). null: the app's own text;
+        # "": no line; any text: that text.
+        "rulesNote": None,
     },
 }
 
