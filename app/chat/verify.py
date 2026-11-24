@@ -113,6 +113,14 @@ def gate(user, device: str, client: int = 0) -> Optional[VerifyNeeded]:
     return needs(user, device)
 
 
+def closed_message() -> Optional[str]:
+    """The closed text while chatConfig/service/open is off; None while the chat is open."""
+    svc = _service()
+    if svc.get("open", True) in (False, "false", 0, "0"):
+        return str(svc.get("closedMessage") or "")
+    return None
+
+
 def client_version(raw) -> int:
     try:
         return max(0, int(str(raw or "0").strip()))
